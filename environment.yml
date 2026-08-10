@@ -1,0 +1,10 @@
+name: arctic-route-planning
+channels:
+  - conda-forge
+dependencies:
+  - python=3.13
+  - uv>=0.12,<0.13
+  # Native NetCDF/HDF5 libraries belong to Mamba; Python packages belong to uv.
+  - libnetcdf>=4.9,<5
+  - hdf5>=1.14,<2
+

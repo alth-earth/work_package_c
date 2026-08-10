@@ -1,0 +1,29 @@
+schema_version = "planner-config.v1"
+time_bucket_minutes = 60
+connectivity = 8
+edge_sample_count = 3
+max_search_hours = 168
+max_risk_frame_gap_minutes = 180
+minimum_confidence = 0.10
+allow_waiting = false
+
+[fastest]
+travel_time = 1.0
+risk = 0.20
+distance = 0.05
+turn = 0.05
+uncertainty = 0.20
+
+[low_risk]
+travel_time = 0.45
+risk = 2.50
+distance = 0.05
+turn = 0.08
+uncertainty = 0.80
+
+[recommended]
+travel_time = 0.85
+risk = 1.30
+distance = 0.08
+turn = 0.10
+uncertainty = 0.45

@@ -1,0 +1,58 @@
+[project]
+name = "arctic-route-planning"
+version = "0.1.0"
+description = "北极航线工作包 C：预测风险驱动的时间依赖规划与滚动重规划"
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "h5py>=3.13,<4",
+    "h5netcdf>=1.6,<2",
+    "jsonschema>=4.23,<5",
+    "numpy>=2.2,<3",
+    "xarray>=2025.1,<2027",
+]
+
+[project.scripts]
+arctic-route-plan = "arctic_route_planning.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3,<10",
+    "pytest-cov>=6,<8",
+    "ruff>=0.11,<1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/arctic_route_planning"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "external_artifact: requires the user-provided delivery archive",
+]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+extend-exclude = [
+    ".mamba-env",
+    ".uv-cache",
+    ".uv-python",
+    ".venv",
+    "data",
+    "output",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+ignore = ["RUF001"]
+
+[tool.coverage.run]
+branch = true
+source = ["arctic_route_planning"]
+

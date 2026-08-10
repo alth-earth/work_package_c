@@ -1,0 +1,223 @@
+from __future__ import annotations
+
+import json
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+import pytest
+
+from arctic_route_planning.domain import ObjectiveMode, PlanKind
+from arctic_route_planning.publishing import (
+    CDLatestStore,
+    PublicationRejected,
+    PublicationToken,
+    RouteMetrics,
+    RoutePlan,
+    Waypoint,
+    route_plan_from_dict,
+    route_plan_from_geojson,
+    route_plan_to_dict,
+    route_plan_to_geojson,
+    serialization,
+    token_for_plan,
+    write_route_plan_geojson,
+    write_route_plan_json,
+)
+
+CONFIG_DIGEST = "a" * 64
+
+
+def make_plan(
+    *,
+    request_id: str = "request-1",
+    input_revision: int = 1,
+    objective_mode: str = "recommended",
+    plan_id: str = "plan-1",
+    generated_minute: int = 1,
+    config_digest: str = CONFIG_DIGEST,
+) -> RoutePlan:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    return RoutePlan(
+        schema_version="cd.route-plan.v1",
+        scenario_id="demo",
+        corridor_id="corridor",
+        vessel_profile_id="demo-bulker-v1",
+        config_digest=config_digest,
+        generation_id=3,
+        planning_request_id=request_id,
+        input_revision=input_revision,
+        plan_id=plan_id,
+        plan_version="planner-v1",
+        generated_at=start + timedelta(minutes=generated_minute),
+        as_of_time=start,
+        start_time=start,
+        objective_mode=ObjectiveMode(objective_mode),
+        plan_kind=PlanKind.INITIAL,
+        waypoints=(
+            Waypoint(10.0, 70.0, start, 9.0),
+            Waypoint(11.0, 71.0, start + timedelta(hours=2), 8.5),
+        ),
+        metrics=RouteMetrics(
+            distance_km=120.0,
+            eta_hours=2.0,
+            avg_risk=0.2,
+            max_risk=0.4,
+            integrated_risk_hours=0.4,
+            minimum_confidence=0.8,
+            hard_constraint_violations=0,
+            turn_count=0,
+            expanded_nodes=8,
+            compute_ms=15.0,
+            objective_cost=2.8,
+        ),
+        replan_reasons=(),
+        source_risk_ids=("risk-20260101T0000Z-v1",),
+        planner_version="time-dependent-a-star.v1",
+    )
+
+
+def test_route_plan_json_and_geojson_round_trip(tmp_path) -> None:
+    plan = make_plan()
+
+    assert route_plan_from_dict(route_plan_to_dict(plan)) == plan
+    geojson = route_plan_to_geojson(plan)
+    assert geojson["type"] == "FeatureCollection"
+    assert geojson["features"][0]["geometry"]["type"] == "LineString"
+    assert route_plan_from_geojson(geojson) == plan
+
+    json_path = write_route_plan_json(tmp_path / "nested" / "plan.json", plan)
+    geojson_path = write_route_plan_geojson(tmp_path / "nested" / "plan.geojson", plan)
+    assert json.loads(json_path.read_text(encoding="utf-8"))["plan_id"] == "plan-1"
+    assert json.loads(geojson_path.read_text(encoding="utf-8"))["type"] == "FeatureCollection"
+    assert not list((tmp_path / "nested").glob("*.tmp"))
+
+    malformed = route_plan_to_dict(plan)
+    malformed["destination_reached"] = "false"
+    with pytest.raises(ValueError, match="boolean"):
+        route_plan_from_dict(malformed)
+
+
+def test_route_plan_json_matches_shared_schema() -> None:
+    jsonschema = pytest.importorskip("jsonschema")
+    schema_path = Path(__file__).parents[2] / "schemas" / "route-plan-v1.schema.json"
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+
+    jsonschema.validate(route_plan_to_dict(make_plan()), schema)
+
+
+def test_atomic_write_failure_preserves_previous_file(monkeypatch, tmp_path) -> None:
+    destination = tmp_path / "latest.json"
+    destination.write_text('{"plan_id":"old"}\n', encoding="utf-8")
+
+    def fail_after_partial_write(_value, handle, **_kwargs) -> None:
+        handle.write('{"plan_id":')
+        raise RuntimeError("simulated serialization failure")
+
+    monkeypatch.setattr(serialization.json, "dump", fail_after_partial_write)
+
+    with pytest.raises(RuntimeError, match="simulated"):
+        serialization.atomic_write_json(destination, {"plan_id": "new"})
+    assert destination.read_text(encoding="utf-8") == '{"plan_id":"old"}\n'
+    assert not list(tmp_path.glob(".latest.json.*.tmp"))
+
+
+def test_route_plan_rejects_invalid_contract_values() -> None:
+    plan = make_plan()
+    with pytest.raises(ValueError, match="严格递增"):
+        replace(
+            plan,
+            waypoints=(plan.waypoints[0], replace(plan.waypoints[1], eta=plan.start_time)),
+        )
+    with pytest.raises(ValueError, match="硬约束"):
+        replace(plan, metrics=replace(plan.metrics, hard_constraint_violations=1))
+
+
+def test_cd_store_keeps_current_previous_and_candidates() -> None:
+    store = CDLatestStore()
+    selected = make_plan()
+    candidate = make_plan(objective_mode="fastest", plan_id="fastest-1")
+    store.activate(token_for_plan(selected))
+
+    first = store.publish(selected, [candidate])
+    assert first.current == selected
+    assert first.previous is None
+    assert first.candidates == (candidate,)
+
+    newer = replace(
+        selected,
+        plan_id="plan-2",
+        generated_at=selected.generated_at + timedelta(minutes=1),
+    )
+    second = store.publish(newer)
+    assert second.current == newer
+    assert second.previous == selected
+    assert store.latest(scenario_id="demo", generation_id=3) == newer
+    assert store.latest(scenario_id="demo", generation_id=4) is None
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("scenario_id", "another-scenario"),
+        ("generation_id", 4),
+        ("config_digest", "b" * 64),
+        ("input_revision", 2),
+        ("planning_request_id", "request-2"),
+    ],
+)
+def test_cd_store_rejects_every_stale_context_dimension(field: str, value: object) -> None:
+    store = CDLatestStore()
+    plan = make_plan()
+    active = token_for_plan(plan)
+    store.activate(active)
+    stale_token = replace(active, **{field: value})
+    stale_plan = replace(plan, **{field: value})
+
+    with pytest.raises(PublicationRejected):
+        store.publish(stale_plan, token=stale_token)
+
+
+def test_new_same_generation_request_supersedes_old_result() -> None:
+    store = CDLatestStore()
+    old_plan = make_plan(request_id="old", input_revision=5)
+    newer_token = PublicationToken("demo", 3, CONFIG_DIGEST, 5, "new")
+    store.activate(token_for_plan(old_plan))
+    store.activate(newer_token)
+
+    with pytest.raises(PublicationRejected, match="stale"):
+        store.publish(old_plan)
+
+
+def test_generation_switch_hides_previous_generation_immediately() -> None:
+    store = CDLatestStore()
+    plan = make_plan()
+    store.activate(token_for_plan(plan))
+    store.publish(plan)
+    store.activate(PublicationToken("demo", 4, CONFIG_DIGEST, 0, "after-seek"))
+
+    assert store.latest(scenario_id="demo", generation_id=3) is None
+    snapshot = store.snapshot(scenario_id="demo", generation_id=4)
+    assert snapshot.current is None
+    assert snapshot.previous is None
+
+
+def test_config_switch_hides_incompatible_current_route() -> None:
+    store = CDLatestStore()
+    plan = make_plan()
+    store.activate(token_for_plan(plan))
+    store.publish(plan)
+
+    store.activate(PublicationToken("demo", 3, "b" * 64, 1, "new-config"))
+
+    assert store.latest(scenario_id="demo", generation_id=3) is None
+
+
+def test_cancelled_token_cannot_be_reactivated() -> None:
+    store = CDLatestStore()
+    token = token_for_plan(make_plan())
+    store.activate(token)
+    assert store.cancel(token)
+
+    with pytest.raises(PublicationRejected, match="reactivate"):
+        store.activate(token)

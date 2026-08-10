@@ -1,0 +1,15 @@
+schema_version = "vessel-profile.v1"
+vessel_profile_id = "demo_bulk_carrier_v1"
+version = "1.0.0"
+display_name = "Demo bulk carrier v1 (unvalidated)"
+calibration_status = "demo_unvalidated"
+ice_class = "demo_unvalidated_not_a_real_ice_class"
+load_condition = "demo_laden"
+draft_m = 11.5
+under_keel_clearance_m = 2.0
+min_speed_knots = 3.0
+cruise_speed_knots = 13.5
+max_speed_knots = 15.0
+min_speed_factor = 0.2
+turn_radius_m = 2000.0
+source_notes = "Illustrative research-demo values only; not calibrated for any real vessel or safe-navigation use."

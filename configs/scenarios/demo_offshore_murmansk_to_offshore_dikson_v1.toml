@@ -1,0 +1,20 @@
+schema_version = "scenario.v1"
+scenario_id = "demo_offshore_murmansk_to_offshore_dikson_v1"
+version = "1.0.0"
+corridor_id = "offshore_murmansk_to_offshore_dikson"
+display_name = "Demo: offshore Murmansk to offshore Dikson"
+bbox = [30.0, 67.5, 85.0, 75.0]
+crs = "EPSG:4326"
+simulation_start = 2026-07-31T00:00:00Z
+simulation_end = 2026-08-06T12:00:00Z
+dataset_snapshot_id = "legacy_b_delivery_2026-08-08_unverified"
+default_vessel_profile_id = "demo_bulk_carrier_v1"
+random_seed = 20260809
+
+[start]
+longitude = 33.05
+latitude = 69.45
+
+[destination]
+longitude = 80.55
+latitude = 73.75
