@@ -1,0 +1,12 @@
+schema_version = "c.vessel-model-config.v1"
+vessel_profile_id = "nordic_odyssey_reference_v1"
+vessel_profile_version = "1.0.0"
+economic_speed_knots = 10.0
+minimum_steerage_speed_knots = 3.0
+maximum_speed_knots = 15.7
+minimum_speed_factor = 0.20
+turn_radius_m = 2000.0
+under_keel_clearance_m = 2.0
+bathymetry_hard_constraint_enabled = false
+calibration_status = "demo_unvalidated"
+source_notes = "C-local research assumptions only. The 10 kn value is an observed NSR average, not a calibrated vessel capability; manoeuvring and UKC values are illustrative and bathymetry hard constraints remain disabled."

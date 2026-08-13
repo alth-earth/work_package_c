@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import sys
@@ -12,10 +13,19 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from arctic_route_contracts import (
+    RunContext,
+    load_run_context,
+)
+from arctic_route_contracts import (
+    default_config_root as default_shared_config_root,
+)
 
 from arctic_route_planning.adapters import FixtureRiskSource, LegacyBArchiveAdapter
 from arctic_route_planning.config import PlanningConfiguration, load_configuration
+from arctic_route_planning.context_validation import validate_run_context_binding
 from arctic_route_planning.cost import VesselPerformanceModel
+from arctic_route_planning.development import create_development_run_context
 from arctic_route_planning.domain import CalibrationStatus
 from arctic_route_planning.errors import PlanningError
 from arctic_route_planning.grid import GeoPoint, RegularGrid, SnapResult
@@ -39,6 +49,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=_default_config_root(),
         help="configuration directory (default: project configs/)",
+    )
+    parser.add_argument(
+        "--shared-config-root",
+        type=Path,
+        default=default_shared_config_root(),
+        help="shared arctic_route_contracts config directory",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -82,8 +98,23 @@ def build_parser() -> argparse.ArgumentParser:
 def _add_scenario_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--scenario",
-        default="demo_tromso_to_svalbard_v1",
+        default="tromso_isfjorden_july_2026_retrospective_v1",
         help="scenario config ID",
+    )
+    parser.add_argument(
+        "--simulation-start",
+        type=_parse_utc,
+        help="required explicit UTC anchor for a frozen-forecast template",
+    )
+    parser.add_argument(
+        "--candidate-route-distance-nm",
+        type=float,
+        help="select a route-specific frozen horizon from the shared HorizonPolicy",
+    )
+    parser.add_argument(
+        "--run-context",
+        type=Path,
+        help="immutable RunContext JSON from A; omitted only for development sources",
     )
     parser.add_argument("--generation-id", type=int, default=0)
     parser.add_argument("--input-revision", type=int, default=0)
@@ -135,14 +166,16 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 def _run_synthetic_demo(args: argparse.Namespace) -> int:
     configuration = _configuration(args)
+    run_context = _run_context(args, configuration, source_kind="synthetic")
     if args.rows < 3 or args.columns < 3:
         raise ValueError("synthetic grid rows and columns must both be at least 3")
     duration = configuration.scenario.simulation_end - configuration.scenario.simulation_start
     frame_count = int(duration.total_seconds() // 3600) + 1
     source = FixtureRiskSource(
         scenario=configuration.scenario,
+        corridor=configuration.corridor,
         vessel=configuration.vessel,
-        config_digest=configuration.config_digest,
+        run_context=run_context,
         generation_id=args.generation_id,
         as_of_time=configuration.scenario.simulation_start,
         frame_count=frame_count,
@@ -150,6 +183,7 @@ def _run_synthetic_demo(args: argparse.Namespace) -> int:
     )
     batch, endpoint_report = _plan_frames(
         configuration,
+        run_context,
         source.frames,
         generation_id=args.generation_id,
         input_revision=args.input_revision,
@@ -167,6 +201,7 @@ def _run_synthetic_demo(args: argparse.Namespace) -> int:
         ),
         endpoint_report=endpoint_report,
         configuration=configuration,
+        run_context=run_context,
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
     return 0
@@ -174,12 +209,15 @@ def _run_synthetic_demo(args: argparse.Namespace) -> int:
 
 def _inspect_legacy(args: argparse.Namespace) -> int:
     configuration = _configuration(args)
-    adapter = _legacy_adapter(args, configuration)
+    _require_legacy_acknowledgements(args)
+    run_context = _run_context(args, configuration, source_kind="legacy_unverified")
+    adapter = _legacy_adapter(args, configuration, run_context)
     frames = adapter.load()
     first = frames[0]
     summary = {
         "source_kind": "legacy_unverified",
         "development_only": True,
+        "run_id": run_context.run_id,
         "scenario_id": configuration.scenario.scenario_id,
         "corridor_id": configuration.scenario.corridor_id,
         "frame_count": len(frames),
@@ -202,11 +240,14 @@ def _inspect_legacy(args: argparse.Namespace) -> int:
 
 def _run_legacy_plan(args: argparse.Namespace) -> int:
     configuration = _configuration(args)
-    adapter = _legacy_adapter(args, configuration)
+    _require_legacy_acknowledgements(args)
+    run_context = _run_context(args, configuration, source_kind="legacy_unverified")
+    adapter = _legacy_adapter(args, configuration, run_context)
     frames = adapter.load()
     departure = args.departure_time or frames[0].valid_time
     batch, endpoint_report = _plan_frames(
         configuration,
+        run_context,
         frames,
         generation_id=args.generation_id,
         input_revision=args.input_revision,
@@ -225,6 +266,7 @@ def _run_legacy_plan(args: argparse.Namespace) -> int:
         ),
         endpoint_report=endpoint_report,
         configuration=configuration,
+        run_context=run_context,
     )
     summary["legacy_inner_member"] = adapter.inner_member_name
     summary["legacy_coordinate_snap_applied_by_adapter"] = bool(
@@ -238,26 +280,35 @@ def _run_legacy_plan(args: argparse.Namespace) -> int:
 def _legacy_adapter(
     args: argparse.Namespace,
     configuration: PlanningConfiguration,
+    run_context: RunContext,
 ) -> LegacyBArchiveAdapter:
-    if not args.allow_unverified_legacy:
-        raise ValueError("--allow-unverified-legacy is required for legacy data")
-    if not args.acknowledge_valid_time:
-        raise ValueError("--acknowledge-valid-time is required for legacy data")
+    _require_legacy_acknowledgements(args)
     return LegacyBArchiveAdapter(
         archive_path=args.archive,
         scenario=configuration.scenario,
         vessel=configuration.vessel,
-        config_digest=configuration.config_digest,
+        run_context=run_context,
         generation_id=args.generation_id,
         as_of_time=args.as_of,
         development_mode=True,
         time_coordinate_semantics="valid_time",
         dataset_variant=args.variant,
+        legacy_corridor_id={
+            "tromso_to_isfjorden_outer": "tromso_to_svalbard",
+        }.get(configuration.corridor.corridor_id),
     )
+
+
+def _require_legacy_acknowledgements(args: argparse.Namespace) -> None:
+    if not args.allow_unverified_legacy:
+        raise ValueError("--allow-unverified-legacy is required for legacy data")
+    if not args.acknowledge_valid_time:
+        raise ValueError("--acknowledge-valid-time is required for legacy data")
 
 
 def _plan_frames(
     configuration: PlanningConfiguration,
+    run_context: RunContext,
     frames: Sequence[Any],
     *,
     generation_id: int,
@@ -270,26 +321,34 @@ def _plan_frames(
         raise ValueError("at least one RiskFrame is required")
     if not math.isfinite(max_snap_km) or max_snap_km < 0:
         raise ValueError("max_snap_km must be finite and non-negative")
-    if start_time < frames[0].valid_time or start_time > frames[-1].valid_time:
-        raise ValueError("departure time is outside the supplied RiskFrame window")
     sampler = RiskSampler(
         frames,
         max_frame_gap=timedelta(minutes=configuration.planner.max_risk_frame_gap_minutes),
     )
+    if (
+        sampler.start_time < run_context.simulation_start
+        or sampler.end_time > run_context.simulation_end
+    ):
+        raise ValueError(
+            "supplied RiskFrame window extends beyond the RunContext simulation window"
+        )
+    if start_time < sampler.start_time or start_time > sampler.end_time:
+        raise ValueError("departure time is outside the supplied RiskFrame window")
+    ordered_frames = sampler.frames
     grid = RegularGrid.from_risk_frame(
-        frames[0],
+        ordered_frames[0],
         allow_diagonal=configuration.planner.connectivity == 8,
     )
     start_snap, destination_snap = _snap_endpoints(
         configuration,
         grid,
-        np.asarray(frames[0].payload["hard_mask"].values, dtype=np.bool_),
+        np.asarray(ordered_frames[0].payload["hard_mask"].values, dtype=np.bool_),
         max_snap_km=max_snap_km,
     )
     endpoint_report = {
-        "start": _snap_report(configuration.scenario.start, start_snap, max_snap_km),
+        "start": _snap_report(configuration.corridor.start, start_snap, max_snap_km),
         "destination": _snap_report(
-            configuration.scenario.destination,
+            configuration.corridor.destination,
             destination_snap,
             max_snap_km,
         ),
@@ -300,7 +359,7 @@ def _plan_frames(
             {"schema_version": "endpoint-mapping.v1", **endpoint_report},
         )
         print(f"endpoint mapping written to {endpoint_report_path}", file=sys.stderr)
-    vessel_model = VesselPerformanceModel.from_profile(configuration.vessel)
+    vessel_model = VesselPerformanceModel.from_configuration(configuration.vessel_model)
     planner = TimeDependentAStar(
         grid,
         sampler,
@@ -310,16 +369,21 @@ def _plan_frames(
     service = PlanningService(planner, planner_config=configuration.planner)
     batch = service.execute(
         ServicePlanningRequest(
+            run_context=run_context,
             scenario=configuration.scenario,
+            corridor=configuration.corridor,
             vessel=configuration.vessel,
-            config_digest=configuration.config_digest,
+            vessel_model=configuration.vessel_model,
+            model_config_digest=frames[0].model_config_digest,
+            planner_config_digest=configuration.planner_config_digest,
+            risk_provenance=sampler.identity.provenance,
             generation_id=generation_id,
             input_revision=input_revision,
-            as_of_time=frames[0].as_of_time,
+            as_of_time=max(frame.as_of_time for frame in ordered_frames),
             start_time=start_time,
             start=start_snap.node,
             goal=destination_snap.node,
-            maximum_elapsed=frames[-1].valid_time - start_time,
+            maximum_elapsed=sampler.end_time - start_time,
         )
     )
     return batch, endpoint_report
@@ -334,8 +398,8 @@ def _snap_endpoints(
 ) -> tuple[SnapResult, SnapResult]:
     start = grid.snap_to_navigable(
         GeoPoint(
-            configuration.scenario.start.longitude,
-            configuration.scenario.start.latitude,
+            configuration.corridor.start.longitude,
+            configuration.corridor.start.latitude,
         ),
         hard_mask,
         max_adjustment_km=max_snap_km,
@@ -344,8 +408,8 @@ def _snap_endpoints(
     try:
         destination = grid.snap_to_navigable(
             GeoPoint(
-                configuration.scenario.destination.longitude,
-                configuration.scenario.destination.latitude,
+                configuration.corridor.destination.longitude,
+                configuration.corridor.destination.latitude,
             ),
             hard_mask,
             max_adjustment_km=max_snap_km,
@@ -379,7 +443,12 @@ def _write_outputs(
     development_warnings: tuple[str, ...],
     endpoint_report: dict[str, Any],
     configuration: PlanningConfiguration,
+    run_context: RunContext,
 ) -> dict[str, Any]:
+    if source_kind != batch.selected.provenance.value:
+        raise ValueError("source_kind does not match the selected RoutePlan provenance")
+    if any(plan.provenance is not batch.selected.provenance for plan in batch.plans.values()):
+        raise ValueError("planning batch contains mixed RoutePlan provenance")
     output_dir.mkdir(parents=True, exist_ok=True)
     for objective, plan in batch.plans.items():
         write_route_plan_json(output_dir / f"{objective.value}.json", plan)
@@ -391,12 +460,16 @@ def _write_outputs(
         "source_kind": source_kind,
         "development_only": (
             source_kind != "formal"
-            or configuration.vessel.calibration_status is CalibrationStatus.DEMO_UNVALIDATED
+            or configuration.vessel.calibration_status
+            is CalibrationStatus.PUBLIC_REFERENCE_UNVALIDATED
         ),
         "scenario_id": configuration.scenario.scenario_id,
         "vessel_profile_id": configuration.vessel.vessel_profile_id,
         "vessel_calibration_status": configuration.vessel.calibration_status.value,
-        "config_digest": configuration.config_digest,
+        "run_id": run_context.run_id,
+        "config_digest": run_context.config_digest,
+        "model_config_digest": batch.selected.model_config_digest,
+        "planner_config_digest": configuration.planner_config_digest,
         "published": batch.published,
         "selected_plan_id": batch.selected.plan_id,
         "selected_objective": batch.selected.objective_mode.value,
@@ -426,7 +499,53 @@ def _write_outputs(
 
 
 def _configuration(args: argparse.Namespace) -> PlanningConfiguration:
-    return load_configuration(args.config_root, args.scenario)
+    return load_configuration(
+        args.config_root,
+        args.scenario,
+        shared_config_root=args.shared_config_root,
+        simulation_start=args.simulation_start,
+        candidate_route_distance_nm=args.candidate_route_distance_nm,
+    )
+
+
+def _run_context(
+    args: argparse.Namespace,
+    configuration: PlanningConfiguration,
+    *,
+    source_kind: str,
+) -> RunContext:
+    if args.run_context is not None:
+        context = load_run_context(args.run_context)
+        validate_run_context_binding(
+            context,
+            scenario=configuration.scenario,
+            corridor=configuration.corridor,
+            vessel=configuration.vessel,
+        )
+        return context
+
+    archive = getattr(args, "archive", None)
+    context = create_development_run_context(
+        configuration,
+        source_kind=source_kind,
+        source_checksum=_sha256_file(Path(archive)) if archive is not None else "",
+        as_of_time=getattr(args, "as_of", None),
+    )
+    validate_run_context_binding(
+        context,
+        scenario=configuration.scenario,
+        corridor=configuration.corridor,
+        vessel=configuration.vessel,
+    )
+    return context
+
+
+def _sha256_file(path: Path) -> str:
+    hasher = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            hasher.update(chunk)
+    return hasher.hexdigest()
 
 
 def _parse_utc(value: str) -> datetime:

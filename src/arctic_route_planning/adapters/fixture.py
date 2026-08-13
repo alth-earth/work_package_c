@@ -14,9 +14,18 @@ from arctic_route_planning.contracts.models import (
     SourceReference,
 )
 from arctic_route_planning.contracts.sources import InMemoryRiskSource
-from arctic_route_planning.domain.models import ScenarioDefinition, VesselProfile
+from arctic_route_planning.domain.models import (
+    CorridorDefinition,
+    RunContext,
+    ScenarioDefinition,
+    VesselProfile,
+)
 from arctic_route_planning.errors import ContractError
 from arctic_route_planning.timeutils import ensure_utc
+
+SYNTHETIC_MODEL_CONFIG_DIGEST = hashlib.sha256(
+    b"deterministic-analytic-risk-v1"
+).hexdigest()
 
 
 class FixtureRiskSource(InMemoryRiskSource):
@@ -26,8 +35,10 @@ class FixtureRiskSource(InMemoryRiskSource):
         self,
         *,
         scenario: ScenarioDefinition,
+        corridor: CorridorDefinition,
         vessel: VesselProfile,
-        config_digest: str,
+        run_context: RunContext,
+        model_config_digest: str = SYNTHETIC_MODEL_CONFIG_DIGEST,
         generation_id: int = 0,
         as_of_time: datetime | None = None,
         frame_count: int = 25,
@@ -48,8 +59,11 @@ class FixtureRiskSource(InMemoryRiskSource):
         self.frames = tuple(
             _make_frame(
                 scenario=scenario,
+                corridor=corridor,
                 vessel=vessel,
-                config_digest=config_digest,
+                run_id=run_context.run_id,
+                config_digest=run_context.config_digest,
+                model_config_digest=model_config_digest,
                 generation_id=generation_id,
                 as_of_time=cutoff,
                 valid_time=scenario.simulation_start + index * interval,
@@ -65,8 +79,11 @@ class FixtureRiskSource(InMemoryRiskSource):
 def _make_frame(
     *,
     scenario: ScenarioDefinition,
+    corridor: CorridorDefinition,
     vessel: VesselProfile,
+    run_id: str,
     config_digest: str,
+    model_config_digest: str,
     generation_id: int,
     as_of_time: datetime,
     valid_time: datetime,
@@ -74,7 +91,10 @@ def _make_frame(
     shape: tuple[int, int],
 ) -> RiskFrame:
     ny, nx = shape
-    west, south, east, north = scenario.bbox
+    west = corridor.data_bbox.west
+    south = corridor.data_bbox.south
+    east = corridor.data_bbox.east
+    north = corridor.data_bbox.north
     latitude = np.linspace(south, north, ny, dtype=np.float64)
     longitude = np.linspace(west, east, nx, dtype=np.float64)
     y_axis = np.linspace(0.0, 1.0, ny, dtype=np.float32)[:, None]
@@ -113,8 +133,8 @@ def _make_frame(
         },
     )
     identity = (
-        f"{scenario.scenario_id}|{vessel.vessel_profile_id}|{generation_id}|"
-        f"{valid_time.isoformat()}|{config_digest}"
+        f"{run_id}|{scenario.scenario_id}|{vessel.vessel_profile_id}|{generation_id}|"
+        f"{valid_time.isoformat()}|{config_digest}|{model_config_digest}"
     )
     risk_id = f"fixture-{hashlib.sha256(identity.encode()).hexdigest()[:24]}"
     source = SourceReference(
@@ -127,12 +147,14 @@ def _make_frame(
         checksum=config_digest,
     )
     return RiskFrame(
-        schema_version="bc.risk-frame.v1",
+        schema_version="bc.risk-frame.v2",
         risk_id=risk_id,
+        run_id=run_id,
         scenario_id=scenario.scenario_id,
         corridor_id=scenario.corridor_id,
         vessel_profile_id=vessel.vessel_profile_id,
         config_digest=config_digest,
+        model_config_digest=model_config_digest,
         generation_id=generation_id,
         valid_time=valid_time,
         as_of_time=as_of_time,

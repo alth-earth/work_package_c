@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from pathlib import Path
 
-from jsonschema import Draft202012Validator, FormatChecker
+import pytest
+from jsonschema import Draft202012Validator, FormatChecker, ValidationError
 
 SCHEMA_ROOT = Path(__file__).parents[2] / "schemas"
 
@@ -14,14 +16,16 @@ def _validator(name: str) -> Draft202012Validator:
     return Draft202012Validator(schema, format_checker=FormatChecker())
 
 
-def test_risk_frame_schema_accepts_canonical_transport_shape() -> None:
-    document = {
-        "schema_version": "bc.risk-frame.v1",
+def _risk_frame_document() -> dict[str, object]:
+    return {
+        "schema_version": "bc.risk-frame.v2",
         "risk_id": "risk-1",
+        "run_id": "run-00000000-0000-4000-8000-000000000001",
         "scenario_id": "scenario-1",
         "corridor_id": "corridor-1",
         "vessel_profile_id": "demo_bulk_carrier_v1",
         "config_digest": "a" * 64,
+        "model_config_digest": "b" * 64,
         "generation_id": 0,
         "valid_time": "2026-07-31T01:00:00Z",
         "as_of_time": "2026-07-31T00:00:00Z",
@@ -52,22 +56,68 @@ def test_risk_frame_schema_accepts_canonical_transport_shape() -> None:
         "provenance": "synthetic",
     }
 
-    validator = _validator("risk-frame-v1.schema.json")
+
+def test_risk_frame_schema_accepts_canonical_transport_shape() -> None:
+    document = _risk_frame_document()
+    validator = _validator("risk-frame-v2.schema.json")
     validator.validate(document)
 
+
+def test_risk_frame_schema_rejects_unknown_top_level_field() -> None:
+    document = _risk_frame_document()
+    document["unexpected"] = True
+
+    with pytest.raises(ValidationError):
+        _validator("risk-frame-v2.schema.json").validate(document)
+
+
+def test_formal_risk_frame_requires_speed_factor() -> None:
+    document = deepcopy(_risk_frame_document())
     document["provenance"] = "formal"
-    del document["payload"]["variables"]["environment_speed_factor"]
-    errors = list(validator.iter_errors(document))
-    assert any("environment_speed_factor" in error.message for error in errors)
+    del document["payload"]["variables"]["environment_speed_factor"]  # type: ignore[index]
+
+    with pytest.raises(ValidationError):
+        _validator("risk-frame-v2.schema.json").validate(document)
+
+
+def test_formal_risk_frame_rejects_missing_source_issue_time() -> None:
+    document = deepcopy(_risk_frame_document())
+    document["provenance"] = "formal"
+    document["source_summary"][0]["issue_time"] = None  # type: ignore[index]
+
+    with pytest.raises(ValidationError):
+        _validator("risk-frame-v2.schema.json").validate(document)
+
+
+@pytest.mark.parametrize("field", ("data_id", "valid_time", "checksum"))
+def test_formal_risk_frame_rejects_other_missing_source_identity(field: str) -> None:
+    document = deepcopy(_risk_frame_document())
+    document["provenance"] = "formal"
+    document["source_summary"][0][field] = None  # type: ignore[index]
+
+    with pytest.raises(ValidationError):
+        _validator("risk-frame-v2.schema.json").validate(document)
+
+
+def test_risk_frame_schema_rejects_incomplete_payload_shape() -> None:
+    document = deepcopy(_risk_frame_document())
+    del document["payload"]["attributes"]  # type: ignore[index]
+
+    with pytest.raises(ValidationError):
+        _validator("risk-frame-v2.schema.json").validate(document)
 
 
 def test_route_plan_schema_accepts_contract_shape() -> None:
     document = {
-        "schema_version": "cd.route-plan.v1",
+        "schema_version": "cd.route-plan.v2",
+        "run_id": "run-1",
         "scenario_id": "scenario-1",
         "corridor_id": "corridor-1",
         "vessel_profile_id": "demo_bulk_carrier_v1",
         "config_digest": "c" * 64,
+        "model_config_digest": "d" * 64,
+        "planner_config_digest": "e" * 64,
+        "provenance": "synthetic",
         "generation_id": 0,
         "plan_id": "plan-1",
         "plan_version": "1",
@@ -111,4 +161,8 @@ def test_route_plan_schema_accepts_contract_shape() -> None:
         "destination_reached": True,
     }
 
-    _validator("route-plan-v1.schema.json").validate(document)
+    _validator("route-plan-v2.schema.json").validate(document)
+
+    del document["provenance"]
+    with pytest.raises(ValidationError):
+        _validator("route-plan-v2.schema.json").validate(document)

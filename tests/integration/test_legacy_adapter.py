@@ -9,6 +9,7 @@ import pytest
 from arctic_route_planning.adapters.legacy_b import LegacyBArchiveAdapter
 from arctic_route_planning.config import load_configuration
 from arctic_route_planning.contracts.models import ProvenanceKind
+from arctic_route_planning.development import create_development_run_context
 from arctic_route_planning.errors import LegacyDataError
 
 PROJECT_ROOT = Path(__file__).parents[2]
@@ -17,7 +18,7 @@ DELIVERY_ARCHIVE = Path("/mnt/c/Users/asd233/Desktop/挑战杯/挑战/交付包.
 
 
 def _configuration():
-    return load_configuration(CONFIG_ROOT, "demo_tromso_to_svalbard_v1")
+    return load_configuration(CONFIG_ROOT, "tromso_isfjorden_july_2026_retrospective_v1")
 
 
 def test_legacy_adapter_requires_explicit_development_mode() -> None:
@@ -27,11 +28,16 @@ def test_legacy_adapter_requires_explicit_development_mode() -> None:
             archive_path=DELIVERY_ARCHIVE,
             scenario=config.scenario,
             vessel=config.vessel,
-            config_digest=config.config_digest,
+            run_context=create_development_run_context(
+                config,
+                source_kind="legacy_unverified",
+                as_of_time=datetime(2026, 7, 31, tzinfo=UTC),
+            ),
             generation_id=0,
             as_of_time=datetime(2026, 7, 31, tzinfo=UTC),
             development_mode=False,
             time_coordinate_semantics="valid_time",
+            legacy_corridor_id="tromso_to_svalbard",
         )
 
 
@@ -43,13 +49,16 @@ def test_nested_delivery_archive_maps_only_comprehensive_risk_and_land_mask() ->
         archive_path=DELIVERY_ARCHIVE,
         scenario=config.scenario,
         vessel=config.vessel,
-        config_digest=config.config_digest,
+        run_context=create_development_run_context(
+            config, source_kind="legacy_unverified", as_of_time=datetime(2026, 7, 31, tzinfo=UTC)
+        ),
         generation_id=2,
         as_of_time=datetime(2026, 7, 31, tzinfo=UTC),
         generated_at=datetime(2026, 8, 9, tzinfo=UTC),
         development_mode=True,
         time_coordinate_semantics="valid_time",
         dataset_variant="7days",
+        legacy_corridor_id="tromso_to_svalbard",
     )
 
     frames = adapter.load()

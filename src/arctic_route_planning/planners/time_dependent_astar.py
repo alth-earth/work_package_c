@@ -184,6 +184,12 @@ class TimeDependentAStar:
 
         return self.risk_sampler.identity
 
+    @property
+    def risk_as_of_times(self) -> tuple[datetime, ...]:
+        """Expose BC knowledge cutoffs for service-level leakage checks."""
+
+        return self.risk_sampler.as_of_times
+
     def plan(self, request: PlanningRequest) -> PlanningResult:
         started = perf_counter()
         self._check_cancelled(request)

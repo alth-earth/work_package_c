@@ -18,13 +18,14 @@ from arctic_route_planning.contracts.models import (
     SourceReference,
 )
 from arctic_route_planning.contracts.sources import InMemoryRiskSource
-from arctic_route_planning.domain.models import ScenarioDefinition, VesselProfile
+from arctic_route_planning.domain.models import RunContext, ScenarioDefinition, VesselProfile
 from arctic_route_planning.errors import ContractError, LegacyDataError
 from arctic_route_planning.timeutils import ensure_utc
 
 _INNER_ARCHIVE_SUFFIX = "/综合风险.zip"
 _MAX_INNER_ARCHIVE_BYTES = 64 * 1024 * 1024
 _MAX_DATASET_BYTES = 256 * 1024 * 1024
+LEGACY_MODEL_CONFIG_DIGEST = hashlib.sha256(b"legacy-b-unversioned-model").hexdigest()
 
 
 class LegacyBArchiveAdapter(InMemoryRiskSource):
@@ -42,7 +43,8 @@ class LegacyBArchiveAdapter(InMemoryRiskSource):
         archive_path: str | Path,
         scenario: ScenarioDefinition,
         vessel: VesselProfile,
-        config_digest: str,
+        run_context: RunContext,
+        model_config_digest: str = LEGACY_MODEL_CONFIG_DIGEST,
         generation_id: int,
         as_of_time: datetime,
         development_mode: bool,
@@ -50,6 +52,7 @@ class LegacyBArchiveAdapter(InMemoryRiskSource):
         dataset_variant: str = "7days",
         confidence: float = 0.20,
         generated_at: datetime | None = None,
+        legacy_corridor_id: str | None = None,
     ) -> None:
         super().__init__()
         if not development_mode:
@@ -67,7 +70,10 @@ class LegacyBArchiveAdapter(InMemoryRiskSource):
         self.archive_path = Path(archive_path)
         self.scenario = scenario
         self.vessel = vessel
-        self.config_digest = config_digest
+        self.run_id = run_context.run_id
+        self.config_digest = run_context.config_digest
+        self.model_config_digest = model_config_digest
+        self.legacy_corridor_id = legacy_corridor_id or scenario.corridor_id
         self.generation_id = generation_id
         self.as_of_time = ensure_utc(as_of_time, field="legacy.as_of_time")
         self.generated_at = ensure_utc(
@@ -115,7 +121,7 @@ class LegacyBArchiveAdapter(InMemoryRiskSource):
                 inner_bytes = outer.read(inner_info)
             with zipfile.ZipFile(io.BytesIO(inner_bytes)) as inner:
                 expected_suffix = (
-                    f"/comprehensive_risk_{self.scenario.corridor_id}_{self.dataset_variant}.nc"
+                    f"/comprehensive_risk_{self.legacy_corridor_id}_{self.dataset_variant}.nc"
                 )
                 candidates = [
                     info for info in inner.infolist() if info.filename.endswith(expected_suffix)
@@ -141,7 +147,7 @@ class LegacyBArchiveAdapter(InMemoryRiskSource):
             raise LegacyDataError(f"旧 B 数据集缺少变量: {', '.join(missing)}")
         if not {"time", "lat", "lon"}.issubset(dataset.coords):
             raise LegacyDataError("旧 B 数据集必须携带 time/lat/lon 坐标")
-        if dataset.attrs.get("route_name") != self.scenario.corridor_id:
+        if dataset.attrs.get("route_name") != self.legacy_corridor_id:
             raise LegacyDataError("旧 B route_name 与场景 corridor_id 不匹配")
         try:
             risk_cube = dataset["comprehensive_risk"].transpose("time", "lat", "lon")
@@ -207,8 +213,9 @@ class LegacyBArchiveAdapter(InMemoryRiskSource):
                 },
             )
             identity = (
-                f"{dataset_checksum}|{self.scenario.scenario_id}|{self.generation_id}|"
-                f"{valid_time.isoformat()}|{self.config_digest}"
+                f"{dataset_checksum}|{self.run_id}|{self.scenario.scenario_id}|"
+                f"{self.generation_id}|{valid_time.isoformat()}|{self.config_digest}|"
+                f"{self.model_config_digest}"
             )
             risk_id = f"legacy-{hashlib.sha256(identity.encode()).hexdigest()[:24]}"
             source = SourceReference(
@@ -222,17 +229,19 @@ class LegacyBArchiveAdapter(InMemoryRiskSource):
             )
             frames.append(
                 RiskFrame(
-                    schema_version="bc.risk-frame.v1",
+                    schema_version="bc.risk-frame.v2",
                     risk_id=risk_id,
+                    run_id=self.run_id,
                     scenario_id=self.scenario.scenario_id,
                     corridor_id=self.scenario.corridor_id,
                     vessel_profile_id=self.vessel.vessel_profile_id,
                     config_digest=self.config_digest,
+                    model_config_digest=self.model_config_digest,
                     generation_id=self.generation_id,
                     valid_time=valid_time,
                     as_of_time=self.as_of_time,
                     generated_at=self.generated_at,
-                    model_version="legacy-b-adapter.v1",
+                    model_version="legacy-b-adapter.v2",
                     payload=payload,
                     source_summary=(source,),
                     provenance=ProvenanceKind.LEGACY_UNVERIFIED,

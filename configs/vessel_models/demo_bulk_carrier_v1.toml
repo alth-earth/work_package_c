@@ -1,0 +1,12 @@
+schema_version = "c.vessel-model-config.v1"
+vessel_profile_id = "demo_bulk_carrier_v1"
+vessel_profile_version = "1.0.0"
+economic_speed_knots = 13.5
+minimum_steerage_speed_knots = 3.0
+maximum_speed_knots = 15.0
+minimum_speed_factor = 0.20
+turn_radius_m = 2000.0
+under_keel_clearance_m = 2.0
+bathymetry_hard_constraint_enabled = false
+calibration_status = "demo_unvalidated"
+source_notes = "Legacy C compatibility assumptions only; unvalidated and forbidden for navigation."

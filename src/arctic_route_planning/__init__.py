@@ -11,17 +11,20 @@ from arctic_route_planning.contracts.models import (
 )
 from arctic_route_planning.domain.models import (
     CalibrationStatus,
+    CorridorDefinition,
     GeoPoint,
     ObjectiveMode,
     PlanKind,
     PlannerConfig,
     ReplanReason,
+    RunContext,
     ScenarioDefinition,
     VesselProfile,
 )
 
 __all__ = [
     "CalibrationStatus",
+    "CorridorDefinition",
     "GeoPoint",
     "ObjectiveMode",
     "PlanKind",
@@ -32,10 +35,11 @@ __all__ = [
     "RiskSample",
     "RouteMetrics",
     "RoutePlan",
+    "RunContext",
     "ScenarioDefinition",
     "SourceReference",
     "VesselProfile",
     "Waypoint",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

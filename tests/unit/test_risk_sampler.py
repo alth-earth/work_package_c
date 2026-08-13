@@ -6,6 +6,7 @@ from datetime import timedelta
 import numpy as np
 import pytest
 
+from arctic_route_planning.contracts import ProvenanceKind
 from arctic_route_planning.risk import (
     IncompatibleRiskFramesError,
     RiskCoverageError,
@@ -123,6 +124,21 @@ def test_coordinate_grid_mismatch_is_rejected() -> None:
     )
 
     with pytest.raises(IncompatibleRiskFramesError):
+        RiskSampler((lower, upper))
+
+
+def test_mixed_provenance_window_is_rejected() -> None:
+    lower = make_frame(T0, np.zeros((2, 2)), risk_id="risk-lower")
+    upper = replace(
+        make_frame(
+            T0 + timedelta(hours=1),
+            np.zeros((2, 2)),
+            risk_id="risk-upper",
+        ),
+        provenance=ProvenanceKind.LEGACY_UNVERIFIED,
+    )
+
+    with pytest.raises(IncompatibleRiskFramesError, match="identity"):
         RiskSampler((lower, upper))
 
 

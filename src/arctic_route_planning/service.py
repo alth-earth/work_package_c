@@ -10,13 +10,19 @@ from types import MappingProxyType
 from typing import Protocol
 from uuid import uuid4
 
-from arctic_route_planning.contracts import RouteMetrics, RoutePlan, Waypoint
+from arctic_route_contracts import ScenarioMode
+
+from arctic_route_planning.context_validation import validate_run_context_binding
+from arctic_route_planning.contracts import ProvenanceKind, RouteMetrics, RoutePlan, Waypoint
 from arctic_route_planning.domain import (
+    CorridorDefinition,
     ObjectiveMode,
     PlanKind,
     PlannerConfig,
     ReplanReason,
+    RunContext,
     ScenarioDefinition,
+    VesselModelConfig,
     VesselProfile,
 )
 from arctic_route_planning.errors import ContextMismatchError
@@ -46,9 +52,14 @@ class CandidatePlanner(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class ServicePlanningRequest:
+    run_context: RunContext
     scenario: ScenarioDefinition
+    corridor: CorridorDefinition
     vessel: VesselProfile
-    config_digest: str
+    vessel_model: VesselModelConfig
+    model_config_digest: str
+    planner_config_digest: str
+    risk_provenance: ProvenanceKind
     generation_id: int
     input_revision: int
     as_of_time: datetime
@@ -61,10 +72,15 @@ class ServicePlanningRequest:
     maximum_elapsed: timedelta | None = None
 
     def __post_init__(self) -> None:
-        if len(self.config_digest) != 64 or any(
-            char not in "0123456789abcdef" for char in self.config_digest
-        ):
-            raise ValueError("config_digest must be a lowercase SHA-256 digest")
+        try:
+            risk_provenance = ProvenanceKind(self.risk_provenance)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("risk_provenance is invalid") from exc
+        object.__setattr__(self, "risk_provenance", risk_provenance)
+        for name in ("model_config_digest", "planner_config_digest"):
+            digest = getattr(self, name)
+            if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+                raise ValueError(f"{name} must be a lowercase SHA-256 digest")
         if self.generation_id < 0 or self.input_revision < 0:
             raise ValueError("generation_id and input_revision must be non-negative")
         for name in ("as_of_time", "start_time"):
@@ -72,10 +88,36 @@ class ServicePlanningRequest:
             if value.tzinfo is None or value.utcoffset() != timedelta(0):
                 raise ValueError(f"{name} must be timezone-aware UTC")
             object.__setattr__(self, name, value.astimezone(UTC))
-        if self.as_of_time > self.start_time:
-            raise ValueError("as_of_time cannot be later than start_time")
+        if self.scenario.mode is ScenarioMode.FROZEN_FORECAST and self.as_of_time > self.start_time:
+            raise ValueError("frozen_forecast as_of_time cannot be later than start_time")
         if self.start == self.goal:
             raise ValueError("start and goal nodes must differ")
+        validate_run_context_binding(
+            self.run_context,
+            scenario=self.scenario,
+            corridor=self.corridor,
+            vessel=self.vessel,
+        )
+        if self.vessel_model.vessel_profile_id != self.vessel.vessel_profile_id:
+            raise ValueError("vessel_model does not match vessel_profile_id")
+        if self.vessel_model.vessel_profile_version != self.vessel.version:
+            raise ValueError("vessel_model does not match vessel_profile_version")
+        context_start = self.run_context.simulation_start
+        context_end = self.run_context.simulation_end
+        if not context_start <= self.start_time < context_end:
+            raise ValueError("start_time must be inside the RunContext simulation window")
+        maximum_elapsed = self.maximum_elapsed
+        if maximum_elapsed is None:
+            if self.scenario.simulation_end is None:
+                raise ValueError("a materialized scenario or explicit maximum_elapsed is required")
+            maximum_elapsed = self.scenario.simulation_end - self.start_time
+        if maximum_elapsed <= timedelta(0):
+            raise ValueError("maximum_elapsed must be positive")
+        if maximum_elapsed > timedelta(hours=216):
+            raise ValueError("maximum_elapsed exceeds the formal 216-hour C ceiling")
+        if self.start_time + maximum_elapsed > context_end:
+            raise ValueError("maximum_elapsed extends beyond RunContext simulation_end")
+        object.__setattr__(self, "maximum_elapsed", maximum_elapsed)
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,10 +173,19 @@ class PlanningService:
 
         self._validate_risk_context(request)
 
+        if request.maximum_elapsed is None:  # guarded by ServicePlanningRequest
+            raise RuntimeError("maximum_elapsed was not resolved")
+        planner_ceiling = timedelta(hours=self.planner_config.max_search_hours)
+        if request.maximum_elapsed > planner_ceiling:
+            raise ValueError("requested scenario horizon exceeds the active planner safety ceiling")
+
         handle = self.coordinator.begin(
+            run_id=request.run_context.run_id,
             scenario_id=request.scenario.scenario_id,
             generation_id=request.generation_id,
-            config_digest=request.config_digest,
+            config_digest=request.run_context.config_digest,
+            model_config_digest=request.model_config_digest,
+            planner_config_digest=request.planner_config_digest,
             input_revision=request.input_revision,
         )
         core_request = PlanningRequest(
@@ -144,8 +195,7 @@ class PlanningService:
             objective=ObjectiveMode.RECOMMENDED,
             time_bucket_size=timedelta(minutes=self.planner_config.time_bucket_minutes),
             edge_sample_count=self.planner_config.edge_sample_count,
-            maximum_elapsed=request.maximum_elapsed
-            or timedelta(hours=self.planner_config.max_search_hours),
+            maximum_elapsed=request.maximum_elapsed,
             maximum_risk=request.maximum_risk,
             cancel_check=lambda: handle.cancelled,
         )
@@ -183,6 +233,7 @@ class PlanningService:
         )
 
         current = self.coordinator.store.snapshot(
+            run_id=request.run_context.run_id,
             scenario_id=request.scenario.scenario_id,
             generation_id=request.generation_id,
         ).current
@@ -199,6 +250,7 @@ class PlanningService:
                     plans=MappingProxyType(plans),
                     selected=selected,
                     snapshot=self.coordinator.store.snapshot(
+                        run_id=request.run_context.run_id,
                         scenario_id=request.scenario.scenario_id,
                         generation_id=request.generation_id,
                     ),
@@ -220,18 +272,34 @@ class PlanningService:
 
         identity = getattr(self.planner, "risk_identity", None)
         if identity is None:
+            if request.risk_provenance is ProvenanceKind.FORMAL:
+                raise ContextMismatchError(
+                    "formal risk provenance requires a planner with verifiable risk_identity"
+                )
             return
         expected = {
+            "run_id": request.run_context.run_id,
             "scenario_id": request.scenario.scenario_id,
             "corridor_id": request.scenario.corridor_id,
             "vessel_profile_id": request.vessel.vessel_profile_id,
-            "config_digest": request.config_digest,
+            "config_digest": request.run_context.config_digest,
+            "model_config_digest": request.model_config_digest,
+            "provenance": request.risk_provenance,
             "generation_id": request.generation_id,
         }
-        mismatched = [name for name, value in expected.items() if getattr(identity, name) != value]
+        mismatched = [
+            name for name, value in expected.items() if getattr(identity, name, object()) != value
+        ]
         if mismatched:
             raise ContextMismatchError(
                 "planning request does not match the RiskFrame context: " + ", ".join(mismatched)
+            )
+        risk_as_of_times = getattr(self.planner, "risk_as_of_times", None)
+        if risk_as_of_times is not None and any(
+            risk_as_of_time > request.as_of_time for risk_as_of_time in risk_as_of_times
+        ):
+            raise ContextMismatchError(
+                "planning request as_of_time is earlier than a supplied RiskFrame knowledge cutoff"
             )
 
     def replan_if_needed(
@@ -265,7 +333,7 @@ class PlanningService:
                 for step in result.steps
                 if step.recommended_speed_knots is not None
             ),
-            request.vessel.cruise_speed_knots,
+            request.vessel_model.economic_speed_knots,
         )
         waypoints = tuple(
             Waypoint(
@@ -297,11 +365,15 @@ class PlanningService:
             objective_cost=result.total_cost_hours,
         )
         return RoutePlan(
-            schema_version="cd.route-plan.v1",
+            schema_version="cd.route-plan.v2",
+            run_id=request.run_context.run_id,
             scenario_id=request.scenario.scenario_id,
             corridor_id=request.scenario.corridor_id,
             vessel_profile_id=request.vessel.vessel_profile_id,
-            config_digest=request.config_digest,
+            config_digest=request.run_context.config_digest,
+            model_config_digest=request.model_config_digest,
+            planner_config_digest=request.planner_config_digest,
+            provenance=request.risk_provenance,
             generation_id=request.generation_id,
             plan_id=self._plan_id_factory(result.objective),
             plan_version=f"{self.planner_version}:{request.input_revision}",

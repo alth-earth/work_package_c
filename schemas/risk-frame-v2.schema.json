@@ -1,0 +1,169 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/arctic-route/bc/risk-frame-v2.schema.json",
+  "title": "BC RiskFrame v2 transport document",
+  "description": "Structural transport contract. Cross-field time ordering, equal grid shapes, coordinate monotonicity, finite-value rules, content identity, and issue_time <= as_of_time still require the canonical semantic validator.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "risk_id", "run_id", "scenario_id", "corridor_id",
+    "vessel_profile_id", "config_digest", "model_config_digest", "generation_id",
+    "valid_time", "as_of_time", "generated_at", "model_version", "payload",
+    "source_summary", "provenance"
+  ],
+  "properties": {
+    "schema_version": {"const": "bc.risk-frame.v2"},
+    "risk_id": {"type": "string", "minLength": 1},
+    "run_id": {"type": "string", "pattern": "^run-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"},
+    "scenario_id": {"$ref": "#/$defs/id"},
+    "corridor_id": {"$ref": "#/$defs/id"},
+    "vessel_profile_id": {"$ref": "#/$defs/id"},
+    "config_digest": {"$ref": "#/$defs/sha256"},
+    "model_config_digest": {"$ref": "#/$defs/sha256"},
+    "generation_id": {"type": "integer", "minimum": 0},
+    "valid_time": {"$ref": "#/$defs/utcDateTime"},
+    "as_of_time": {"$ref": "#/$defs/utcDateTime"},
+    "generated_at": {"$ref": "#/$defs/utcDateTime"},
+    "model_version": {"type": "string", "minLength": 1},
+    "payload": {"$ref": "#/$defs/payload"},
+    "source_summary": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/sourceReference"}
+    },
+    "provenance": {"enum": ["formal", "legacy_unverified", "synthetic"]}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"provenance": {"const": "formal"}}, "required": ["provenance"]},
+      "then": {
+        "properties": {
+          "payload": {
+            "properties": {
+              "variables": {"required": ["environment_speed_factor"]}
+            }
+          },
+          "source_summary": {
+            "items": {
+              "properties": {
+                "data_id": {"type": "string", "minLength": 1, "pattern": "^.*\\S.*$"},
+                "issue_time": {"$ref": "#/$defs/utcDateTime"},
+                "valid_time": {"$ref": "#/$defs/utcDateTime"},
+                "checksum": {"$ref": "#/$defs/sha256"}
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,127}$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "utcDateTime": {"type": "string", "format": "date-time", "pattern": "Z$"},
+    "nullableUtcDateTime": {
+      "oneOf": [
+        {"$ref": "#/$defs/utcDateTime"},
+        {"type": "null"}
+      ]
+    },
+    "nullableDigest": {
+      "oneOf": [
+        {"$ref": "#/$defs/sha256"},
+        {"type": "null"}
+      ]
+    },
+    "numberOrNull": {
+      "oneOf": [
+        {"type": "number", "minimum": 0, "maximum": 1},
+        {"type": "null"}
+      ]
+    },
+    "riskRow": {
+      "type": "array",
+      "minItems": 2,
+      "items": {"$ref": "#/$defs/numberOrNull"}
+    },
+    "levelRow": {
+      "type": "array",
+      "minItems": 2,
+      "items": {"type": "integer", "minimum": 1, "maximum": 5}
+    },
+    "booleanRow": {
+      "type": "array",
+      "minItems": 2,
+      "items": {"type": "boolean"}
+    },
+    "unitIntervalRow": {
+      "type": "array",
+      "minItems": 2,
+      "items": {"type": "number", "minimum": 0, "maximum": 1}
+    },
+    "speedFactorRow": {
+      "type": "array",
+      "minItems": 2,
+      "items": {"type": "number", "exclusiveMinimum": 0, "maximum": 1}
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["coordinates", "variables", "attributes"],
+      "properties": {
+        "coordinates": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["latitude", "longitude"],
+          "properties": {
+            "latitude": {
+              "type": "array", "minItems": 2, "uniqueItems": true,
+              "items": {"type": "number", "minimum": -90, "maximum": 90}
+            },
+            "longitude": {
+              "type": "array", "minItems": 2, "uniqueItems": true,
+              "items": {"type": "number", "minimum": -180, "maximum": 180}
+            }
+          }
+        },
+        "variables": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["risk_score", "risk_level", "hard_mask", "confidence"],
+          "properties": {
+            "risk_score": {"type": "array", "minItems": 2, "items": {"$ref": "#/$defs/riskRow"}},
+            "risk_level": {"type": "array", "minItems": 2, "items": {"$ref": "#/$defs/levelRow"}},
+            "hard_mask": {"type": "array", "minItems": 2, "items": {"$ref": "#/$defs/booleanRow"}},
+            "confidence": {"type": "array", "minItems": 2, "items": {"$ref": "#/$defs/unitIntervalRow"}},
+            "environment_speed_factor": {"type": "array", "minItems": 2, "items": {"$ref": "#/$defs/speedFactorRow"}}
+          }
+        },
+        "attributes": {
+          "type": "object",
+          "required": ["crs"],
+          "properties": {
+            "crs": {"const": "EPSG:4326"},
+            "grid_id": {"type": "string", "minLength": 1},
+            "development_only": {"type": "boolean"}
+          },
+          "additionalProperties": true
+        }
+      }
+    },
+    "sourceReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_id", "data_id", "issue_time", "valid_time", "version",
+        "quality_flag", "checksum"
+      ],
+      "properties": {
+        "source_id": {"type": "string", "minLength": 1},
+        "data_id": {"type": ["string", "null"], "minLength": 1, "pattern": "^.*\\S.*$"},
+        "issue_time": {"$ref": "#/$defs/nullableUtcDateTime"},
+        "valid_time": {"$ref": "#/$defs/nullableUtcDateTime"},
+        "version": {"type": "string", "minLength": 1},
+        "quality_flag": {"type": "string", "minLength": 1},
+        "checksum": {"$ref": "#/$defs/nullableDigest"}
+      }
+    }
+  }
+}

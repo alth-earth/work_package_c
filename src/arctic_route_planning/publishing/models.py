@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from arctic_route_planning.contracts.models import RouteMetrics, RoutePlan, Waypoint
 from arctic_route_planning.domain.models import ObjectiveMode, PlanKind
 
-ROUTE_PLAN_SCHEMA_VERSION = "cd.route-plan.v1"
+ROUTE_PLAN_SCHEMA_VERSION = "cd.route-plan.v2"
 OBJECTIVE_MODES = frozenset(mode.value for mode in ObjectiveMode)
 PLAN_KINDS = frozenset(kind.value for kind in PlanKind)
 
@@ -27,16 +27,25 @@ class PublicationToken:
     from being published after a hot reload.
     """
 
+    run_id: str
     scenario_id: str
     generation_id: int
     config_digest: str
+    model_config_digest: str
+    planner_config_digest: str
     input_revision: int
     planning_request_id: str
 
     def __post_init__(self) -> None:
-        if not self.scenario_id.strip():
-            raise ValueError("scenario_id must be a non-empty string")
-        _require_digest(self.config_digest)
+        for name in ("run_id", "scenario_id"):
+            if not getattr(self, name).strip():
+                raise ValueError(f"{name} must be a non-empty string")
+        for value in (
+            self.config_digest,
+            self.model_config_digest,
+            self.planner_config_digest,
+        ):
+            _require_digest(value)
         if not self.planning_request_id.strip():
             raise ValueError("planning_request_id must be a non-empty string")
         if isinstance(self.generation_id, bool) or not isinstance(self.generation_id, int):
@@ -51,9 +60,12 @@ class PublicationToken:
 
 def token_for_plan(plan: RoutePlan) -> PublicationToken:
     return PublicationToken(
+        run_id=plan.run_id,
         scenario_id=plan.scenario_id,
         generation_id=plan.generation_id,
         config_digest=plan.config_digest,
+        model_config_digest=plan.model_config_digest,
+        planner_config_digest=plan.planner_config_digest,
         input_revision=plan.input_revision,
         planning_request_id=plan.planning_request_id,
     )

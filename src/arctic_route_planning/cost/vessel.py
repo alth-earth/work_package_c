@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from arctic_route_planning.domain.models import VesselProfile
+    from arctic_route_planning.domain.models import VesselModelConfig
 
 KNOT_TO_KM_PER_HOUR = 1.852
 
@@ -52,17 +52,17 @@ class VesselPerformanceModel:
             raise ValueError("minimum_speed_factor must be in (0, 1]")
 
     @classmethod
-    def from_profile(
+    def from_configuration(
         cls,
-        profile: VesselProfile,
+        configuration: VesselModelConfig,
         *,
         model_version: str = "demo-vessel-performance-v1",
     ) -> VesselPerformanceModel:
         return cls(
-            economic_speed_knots=profile.cruise_speed_knots,
-            minimum_steerage_speed_knots=profile.min_speed_knots,
-            maximum_speed_knots=profile.max_speed_knots,
-            minimum_speed_factor=profile.min_speed_factor,
+            economic_speed_knots=configuration.economic_speed_knots,
+            minimum_steerage_speed_knots=configuration.minimum_steerage_speed_knots,
+            maximum_speed_knots=configuration.maximum_speed_knots,
+            minimum_speed_factor=configuration.minimum_speed_factor,
             model_version=model_version,
         )
 

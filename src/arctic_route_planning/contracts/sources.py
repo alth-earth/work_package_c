@@ -20,10 +20,13 @@ class RiskSource(Protocol):
         start: datetime,
         end: datetime,
         *,
+        run_id: str,
         scenario_id: str,
+        corridor_id: str,
         generation_id: int,
         vessel_profile_id: str,
         config_digest: str,
+        model_config_digest: str,
         as_of: datetime,
     ) -> Sequence[RiskFrame]: ...
 
@@ -31,10 +34,13 @@ class RiskSource(Protocol):
         self,
         target: datetime,
         *,
+        run_id: str,
         scenario_id: str,
+        corridor_id: str,
         generation_id: int,
         vessel_profile_id: str,
         config_digest: str,
+        model_config_digest: str,
         as_of: datetime,
     ) -> RiskFrame | None: ...
 
@@ -58,10 +64,13 @@ class InMemoryRiskSource:
         start: datetime,
         end: datetime,
         *,
+        run_id: str,
         scenario_id: str,
+        corridor_id: str,
         generation_id: int,
         vessel_profile_id: str,
         config_digest: str,
+        model_config_digest: str,
         as_of: datetime,
     ) -> tuple[RiskFrame, ...]:
         start_utc = ensure_utc(start, field="start")
@@ -69,14 +78,36 @@ class InMemoryRiskSource:
         as_of_utc = ensure_utc(as_of, field="as_of")
         if end_utc < start_utc:
             raise ContractError("风险窗口 end 不能早于 start")
+        for name, value in (
+            ("run_id", run_id),
+            ("scenario_id", scenario_id),
+            ("corridor_id", corridor_id),
+            ("vessel_profile_id", vessel_profile_id),
+        ):
+            if not value.strip():
+                raise ContractError(f"{name} 不能为空")
         with self._lock:
-            candidates = [
-                frame
-                for frame in self._frames.values()
-                if frame.scenario_id == scenario_id
+            if any(
+                frame.run_id == run_id
+                and frame.scenario_id == scenario_id
                 and frame.generation_id == generation_id
                 and frame.vessel_profile_id == vessel_profile_id
                 and frame.config_digest == config_digest
+                and frame.model_config_digest == model_config_digest
+                and frame.corridor_id != corridor_id
+                for frame in self._frames.values()
+            ):
+                raise ContextMismatchError("请求 corridor_id 与该运行已发布的 RiskFrame 不一致")
+            candidates = [
+                frame
+                for frame in self._frames.values()
+                if frame.run_id == run_id
+                and frame.scenario_id == scenario_id
+                and frame.corridor_id == corridor_id
+                and frame.generation_id == generation_id
+                and frame.vessel_profile_id == vessel_profile_id
+                and frame.config_digest == config_digest
+                and frame.model_config_digest == model_config_digest
                 and frame.as_of_time <= as_of_utc
                 and start_utc <= frame.valid_time <= end_utc
             ]
@@ -95,20 +126,26 @@ class InMemoryRiskSource:
         self,
         target: datetime,
         *,
+        run_id: str,
         scenario_id: str,
+        corridor_id: str,
         generation_id: int,
         vessel_profile_id: str,
         config_digest: str,
+        model_config_digest: str,
         as_of: datetime,
     ) -> RiskFrame | None:
         target_utc = ensure_utc(target, field="target")
         frames = self.get_window(
             datetime.min.replace(tzinfo=target_utc.tzinfo),
             target_utc,
+            run_id=run_id,
             scenario_id=scenario_id,
+            corridor_id=corridor_id,
             generation_id=generation_id,
             vessel_profile_id=vessel_profile_id,
             config_digest=config_digest,
+            model_config_digest=model_config_digest,
             as_of=as_of,
         )
         return frames[-1] if frames else None
@@ -128,17 +165,25 @@ class InMemoryRiskSource:
     def assert_context_available(
         self,
         *,
+        run_id: str,
         scenario_id: str,
+        corridor_id: str,
         generation_id: int,
         vessel_profile_id: str,
         config_digest: str,
+        model_config_digest: str,
     ) -> None:
         with self._lock:
             if not any(
-                frame.scenario_id == scenario_id
+                frame.run_id == run_id
+                and frame.scenario_id == scenario_id
+                and frame.corridor_id == corridor_id
                 and frame.generation_id == generation_id
                 and frame.vessel_profile_id == vessel_profile_id
                 and frame.config_digest == config_digest
+                and frame.model_config_digest == model_config_digest
                 for frame in self._frames.values()
             ):
-                raise ContextMismatchError("BC 中没有匹配场景、代次、船型和配置的风险帧")
+                raise ContextMismatchError(
+                    "BC 中没有匹配运行、场景、航区、代次、船型和模型配置的风险帧"
+                )

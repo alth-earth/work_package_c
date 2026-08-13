@@ -10,10 +10,10 @@ from arctic_route_planning.cost import (
     VesselPerformanceModel,
 )
 from arctic_route_planning.domain.models import (
-    CalibrationStatus,
     CostWeights,
     GeoPoint,
-    VesselProfile,
+    ModelCalibrationStatus,
+    VesselModelConfig,
 )
 from arctic_route_planning.grid import RegularGrid, haversine_km
 
@@ -72,24 +72,21 @@ def test_snap_is_explicit_limited_and_can_be_component_constrained() -> None:
 
 
 def test_vessel_model_applies_environment_factor_without_risk_double_counting() -> None:
-    profile = VesselProfile(
-        schema_version="vessel-profile.v1",
+    configuration = VesselModelConfig(
+        schema_version="c.vessel-model-config.v1",
         vessel_profile_id="demo-bulker",
-        version="1",
-        display_name="Demo bulker",
-        calibration_status=CalibrationStatus.DEMO_UNVALIDATED,
-        ice_class="demo",
-        load_condition="laden",
-        draft_m=10.0,
+        vessel_profile_version="1.0.0",
+        calibration_status=ModelCalibrationStatus.DEMO_UNVALIDATED,
         under_keel_clearance_m=2.0,
-        min_speed_knots=3.0,
-        cruise_speed_knots=13.5,
-        max_speed_knots=15.0,
-        min_speed_factor=0.2,
+        minimum_steerage_speed_knots=3.0,
+        economic_speed_knots=13.5,
+        maximum_speed_knots=15.0,
+        minimum_speed_factor=0.2,
         turn_radius_m=800.0,
+        bathymetry_hard_constraint_enabled=False,
         source_notes="unvalidated fixture",
     )
-    model = VesselPerformanceModel.from_profile(profile)
+    model = VesselPerformanceModel.from_configuration(configuration)
 
     estimate = model.effective_speed(0.5)
 

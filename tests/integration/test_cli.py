@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from arctic_route_contracts import write_run_context_atomic
 
 from arctic_route_planning import cli
+from arctic_route_planning.adapters import FixtureRiskSource
+from arctic_route_planning.config import load_configuration
+from arctic_route_planning.development import create_development_run_context
 
 CONFIG_ROOT = Path(__file__).parents[2] / "configs"
 
@@ -131,3 +136,42 @@ def test_cli_returns_clean_error_instead_of_traceback(monkeypatch, capsys) -> No
     captured = capsys.readouterr()
     assert captured.err.strip() == "error: bad"
     assert "Traceback" not in captured.err
+
+
+def test_plan_frames_rejects_risk_window_beyond_run_context() -> None:
+    configuration = load_configuration(
+        CONFIG_ROOT, "tromso_isfjorden_july_2026_retrospective_v1"
+    )
+    context = create_development_run_context(configuration, source_kind="synthetic")
+    source = FixtureRiskSource(
+        scenario=configuration.scenario,
+        corridor=configuration.corridor,
+        vessel=configuration.vessel,
+        run_context=context,
+        frame_count=configuration.scenario.horizon_hours + 2,
+        shape=(3, 3),
+    )
+
+    with pytest.raises(ValueError, match="RiskFrame window extends beyond"):
+        cli._plan_frames(
+            configuration,
+            context,
+            source.frames,
+            generation_id=0,
+            input_revision=0,
+            start_time=configuration.scenario.simulation_start,
+            max_snap_km=300.0,
+        )
+
+
+def test_cli_rejects_content_tampered_explicit_run_context(tmp_path) -> None:
+    configuration = load_configuration(
+        CONFIG_ROOT, "tromso_isfjorden_july_2026_retrospective_v1"
+    )
+    context = create_development_run_context(configuration, source_kind="synthetic")
+    path = tmp_path / "run-context.json"
+    write_run_context_atomic(replace(context, corridor_digest="f" * 64), path)
+    args = SimpleNamespace(run_context=path)
+
+    with pytest.raises(ValueError, match="corridor_digest"):
+        cli._run_context(args, configuration, source_kind="synthetic")

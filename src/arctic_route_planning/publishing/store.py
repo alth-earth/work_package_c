@@ -47,7 +47,7 @@ class CDLatestStore:
                 if self._cancelled:
                     raise PublicationRejected("cannot reactivate a cancelled request token")
                 return
-            if active is not None and token.scenario_id == active.scenario_id:
+            if active is not None and token.run_id == active.run_id:
                 if token.generation_id < active.generation_id:
                     raise PublicationRejected("cannot activate an older generation")
                 if (
@@ -56,9 +56,12 @@ class CDLatestStore:
                 ):
                     raise PublicationRejected("cannot activate an older input revision")
             context_changed = active is not None and (
-                token.scenario_id != active.scenario_id
+                token.run_id != active.run_id
+                or token.scenario_id != active.scenario_id
                 or token.generation_id != active.generation_id
                 or token.config_digest != active.config_digest
+                or token.model_config_digest != active.model_config_digest
+                or token.planner_config_digest != active.planner_config_digest
             )
             self._active = token
             self._cancelled = False
@@ -115,6 +118,8 @@ class CDLatestStore:
                     raise PublicationRejected("candidate corridor does not match selected plan")
                 if candidate.vessel_profile_id != plan.vessel_profile_id:
                     raise PublicationRejected("candidate vessel does not match selected plan")
+                if candidate.provenance is not plan.provenance:
+                    raise PublicationRejected("candidate provenance does not match selected plan")
                 if (
                     candidate.as_of_time != plan.as_of_time
                     or candidate.start_time != plan.start_time
@@ -128,12 +133,13 @@ class CDLatestStore:
             self._candidates = immutable_candidates
             return self._snapshot_locked()
 
-    def latest(self, *, scenario_id: str, generation_id: int) -> RoutePlan | None:
+    def latest(self, *, run_id: str, scenario_id: str, generation_id: int) -> RoutePlan | None:
         with self._lock:
             if self._current is None:
                 return None
             if (
-                self._current.scenario_id != scenario_id
+                self._current.run_id != run_id
+                or self._current.scenario_id != scenario_id
                 or self._current.generation_id != generation_id
             ):
                 return None
@@ -142,10 +148,15 @@ class CDLatestStore:
     def snapshot(
         self,
         *,
+        run_id: str | None = None,
         scenario_id: str | None = None,
         generation_id: int | None = None,
     ) -> CDStoreSnapshot:
         with self._lock:
+            if run_id is not None and (
+                self._active is None or self._active.run_id != run_id
+            ):
+                return CDStoreSnapshot(None, None, None, (), False)
             if scenario_id is not None and (
                 self._active is None or self._active.scenario_id != scenario_id
             ):

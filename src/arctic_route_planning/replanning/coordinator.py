@@ -52,15 +52,21 @@ class PlanningCoordinator:
     def begin(
         self,
         *,
+        run_id: str,
         scenario_id: str,
         generation_id: int,
         config_digest: str,
+        model_config_digest: str,
+        planner_config_digest: str,
         input_revision: int,
     ) -> PlanningHandle:
         token = PublicationToken(
+            run_id=run_id,
             scenario_id=scenario_id,
             generation_id=generation_id,
             config_digest=config_digest,
+            model_config_digest=model_config_digest,
+            planner_config_digest=planner_config_digest,
             input_revision=input_revision,
             planning_request_id=self._request_id_factory(),
         )

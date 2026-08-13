@@ -11,7 +11,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from arctic_route_planning.contracts.models import RouteMetrics, RoutePlan, Waypoint
+from arctic_route_planning.contracts.models import (
+    ProvenanceKind,
+    RouteMetrics,
+    RoutePlan,
+    Waypoint,
+)
 from arctic_route_planning.domain.models import ObjectiveMode, PlanKind, ReplanReason
 
 from .models import ROUTE_PLAN_SCHEMA_VERSION
@@ -35,10 +40,14 @@ def route_plan_to_dict(plan: RoutePlan) -> dict[str, Any]:
 
     return {
         "schema_version": plan.schema_version,
+        "run_id": plan.run_id,
         "scenario_id": plan.scenario_id,
         "corridor_id": plan.corridor_id,
         "vessel_profile_id": plan.vessel_profile_id,
         "config_digest": plan.config_digest,
+        "model_config_digest": plan.model_config_digest,
+        "planner_config_digest": plan.planner_config_digest,
+        "provenance": plan.provenance.value,
         "generation_id": plan.generation_id,
         "planning_request_id": plan.planning_request_id,
         "input_revision": plan.input_revision,
@@ -113,10 +122,14 @@ def route_plan_from_dict(value: Mapping[str, Any]) -> RoutePlan:
             raise ValueError("destination_reached must be a boolean")
         return RoutePlan(
             schema_version=str(value.get("schema_version", ROUTE_PLAN_SCHEMA_VERSION)),
+            run_id=str(value["run_id"]),
             scenario_id=str(value["scenario_id"]),
             corridor_id=str(value["corridor_id"]),
             vessel_profile_id=str(value["vessel_profile_id"]),
             config_digest=str(value["config_digest"]),
+            model_config_digest=str(value["model_config_digest"]),
+            planner_config_digest=str(value["planner_config_digest"]),
+            provenance=ProvenanceKind(str(value["provenance"])),
             generation_id=int(value["generation_id"]),
             planning_request_id=str(value["planning_request_id"]),
             input_revision=int(value["input_revision"]),

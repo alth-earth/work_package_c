@@ -14,6 +14,8 @@ from arctic_route_planning.contracts.models import (
 )
 
 CONFIG_DIGEST = "0" * 64
+MODEL_CONFIG_DIGEST = "1" * 64
+RUN_ID = "run-unit-tests"
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
 
 
@@ -31,6 +33,8 @@ def make_frame(
     corridor_id: str = "corridor-demo",
     vessel_profile_id: str = "vessel-demo",
     config_digest: str = CONFIG_DIGEST,
+    model_config_digest: str = MODEL_CONFIG_DIGEST,
+    run_id: str = RUN_ID,
     generation_id: int = 3,
     model_version: str = "risk-model-v1",
     grid_id: str = "fixture-grid",
@@ -76,12 +80,14 @@ def make_frame(
         quality_flag="synthetic",
     )
     return RiskFrame(
-        schema_version="bc.risk-frame.v1",
+        schema_version="bc.risk-frame.v2",
         risk_id=risk_id,
+        run_id=run_id,
         scenario_id=scenario_id,
         corridor_id=corridor_id,
         vessel_profile_id=vessel_profile_id,
         config_digest=config_digest,
+        model_config_digest=model_config_digest,
         generation_id=generation_id,
         valid_time=valid_time,
         as_of_time=T0,

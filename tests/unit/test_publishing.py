@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from arctic_route_planning.contracts import ProvenanceKind
 from arctic_route_planning.domain import ObjectiveMode, PlanKind
 from arctic_route_planning.publishing import (
     CDLatestStore,
@@ -26,6 +27,8 @@ from arctic_route_planning.publishing import (
 )
 
 CONFIG_DIGEST = "a" * 64
+MODEL_CONFIG_DIGEST = "b" * 64
+PLANNER_CONFIG_DIGEST = "c" * 64
 
 
 def make_plan(
@@ -39,11 +42,15 @@ def make_plan(
 ) -> RoutePlan:
     start = datetime(2026, 1, 1, tzinfo=UTC)
     return RoutePlan(
-        schema_version="cd.route-plan.v1",
+        schema_version="cd.route-plan.v2",
+        run_id="run-publishing-tests",
         scenario_id="demo",
         corridor_id="corridor",
         vessel_profile_id="demo-bulker-v1",
         config_digest=config_digest,
+        model_config_digest=MODEL_CONFIG_DIGEST,
+        planner_config_digest=PLANNER_CONFIG_DIGEST,
+        provenance=ProvenanceKind.SYNTHETIC,
         generation_id=3,
         planning_request_id=request_id,
         input_revision=input_revision,
@@ -81,6 +88,7 @@ def test_route_plan_json_and_geojson_round_trip(tmp_path) -> None:
     plan = make_plan()
 
     assert route_plan_from_dict(route_plan_to_dict(plan)) == plan
+    assert route_plan_to_dict(plan)["provenance"] == "synthetic"
     geojson = route_plan_to_geojson(plan)
     assert geojson["type"] == "FeatureCollection"
     assert geojson["features"][0]["geometry"]["type"] == "LineString"
@@ -100,7 +108,7 @@ def test_route_plan_json_and_geojson_round_trip(tmp_path) -> None:
 
 def test_route_plan_json_matches_shared_schema() -> None:
     jsonschema = pytest.importorskip("jsonschema")
-    schema_path = Path(__file__).parents[2] / "schemas" / "route-plan-v1.schema.json"
+    schema_path = Path(__file__).parents[2] / "schemas" / "route-plan-v2.schema.json"
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
 
     jsonschema.validate(route_plan_to_dict(make_plan()), schema)
@@ -131,6 +139,8 @@ def test_route_plan_rejects_invalid_contract_values() -> None:
         )
     with pytest.raises(ValueError, match="硬约束"):
         replace(plan, metrics=replace(plan.metrics, hard_constraint_violations=1))
+    with pytest.raises(ValueError, match="provenance"):
+        replace(plan, provenance="claimed_formal")
 
 
 def test_cd_store_keeps_current_previous_and_candidates() -> None:
@@ -152,8 +162,21 @@ def test_cd_store_keeps_current_previous_and_candidates() -> None:
     second = store.publish(newer)
     assert second.current == newer
     assert second.previous == selected
-    assert store.latest(scenario_id="demo", generation_id=3) == newer
-    assert store.latest(scenario_id="demo", generation_id=4) is None
+    assert store.latest(run_id=selected.run_id, scenario_id="demo", generation_id=3) == newer
+    assert store.latest(run_id=selected.run_id, scenario_id="demo", generation_id=4) is None
+
+
+def test_cd_store_rejects_mixed_candidate_provenance() -> None:
+    store = CDLatestStore()
+    selected = make_plan()
+    mixed = replace(
+        make_plan(objective_mode="fastest", plan_id="fastest-legacy"),
+        provenance=ProvenanceKind.LEGACY_UNVERIFIED,
+    )
+    store.activate(token_for_plan(selected))
+
+    with pytest.raises(PublicationRejected, match="provenance"):
+        store.publish(selected, [mixed])
 
 
 @pytest.mark.parametrize(
@@ -181,7 +204,16 @@ def test_cd_store_rejects_every_stale_context_dimension(field: str, value: objec
 def test_new_same_generation_request_supersedes_old_result() -> None:
     store = CDLatestStore()
     old_plan = make_plan(request_id="old", input_revision=5)
-    newer_token = PublicationToken("demo", 3, CONFIG_DIGEST, 5, "new")
+    newer_token = PublicationToken(
+        "run-publishing-tests",
+        "demo",
+        3,
+        CONFIG_DIGEST,
+        MODEL_CONFIG_DIGEST,
+        PLANNER_CONFIG_DIGEST,
+        5,
+        "new",
+    )
     store.activate(token_for_plan(old_plan))
     store.activate(newer_token)
 
@@ -194,9 +226,20 @@ def test_generation_switch_hides_previous_generation_immediately() -> None:
     plan = make_plan()
     store.activate(token_for_plan(plan))
     store.publish(plan)
-    store.activate(PublicationToken("demo", 4, CONFIG_DIGEST, 0, "after-seek"))
+    store.activate(
+        PublicationToken(
+            "run-publishing-tests",
+            "demo",
+            4,
+            CONFIG_DIGEST,
+            MODEL_CONFIG_DIGEST,
+            PLANNER_CONFIG_DIGEST,
+            0,
+            "after-seek",
+        )
+    )
 
-    assert store.latest(scenario_id="demo", generation_id=3) is None
+    assert store.latest(run_id=plan.run_id, scenario_id="demo", generation_id=3) is None
     snapshot = store.snapshot(scenario_id="demo", generation_id=4)
     assert snapshot.current is None
     assert snapshot.previous is None
@@ -208,9 +251,20 @@ def test_config_switch_hides_incompatible_current_route() -> None:
     store.activate(token_for_plan(plan))
     store.publish(plan)
 
-    store.activate(PublicationToken("demo", 3, "b" * 64, 1, "new-config"))
+    store.activate(
+        PublicationToken(
+            "run-publishing-tests",
+            "demo",
+            3,
+            "d" * 64,
+            MODEL_CONFIG_DIGEST,
+            PLANNER_CONFIG_DIGEST,
+            1,
+            "new-config",
+        )
+    )
 
-    assert store.latest(scenario_id="demo", generation_id=3) is None
+    assert store.latest(run_id=plan.run_id, scenario_id="demo", generation_id=3) is None
 
 
 def test_cancelled_token_cannot_be_reactivated() -> None:

@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from arctic_route_planning.contracts import ProvenanceKind
 from arctic_route_planning.domain import ObjectiveMode, PlanKind
 from arctic_route_planning.publishing import RouteMetrics, RoutePlan, Waypoint
 from arctic_route_planning.replanning import (
@@ -19,6 +20,8 @@ from arctic_route_planning.replanning import (
 
 BASE = datetime(2026, 1, 1, tzinfo=UTC)
 CONFIG_DIGEST = "a" * 64
+MODEL_CONFIG_DIGEST = "b" * 64
+PLANNER_CONFIG_DIGEST = "c" * 64
 
 
 def observation(**changes: object) -> ReplanObservation:
@@ -37,11 +40,15 @@ def observation(**changes: object) -> ReplanObservation:
 def plan_for(handle, **changes: object) -> RoutePlan:
     token = handle.token
     values: dict[str, object] = {
-        "schema_version": "cd.route-plan.v1",
+        "schema_version": "cd.route-plan.v2",
+        "run_id": token.run_id,
         "scenario_id": token.scenario_id,
         "corridor_id": "corridor",
         "vessel_profile_id": "demo-bulker-v1",
         "config_digest": token.config_digest,
+        "model_config_digest": token.model_config_digest,
+        "planner_config_digest": token.planner_config_digest,
+        "provenance": ProvenanceKind.SYNTHETIC,
         "generation_id": token.generation_id,
         "planning_request_id": token.planning_request_id,
         "input_revision": token.input_revision,
@@ -143,7 +150,13 @@ def test_trigger_evaluator_rejects_stale_data_revision() -> None:
 def test_switch_gate_requires_benefit_and_limits_risk_regression() -> None:
     coordinator = PlanningCoordinator(request_id_factory=lambda: "request")
     handle = coordinator.begin(
-        scenario_id="demo", generation_id=1, config_digest=CONFIG_DIGEST, input_revision=1
+        run_id="run-replanning-tests",
+        scenario_id="demo",
+        generation_id=1,
+        config_digest=CONFIG_DIGEST,
+        model_config_digest=MODEL_CONFIG_DIGEST,
+        planner_config_digest=PLANNER_CONFIG_DIGEST,
+        input_revision=1,
     )
     current = plan_for(handle)
     gate = RouteSwitchGate(ReplanningPolicy(min_switch_improvement=0.05, risk_hysteresis=0.02))
@@ -179,11 +192,23 @@ def test_coordinator_cancels_same_generation_older_request_before_publish() -> N
     request_ids = iter(("old", "new"))
     coordinator = PlanningCoordinator(request_id_factory=lambda: next(request_ids))
     old = coordinator.begin(
-        scenario_id="demo", generation_id=1, config_digest=CONFIG_DIGEST, input_revision=7
+        run_id="run-replanning-tests",
+        scenario_id="demo",
+        generation_id=1,
+        config_digest=CONFIG_DIGEST,
+        model_config_digest=MODEL_CONFIG_DIGEST,
+        planner_config_digest=PLANNER_CONFIG_DIGEST,
+        input_revision=7,
     )
     old_plan = plan_for(old)
     new = coordinator.begin(
-        scenario_id="demo", generation_id=1, config_digest=CONFIG_DIGEST, input_revision=7
+        run_id="run-replanning-tests",
+        scenario_id="demo",
+        generation_id=1,
+        config_digest=CONFIG_DIGEST,
+        model_config_digest=MODEL_CONFIG_DIGEST,
+        planner_config_digest=PLANNER_CONFIG_DIGEST,
+        input_revision=7,
     )
 
     assert old.cancelled
@@ -198,14 +223,23 @@ def test_coordinator_cancels_same_generation_older_request_before_publish() -> N
 def test_coordinator_rejects_old_input_revision_activation() -> None:
     coordinator = PlanningCoordinator(request_id_factory=lambda: "request")
     current = coordinator.begin(
-        scenario_id="demo", generation_id=2, config_digest=CONFIG_DIGEST, input_revision=5
+        run_id="run-replanning-tests",
+        scenario_id="demo",
+        generation_id=2,
+        config_digest=CONFIG_DIGEST,
+        model_config_digest=MODEL_CONFIG_DIGEST,
+        planner_config_digest=PLANNER_CONFIG_DIGEST,
+        input_revision=5,
     )
 
     with pytest.raises(Exception, match="older input revision"):
         coordinator.begin(
+            run_id="run-replanning-tests",
             scenario_id="demo",
             generation_id=2,
             config_digest=CONFIG_DIGEST,
+            model_config_digest=MODEL_CONFIG_DIGEST,
+            planner_config_digest=PLANNER_CONFIG_DIGEST,
             input_revision=4,
         )
     assert not current.cancelled

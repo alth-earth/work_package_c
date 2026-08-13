@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from arctic_route_planning.contracts.models import ProvenanceKind
+
 from .errors import (
     IncompatibleRiskFramesError,
     RiskCoverageError,
@@ -29,10 +31,13 @@ if TYPE_CHECKING:
 class RiskIdentity:
     """Identity fields that must remain constant throughout one planning run."""
 
+    run_id: str
     scenario_id: str
     corridor_id: str
     vessel_profile_id: str
     config_digest: str
+    model_config_digest: str
+    provenance: ProvenanceKind
     generation_id: int
     model_version: str
     grid_id: str
@@ -65,10 +70,13 @@ def _utc(value: datetime, *, field: str) -> datetime:
 def _identity(frame: Any) -> RiskIdentity:
     grid = frame.grid
     return RiskIdentity(
+        run_id=frame.run_id,
         scenario_id=frame.scenario_id,
         corridor_id=frame.corridor_id,
         vessel_profile_id=frame.vessel_profile_id,
         config_digest=frame.config_digest,
+        model_config_digest=frame.model_config_digest,
+        provenance=frame.provenance,
         generation_id=frame.generation_id,
         model_version=frame.model_version,
         grid_id=grid.grid_id,
@@ -122,6 +130,12 @@ class RiskSampler:
     @property
     def end_time(self) -> datetime:
         return self._frames[-1].valid_time
+
+    @property
+    def as_of_times(self) -> tuple[datetime, ...]:
+        """Return the knowledge cutoffs represented in this immutable window."""
+
+        return tuple(frame.as_of_time for frame in self._frames)
 
     def assert_identity(self, expected: RiskIdentity) -> None:
         """Fail fast if this window belongs to another planning context."""
@@ -199,7 +213,7 @@ class RiskSampler:
             if _identity(frame) != reference_identity:
                 raise IncompatibleRiskFramesError(
                     "cannot interpolate across scenario, corridor, generation, vessel, "
-                    "configuration, model, or grid identity"
+                    "configuration, model, provenance, or grid identity"
                 )
             grid = frame.grid
             if (

@@ -8,10 +8,24 @@ resolution-markers = [
 ]
 
 [[package]]
+name = "arctic-route-contracts"
+version = "0.2.0"
+source = { editable = "../arctic_route_contracts" }
+
+[package.metadata]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8.3,<10" },
+    { name = "ruff", specifier = ">=0.11,<1" },
+]
+
+[[package]]
 name = "arctic-route-planning"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
+    { name = "arctic-route-contracts" },
     { name = "h5netcdf" },
     { name = "h5py" },
     { name = "jsonschema" },
@@ -28,6 +42,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "arctic-route-contracts", editable = "../arctic_route_contracts" },
     { name = "h5netcdf", specifier = ">=1.6,<2" },
     { name = "h5py", specifier = ">=3.13,<4" },
     { name = "jsonschema", specifier = ">=4.23,<5" },

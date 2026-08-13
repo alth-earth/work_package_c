@@ -1,16 +1,20 @@
 [project]
 name = "arctic-route-planning"
-version = "0.1.0"
+version = "0.2.0"
 description = "北极航线工作包 C：预测风险驱动的时间依赖规划与滚动重规划"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
 dependencies = [
+    "arctic-route-contracts",
     "h5py>=3.13,<4",
     "h5netcdf>=1.6,<2",
     "jsonschema>=4.23,<5",
     "numpy>=2.2,<3",
     "xarray>=2025.1,<2027",
 ]
+
+[tool.uv.sources]
+arctic-route-contracts = { path = "../arctic_route_contracts", editable = true }
 
 [project.scripts]
 arctic-route-plan = "arctic_route_planning.cli:main"
@@ -55,4 +59,3 @@ ignore = ["RUF001"]
 [tool.coverage.run]
 branch = true
 source = ["arctic_route_planning"]
-

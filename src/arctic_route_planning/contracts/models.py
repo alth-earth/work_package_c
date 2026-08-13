@@ -10,6 +10,7 @@ from enum import StrEnum
 
 import numpy as np
 import xarray as xr
+from arctic_route_contracts import ScenarioMode
 
 from arctic_route_planning.domain.models import (
     GeoPoint,
@@ -54,6 +55,10 @@ class SourceReference:
     def __post_init__(self) -> None:
         if not self.source_id.strip() or not self.version.strip() or not self.quality_flag.strip():
             raise ContractError("来源 ID、版本和质量标记不能为空")
+        if self.data_id is not None and (
+            not isinstance(self.data_id, str) or not self.data_id.strip()
+        ):
+            raise ContractError("source.data_id 必须是非空字符串或 null")
         if self.issue_time is not None:
             object.__setattr__(
                 self, "issue_time", ensure_utc(self.issue_time, field="source.issue_time")
@@ -70,10 +75,12 @@ class SourceReference:
 class RiskFrame:
     schema_version: str
     risk_id: str
+    run_id: str
     scenario_id: str
     corridor_id: str
     vessel_profile_id: str
     config_digest: str
+    model_config_digest: str
     generation_id: int
     valid_time: datetime
     as_of_time: datetime
@@ -84,10 +91,16 @@ class RiskFrame:
     provenance: ProvenanceKind
 
     def __post_init__(self) -> None:
-        if self.schema_version != "bc.risk-frame.v1":
-            raise ContractError("RiskFrame.schema_version 必须是 bc.risk-frame.v1")
+        try:
+            provenance = ProvenanceKind(self.provenance)
+        except (TypeError, ValueError) as exc:
+            raise ContractError("RiskFrame.provenance 不合法") from exc
+        object.__setattr__(self, "provenance", provenance)
+        if self.schema_version != "bc.risk-frame.v2":
+            raise ContractError("RiskFrame.schema_version 必须是 bc.risk-frame.v2")
         for name in (
             "risk_id",
+            "run_id",
             "scenario_id",
             "corridor_id",
             "vessel_profile_id",
@@ -96,6 +109,7 @@ class RiskFrame:
             if not getattr(self, name).strip():
                 raise ContractError(f"{name} 不能为空")
         _validate_digest(self.config_digest, field="config_digest")
+        _validate_digest(self.model_config_digest, field="model_config_digest")
         if self.generation_id < 0:
             raise ContractError("generation_id 不能为负")
         valid = ensure_utc(self.valid_time, field="valid_time")
@@ -106,14 +120,20 @@ class RiskFrame:
         object.__setattr__(self, "generated_at", generated)
         if not self.source_summary:
             raise ContractError("source_summary 不能为空")
-        if self.provenance is ProvenanceKind.FORMAL:
+        if provenance is ProvenanceKind.FORMAL:
             for source in self.source_summary:
-                if source.issue_time is None:
-                    raise ContractError("正式 RiskFrame 的来源必须携带 issue_time")
+                missing = tuple(
+                    name
+                    for name in ("data_id", "issue_time", "valid_time", "checksum")
+                    if getattr(source, name) is None
+                )
+                if missing:
+                    raise ContractError("正式 RiskFrame 的来源必须携带 " + ", ".join(missing))
+                assert source.issue_time is not None
                 if source.issue_time > as_of:
                     raise ContractError("正式 RiskFrame 包含 as_of_time 之后才发布的来源")
         payload = _validated_payload(self.payload)
-        if self.provenance is ProvenanceKind.FORMAL and "environment_speed_factor" not in payload:
+        if provenance is ProvenanceKind.FORMAL and "environment_speed_factor" not in payload:
             raise ContractError("正式 RiskFrame 必须携带 environment_speed_factor")
         object.__setattr__(self, "payload", payload)
 
@@ -206,10 +226,14 @@ class RouteMetrics:
 @dataclass(frozen=True, slots=True)
 class RoutePlan:
     schema_version: str
+    run_id: str
     scenario_id: str
     corridor_id: str
     vessel_profile_id: str
     config_digest: str
+    model_config_digest: str
+    planner_config_digest: str
+    provenance: ProvenanceKind
     generation_id: int
     plan_id: str
     plan_version: str
@@ -228,9 +252,15 @@ class RoutePlan:
     destination_reached: bool = True
 
     def __post_init__(self) -> None:
-        if self.schema_version != "cd.route-plan.v1":
-            raise ContractError("RoutePlan.schema_version 必须是 cd.route-plan.v1")
+        try:
+            provenance = ProvenanceKind(self.provenance)
+        except (TypeError, ValueError) as exc:
+            raise ContractError("RoutePlan.provenance 不合法") from exc
+        object.__setattr__(self, "provenance", provenance)
+        if self.schema_version != "cd.route-plan.v2":
+            raise ContractError("RoutePlan.schema_version 必须是 cd.route-plan.v2")
         for name in (
+            "run_id",
             "scenario_id",
             "corridor_id",
             "vessel_profile_id",
@@ -242,6 +272,8 @@ class RoutePlan:
             if not getattr(self, name).strip():
                 raise ContractError(f"{name} 不能为空")
         _validate_digest(self.config_digest, field="config_digest")
+        _validate_digest(self.model_config_digest, field="model_config_digest")
+        _validate_digest(self.planner_config_digest, field="planner_config_digest")
         if self.generation_id < 0 or self.input_revision < 0:
             raise ContractError("generation_id 和 input_revision 不能为负")
         for name in ("generated_at", "as_of_time", "start_time"):
@@ -264,7 +296,10 @@ class RoutePlan:
 class PlanRequest:
     scenario: ScenarioDefinition
     vessel: VesselProfile
+    run_id: str
     config_digest: str
+    model_config_digest: str
+    planner_config_digest: str
     generation_id: int
     planning_request_id: str
     input_revision: int
@@ -277,15 +312,19 @@ class PlanRequest:
     replan_reasons: tuple[ReplanReason, ...] = ()
 
     def __post_init__(self) -> None:
+        if not self.run_id.strip():
+            raise ContractError("run_id 不能为空")
         _validate_digest(self.config_digest, field="config_digest")
+        _validate_digest(self.model_config_digest, field="model_config_digest")
+        _validate_digest(self.planner_config_digest, field="planner_config_digest")
         if self.generation_id < 0 or self.input_revision < 0:
             raise ContractError("generation_id 和 input_revision 不能为负")
         if not self.planning_request_id.strip():
             raise ContractError("planning_request_id 不能为空")
         as_of = ensure_utc(self.as_of_time, field="as_of_time")
         start_time = ensure_utc(self.start_time, field="start_time")
-        if as_of > start_time:
-            raise ContractError("as_of_time 不能晚于 start_time")
+        if self.scenario.mode is ScenarioMode.FROZEN_FORECAST and as_of > start_time:
+            raise ContractError("frozen_forecast 的 as_of_time 不能晚于 start_time")
         object.__setattr__(self, "as_of_time", as_of)
         object.__setattr__(self, "start_time", start_time)
         if self.start == self.destination:
