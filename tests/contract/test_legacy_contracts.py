@@ -11,6 +11,7 @@ from arctic_route_planning.development import create_development_run_context
 from arctic_route_planning.errors import LegacyDataError
 
 CONFIG_ROOT = Path(__file__).parents[2] / "configs"
+LEGACY_RUN_ID = "run-00000000-0000-4000-8000-000000000002"
 
 
 def test_v1_risk_adapter_requires_explicit_legacy_downgrade() -> None:
@@ -42,7 +43,7 @@ def test_v1_risk_adapter_requires_explicit_legacy_downgrade() -> None:
     with pytest.raises(LegacyDataError, match="legacy_unverified"):
         adapt_risk_frame_v1(
             document,
-            run_id="run-legacy",
+            run_id=LEGACY_RUN_ID,
             model_config_digest="1" * 64,
             payload=frame.payload,
             acknowledge_legacy_unverified=False,
@@ -50,7 +51,7 @@ def test_v1_risk_adapter_requires_explicit_legacy_downgrade() -> None:
 
     migrated = adapt_risk_frame_v1(
         document,
-        run_id="run-legacy",
+        run_id=LEGACY_RUN_ID,
         model_config_digest="1" * 64,
         payload=frame.payload,
         acknowledge_legacy_unverified=True,

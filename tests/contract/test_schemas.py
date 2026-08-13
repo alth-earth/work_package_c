@@ -19,7 +19,7 @@ def _validator(name: str) -> Draft202012Validator:
 def _risk_frame_document() -> dict[str, object]:
     return {
         "schema_version": "bc.risk-frame.v2",
-        "risk_id": "risk-1",
+        "risk_id": f"risk-sha256-{'1' * 64}",
         "run_id": "run-00000000-0000-4000-8000-000000000001",
         "scenario_id": "scenario-1",
         "corridor_id": "corridor-1",
@@ -35,7 +35,7 @@ def _risk_frame_document() -> dict[str, object]:
             "coordinates": {"latitude": [70.0, 71.0], "longitude": [10.0, 11.0]},
             "variables": {
                 "risk_score": [[0.1, 0.2], [None, 0.3]],
-                "risk_level": [[1, 2], [1, 2]],
+                "risk_level": [[1, 2], [5, 2]],
                 "hard_mask": [[False, False], [True, False]],
                 "confidence": [[0.9, 0.9], [0.0, 0.8]],
                 "environment_speed_factor": [[1.0, 0.9], [0.8, 0.7]],

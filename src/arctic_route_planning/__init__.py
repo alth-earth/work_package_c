@@ -21,6 +21,7 @@ from arctic_route_planning.domain.models import (
     ScenarioDefinition,
     VesselProfile,
 )
+from arctic_route_planning.ingress import PreparedRiskPlanning, RiskSourcePlanningIngress
 
 __all__ = [
     "CalibrationStatus",
@@ -30,9 +31,11 @@ __all__ = [
     "PlanKind",
     "PlanRequest",
     "PlannerConfig",
+    "PreparedRiskPlanning",
     "ReplanReason",
     "RiskFrame",
     "RiskSample",
+    "RiskSourcePlanningIngress",
     "RouteMetrics",
     "RoutePlan",
     "RunContext",
@@ -42,4 +45,4 @@ __all__ = [
     "Waypoint",
 ]
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"

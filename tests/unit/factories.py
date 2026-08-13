@@ -15,7 +15,7 @@ from arctic_route_planning.contracts.models import (
 
 CONFIG_DIGEST = "0" * 64
 MODEL_CONFIG_DIGEST = "1" * 64
-RUN_ID = "run-unit-tests"
+RUN_ID = "run-00000000-0000-4000-8000-000000000001"
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
 
 

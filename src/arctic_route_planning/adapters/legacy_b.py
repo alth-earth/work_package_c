@@ -173,7 +173,8 @@ class LegacyBArchiveAdapter(InMemoryRiskSource):
             finite = raw_risk[np.isfinite(raw_risk)]
             if finite.size and np.any((finite < 0) | (finite > 1)):
                 raise LegacyDataError("旧 B comprehensive_risk 超出 [0, 1]")
-            risk_level = np.ones(raw_risk.shape, dtype=np.uint8)
+            # v2 freezes unknown risk at the conservative display level 5.
+            risk_level = np.full(raw_risk.shape, 5, dtype=np.uint8)
             finite_cells = np.isfinite(raw_risk)
             risk_level[finite_cells] = np.clip(
                 np.floor(raw_risk[finite_cells] * 5) + 1,

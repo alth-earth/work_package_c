@@ -1,6 +1,6 @@
 # 工作包 C 决策记录
 
-> 冻结日期：2026-08-09；适用于 `0.1.x` 演示基线。
+> 更新日期：2026-08-13；适用于 `0.3.x` BC 正式边界基线。
 > 本系统仅用于科研演示，不得用于真实航行安全决策。
 
 ## 已冻结的边界
@@ -20,6 +20,22 @@
 8. v1 不允许等待动作；风险时域必须覆盖实际 ETA。合成演示生成足够长的时域；稀疏旧制品缺帧时明确拒绝，不把 24 h 冒充为 2–5.5 天全航程覆盖。
 9. `RoutePlan v2` 显式携带输入风险的 `provenance`；只有规划器提供与请求一致的
    `risk_identity` 时才能发布 `formal`，无身份的开发 planner 只能输出明示的非正式来源。
+10. v2 的 `risk_level` 不是第二套模型输出：有限 `risk_score` 固定按
+    `min(5, floor(risk_score*5)+1)` 派生，未知风险固定为保守等级 5。
+11. 正式 `risk_id` 为排除 `risk_id` 本身、包含其余全部规范传输字段的 SHA-256：
+    `risk-sha256-<64hex>`；来源引用先按规范 JSON 排序，网格和 payload 数组顺序有意义。
+12. 正式 C 入口只消费显式原子提交的 `CommittedRiskWindow`。窗口绑定完整身份、知识截止、
+    严格逐小时闭区间、帧数和完整帧内容；普通 `get_window()` 结果不能冒充已提交窗口。
+13. `prepare` 建立可审计输入；`execute` 必须持有 source 的 execution lease，复核同一
+    commit，并把帧规范编码/解码为私有快照后重建规划组件，让 generation 围栏和内容身份
+    覆盖规划与最终发布。同一 ingress 对同一 `(run_id, scenario_id)` 复用一个
+    `PlanningCoordinator`，不能为每个请求创建相互隔离的迟到发布围栏；不同 run 必须隔离，
+    不能互相取消。
+14. `PreparedRiskPlanning` 不公开可绕过租约执行的 prepare 阶段 `PlanningService`；唯一正式
+    执行入口是 `.execute()`。
+15. 正式 ingress 接收完整 `PlanningConfiguration`，从实际 vessel model、planner 与
+    replanning 对象重算 `planner_config_digest`，并用同一重规划配置构造运行策略；不接受
+    与执行对象脱离的摘要声明。
 
 ## 全系统共享配置
 

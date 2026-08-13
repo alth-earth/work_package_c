@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import AbstractContextManager, contextmanager
 from datetime import datetime
 from threading import RLock
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
+from arctic_route_planning.contracts.codec import canonical_risk_frame_bytes
 from arctic_route_planning.contracts.models import RiskFrame
+from arctic_route_planning.contracts.windows import CommittedRiskWindow, RiskWindowQuery
 from arctic_route_planning.errors import ContextMismatchError, ContractError
 from arctic_route_planning.timeutils import ensure_utc
 
 
+@runtime_checkable
 class RiskSource(Protocol):
     def publish(self, frame: RiskFrame) -> None: ...
 
@@ -45,19 +49,85 @@ class RiskSource(Protocol):
     ) -> RiskFrame | None: ...
 
 
+@runtime_checkable
+class CommittedRiskSource(Protocol):
+    """Structural protocol implemented by formal B stores.
+
+    Implementers do not inherit a C class. They return the public, immutable
+    :class:`CommittedRiskWindow` for an exact full-key query. The execution
+    lease must keep that exact commit and the query's active generation stable
+    until context exit; generation activation must use the same fence.
+    """
+
+    def get_committed_window(self, query: RiskWindowQuery) -> CommittedRiskWindow: ...
+
+    def lease_committed_window(
+        self, query: RiskWindowQuery
+    ) -> AbstractContextManager[CommittedRiskWindow]: ...
+
+
 class InMemoryRiskSource:
     """Thread-safe, bounded-by-caller BC store with as-of version selection."""
 
     def __init__(self) -> None:
         self._frames: dict[str, RiskFrame] = {}
+        self._committed_windows: dict[RiskWindowQuery, CommittedRiskWindow] = {}
         self._lock = RLock()
 
     def publish(self, frame: RiskFrame) -> None:
         with self._lock:
             current = self._frames.get(frame.risk_id)
-            if current is not None and current is not frame:
+            if current is not None and canonical_risk_frame_bytes(
+                current
+            ) != canonical_risk_frame_bytes(frame):
                 raise ContractError(f"risk_id {frame.risk_id} 已对应不同内容")
             self._frames[frame.risk_id] = frame
+
+    def commit_window(self, query: RiskWindowQuery) -> CommittedRiskWindow:
+        """Atomically freeze an exact query result for contract tests and demos."""
+
+        frames = self.get_window(
+            query.start,
+            query.end,
+            run_id=query.run_id,
+            scenario_id=query.scenario_id,
+            corridor_id=query.corridor_id,
+            generation_id=query.generation_id,
+            vessel_profile_id=query.vessel_profile_id,
+            config_digest=query.config_digest,
+            model_config_digest=query.model_config_digest,
+            as_of=query.as_of,
+        )
+        committed = CommittedRiskWindow.create(query, tuple(frames))
+        with self._lock:
+            current = self._committed_windows.get(query)
+            if current is not None and current.content_digest != committed.content_digest:
+                raise ContractError("同一 RiskWindowQuery 已提交不同内容")
+            self._committed_windows[query] = committed
+        return committed
+
+    def get_committed_window(self, query: RiskWindowQuery) -> CommittedRiskWindow:
+        """Return only an explicitly committed exact snapshot."""
+
+        with self._lock:
+            committed = self._committed_windows.get(query)
+        if committed is None:
+            raise ContextMismatchError("BC 中没有完全匹配该查询的已提交风险窗口")
+        committed.assert_matches(query)
+        return committed
+
+    @contextmanager
+    def lease_committed_window(
+        self, query: RiskWindowQuery
+    ) -> Iterator[CommittedRiskWindow]:
+        """Hold the in-memory generation/commit state stable through execution."""
+
+        with self._lock:
+            committed = self._committed_windows.get(query)
+            if committed is None:
+                raise ContextMismatchError("BC 中没有完全匹配该查询的已提交风险窗口")
+            committed.assert_matches(query)
+            yield committed
 
     def get_window(
         self,
@@ -153,13 +223,22 @@ class InMemoryRiskSource:
     def reset_to_generation(self, generation_id: int) -> None:
         """Discard every frame outside the newly active simulation generation."""
 
-        if generation_id < 0:
-            raise ContractError("generation_id 不能为负")
+        if (
+            isinstance(generation_id, bool)
+            or not isinstance(generation_id, int)
+            or generation_id < 0
+        ):
+            raise ContractError("generation_id 必须是非负整数且不能是 bool")
         with self._lock:
             self._frames = {
                 risk_id: frame
                 for risk_id, frame in self._frames.items()
                 if frame.generation_id == generation_id
+            }
+            self._committed_windows = {
+                query: window
+                for query, window in self._committed_windows.items()
+                if query.generation_id == generation_id
             }
 
     def assert_context_available(

@@ -9,7 +9,7 @@
 - 版本按时间倒序记录；`Unreleased` 表示已规划但尚未纳入当前版本的工作。
 - “新增/变更/修复”只描述已经落入代码、配置、Schema、测试或文档的内容。
 - “后续工作”不是完成声明，也不构成正式接口承诺。
-- BC/CD 合同版本与 Python 包版本是不同概念。例如包版本 `0.2.0` 使用
+- BC/CD 合同版本与 Python 包版本是不同概念。例如包版本 `0.3.0` 使用
   `bc.risk-frame.v2` 和 `cd.route-plan.v2`。
 - 当前系统仅用于科研演示；未经标定的船舶、风险和规划参数不得用于真实航行决策。
 
@@ -17,14 +17,64 @@
 
 ### 后续工作
 
-- 实现正式 B `RiskSource` 后，使用同一 `RunContext` 完成 A → B → C 实源联调；当前
-  `synthetic` 和 `legacy_unverified` 输入只能用于开发或合同验证。
+- 当前 B 已实现公共 `CommittedRiskSource` 并完成同一 `RunContext` 的 A → B → C 工程
+  夹具联调；后续仍需以指定共享场景的真实完整 A bundle 完成实源联调。`synthetic`、
+  `legacy_unverified` 和测试 source snapshot 不能冒充真实来源验收。
 - 按顺序实现导师提出的四层规划：全航程参考线、24–72 h 主通道、0–24 h 滚动优化、
   0–6 h 可执行线；最后一层再细分 0–2 h 高可信、2–4 h 推荐和 4–6 h 预测区。
 - 使用真实船舶与航次数据标定航速、操舵、转弯、净空、风险权重和重规划阈值，并建立
   主线冻结参数向测试线迁移的验收基线。
 - 在 B/C/D 均实现正式 v2 消费者后，再评估移除 v1 Schema 和旧 B 隔离适配器；在此之前
   保留它们用于审计和显式迁移。
+
+## 0.3.0 - 2026-08-13：规范 BC codec、原子窗口与正式规划入口
+
+### 新增
+
+- 新增 `bc.risk-frame.v2` canonical JSON codec，明确内存 NaN ↔ 传输 `null`、严格字段、
+  Z 时间、整数 generation、JSON 属性和确定性序列化规则。
+- 新增排除 `risk_id`、包含其他全部传输字段的规范内容摘要；正式 ID 固定为
+  `risk-sha256-<64hex>`，解码和正式入口均重算验证。
+- 新增结构化 `CommittedRiskSource`、完整 `RiskWindowQuery` 与内容寻址
+  `CommittedRiskWindow`。窗口直接声明闭区间、间隔、帧数、完整身份、知识截止和提交摘要。
+- 新增公共 `RiskSourcePlanningIngress.prepare/execute`，从正式已提交 B 窗口装配既有 sampler、
+  grid、vessel model、time-dependent A* 与 PlanningService，不改规划核心。
+- `CommittedRiskSource` 新增 execution lease；执行时复核 prepare 所见的 query、commit ID 和
+  content digest，并让 B generation fence 贯穿规划与最终 RoutePlan 发布。
+
+### 变更与加固
+
+- Python 与 JSON Schema 的 run/实体 ID、UTC、generation 和 payload 变量集合收紧为同一
+  严格交集；正式 Schema 同时要求 canonical risk ID 形状。
+- v2 `risk_level` 冻结为 `min(5, floor(risk_score*5)+1)`；未知风险固定等级 5，不能由 B
+  使用未版本化业务阈值覆盖。
+- 正式入口要求逐小时完整闭区间已经原子提交；缺帧、重复、错位、窗口摘要篡改、错误
+  as-of/代次/配置/网格和不属于该网格的 Node 均在进入规划核心前失败。
+- 同一个 `RiskSourcePlanningIngress` 对同一 run/scenario 复用一个
+  `PlanningCoordinator`，不同 run 隔离；并发新修订会取消旧任务，generation 在 prepare
+  后切换也会阻止旧快照开始执行或迟到发布。
+- `execute()` 在 execution lease 内对当前帧执行 canonical encode→decode 私有快照，并从
+  私有帧重建 sampler/planner；prepare 后替换暴露 xarray 变量不能污染实际规划输入。
+- `PreparedRiskPlanning` 不再暴露可直接执行的 prepare 阶段 `PlanningService`，关闭绕过
+  execution lease、commit 复核和私有快照的公共旁路。
+- 正式入口改为接收完整 `PlanningConfiguration`，从实际 vessel model、planner 与
+  replanning 对象重算并核对 `planner_config_digest`，同时用同一重规划配置构造运行策略；
+  不再信任与执行对象脱离的摘要字符串。
+- 上述变更全部位于合同、codec 与 ingress 边界；既有
+  `risk/grid/cost/planners/replanning/service/publishing` 核心模块保持不变。
+
+### 兼容性
+
+- 包版本提升到 `0.3.0`。`bc.risk-frame.v2` 名称不变，但此前由宽松 Python 模型接受、
+  JSON Schema 拒绝的文档现在会被 Python 同样拒绝；正式 B 应固定依赖 C `0.3.x` 公共合同。
+- 合成和 `legacy_unverified` 帧仍可使用可读 risk ID；canonical ID 强制仅针对 formal。
+
+### 验证记录
+
+- 当前 `make check`：Ruff、uv lock/sync 和 CLI help 通过；pytest
+  `126 passed, 1 skipped`。跳过项仅因用户可选旧版外部归档未提供，不影响正式 v2 边界。
+- B 跨包门槛另验证 12 类、96/168/216 h、双走廊同模型摘要、A 归档重启与 formal
+  RoutePlan；输入为可复核夹具，不是实源完成声明。
 
 ## 0.2.0 - 2026-08-13：共享运行上下文与 BC/CD v2 身份合同
 

@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import math
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
+from uuid import UUID
 
 import numpy as np
 import xarray as xr
@@ -22,6 +24,12 @@ from arctic_route_planning.domain.models import (
 )
 from arctic_route_planning.errors import ContractError
 from arctic_route_planning.timeutils import ensure_utc
+
+_CONTRACT_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,127}$")
+_RUN_ID = re.compile(
+    r"^run-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
 
 
 class ProvenanceKind(StrEnum):
@@ -61,11 +69,11 @@ class SourceReference:
             raise ContractError("source.data_id 必须是非空字符串或 null")
         if self.issue_time is not None:
             object.__setattr__(
-                self, "issue_time", ensure_utc(self.issue_time, field="source.issue_time")
+                self, "issue_time", _require_utc(self.issue_time, field="source.issue_time")
             )
         if self.valid_time is not None:
             object.__setattr__(
-                self, "valid_time", ensure_utc(self.valid_time, field="source.valid_time")
+                self, "valid_time", _require_utc(self.valid_time, field="source.valid_time")
             )
         if self.checksum is not None:
             _validate_digest(self.checksum, field="source.checksum")
@@ -98,23 +106,23 @@ class RiskFrame:
         object.__setattr__(self, "provenance", provenance)
         if self.schema_version != "bc.risk-frame.v2":
             raise ContractError("RiskFrame.schema_version 必须是 bc.risk-frame.v2")
-        for name in (
-            "risk_id",
-            "run_id",
-            "scenario_id",
-            "corridor_id",
-            "vessel_profile_id",
-            "model_version",
-        ):
+        for name in ("risk_id", "model_version"):
             if not getattr(self, name).strip():
                 raise ContractError(f"{name} 不能为空")
+        _validate_run_id(self.run_id)
+        for name in ("scenario_id", "corridor_id", "vessel_profile_id"):
+            _validate_contract_id(getattr(self, name), field=name)
         _validate_digest(self.config_digest, field="config_digest")
         _validate_digest(self.model_config_digest, field="model_config_digest")
-        if self.generation_id < 0:
-            raise ContractError("generation_id 不能为负")
-        valid = ensure_utc(self.valid_time, field="valid_time")
-        as_of = ensure_utc(self.as_of_time, field="as_of_time")
-        generated = ensure_utc(self.generated_at, field="generated_at")
+        if (
+            isinstance(self.generation_id, bool)
+            or not isinstance(self.generation_id, int)
+            or self.generation_id < 0
+        ):
+            raise ContractError("generation_id 必须是非负整数且不能是 bool")
+        valid = _require_utc(self.valid_time, field="valid_time")
+        as_of = _require_utc(self.as_of_time, field="as_of_time")
+        generated = _require_utc(self.generated_at, field="generated_at")
         object.__setattr__(self, "valid_time", valid)
         object.__setattr__(self, "as_of_time", as_of)
         object.__setattr__(self, "generated_at", generated)
@@ -338,8 +346,17 @@ def _validated_payload(payload: xr.Dataset) -> xr.Dataset:
     missing = [name for name in required if name not in payload.data_vars]
     if missing:
         raise ContractError(f"RiskFrame.payload 缺少变量: {', '.join(missing)}")
+    supported = {*required, "environment_speed_factor"}
+    extra = sorted(set(payload.data_vars) - supported)
+    if extra:
+        raise ContractError(f"RiskFrame.payload 含 v2 未声明变量: {', '.join(extra)}")
     if "latitude" not in payload.coords or "longitude" not in payload.coords:
         raise ContractError("RiskFrame.payload 必须使用 latitude/longitude 坐标")
+    extra_coordinates = sorted(set(payload.coords) - {"latitude", "longitude"})
+    if extra_coordinates:
+        raise ContractError(
+            "RiskFrame.payload 含 v2 未声明坐标: " + ", ".join(extra_coordinates)
+        )
     latitude = np.asarray(payload["latitude"].values)
     longitude = np.asarray(payload["longitude"].values)
     if latitude.ndim != 1 or longitude.ndim != 1 or latitude.size < 2 or longitude.size < 2:
@@ -355,16 +372,14 @@ def _validated_payload(payload: xr.Dataset) -> xr.Dataset:
     for name in required:
         if payload[name].dims != expected_dims or payload[name].shape != expected_shape:
             raise ContractError(f"{name} 必须是 latitude×longitude 二维网格")
-    risk = np.asarray(payload["risk_score"].values)
+    risk = np.asarray(payload["risk_score"].values, dtype=np.float64)
     level = np.asarray(payload["risk_level"].values)
     hard = np.asarray(payload["hard_mask"].values)
-    confidence = np.asarray(payload["confidence"].values)
+    confidence = np.asarray(payload["confidence"].values, dtype=np.float64)
     if hard.dtype != np.bool_:
         raise ContractError("hard_mask 必须是 bool")
     if not np.issubdtype(level.dtype, np.integer):
         raise ContractError("risk_level 必须是整数")
-    if np.any((level < 1) | (level > 5)):
-        raise ContractError("risk_level 必须位于 [1, 5]")
     if np.any(~np.isfinite(confidence)) or np.any((confidence < 0) | (confidence > 1)):
         raise ContractError("confidence 必须是 [0, 1] 内有限值")
     invalid_risk = ~np.isfinite(risk)
@@ -373,13 +388,23 @@ def _validated_payload(payload: xr.Dataset) -> xr.Dataset:
     finite_risk = risk[np.isfinite(risk)]
     if finite_risk.size and np.any((finite_risk < 0) | (finite_risk > 1)):
         raise ContractError("risk_score 必须位于 [0, 1]")
+    expected_level = np.full(risk.shape, 5, dtype=np.int64)
+    finite = np.isfinite(risk)
+    expected_level[finite] = np.minimum(
+        5,
+        np.floor(risk[finite] * 5.0).astype(np.int64) + 1,
+    )
+    if np.any(level != expected_level):
+        raise ContractError(
+            "risk_level 必须按 min(5, floor(risk_score*5)+1) 派生；未知风险必须为 5"
+        )
     if payload.attrs.get("crs") != "EPSG:4326":
         raise ContractError("RiskFrame.payload.attrs['crs'] 必须是 EPSG:4326")
     if "environment_speed_factor" in payload:
         factor = payload["environment_speed_factor"]
         if factor.dims != expected_dims or factor.shape != expected_shape:
             raise ContractError("environment_speed_factor 必须是 latitude×longitude 二维网格")
-        factor_values = np.asarray(factor.values)
+        factor_values = np.asarray(factor.values, dtype=np.float64)
         if np.any(~np.isfinite(factor_values)) or np.any(
             (factor_values <= 0) | (factor_values > 1)
         ):
@@ -395,3 +420,25 @@ def _validated_payload(payload: xr.Dataset) -> xr.Dataset:
 def _validate_digest(value: str, *, field: str) -> None:
     if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
         raise ContractError(f"{field} 必须是小写 SHA-256")
+
+
+def _validate_contract_id(value: str, *, field: str) -> None:
+    if not isinstance(value, str) or _CONTRACT_ID.fullmatch(value) is None:
+        raise ContractError(f"{field} 必须匹配 [a-z0-9][a-z0-9_-]{{0,127}}")
+
+
+def _validate_run_id(value: str) -> None:
+    if not isinstance(value, str) or _RUN_ID.fullmatch(value) is None:
+        raise ContractError("run_id 必须使用 run-<UUID> 形式")
+    try:
+        UUID(value.removeprefix("run-"))
+    except ValueError as exc:
+        raise ContractError("run_id 必须使用 run-<UUID> 形式") from exc
+
+
+def _require_utc(value: datetime, *, field: str) -> datetime:
+    if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
+        raise ContractError(f"{field} 必须携带 UTC 时区")
+    if value.utcoffset().total_seconds() != 0:
+        raise ContractError(f"{field} 必须使用 UTC，不能隐式转换其他时区")
+    return ensure_utc(value, field=field)

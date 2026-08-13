@@ -38,6 +38,7 @@
       "if": {"properties": {"provenance": {"const": "formal"}}, "required": ["provenance"]},
       "then": {
         "properties": {
+          "risk_id": {"type": "string", "pattern": "^risk-sha256-[0-9a-f]{64}$"},
           "payload": {
             "properties": {
               "variables": {"required": ["environment_speed_factor"]}

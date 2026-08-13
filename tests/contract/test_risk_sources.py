@@ -11,8 +11,9 @@ from arctic_route_planning.adapters.fixture import FixtureRiskSource
 from arctic_route_planning.config import load_configuration
 from arctic_route_planning.contracts.models import ProvenanceKind
 from arctic_route_planning.contracts.sources import InMemoryRiskSource
+from arctic_route_planning.contracts.windows import HOURLY_RISK_INTERVAL, RiskWindowQuery
 from arctic_route_planning.development import create_development_run_context
-from arctic_route_planning.errors import ContextMismatchError, ContractError
+from arctic_route_planning.errors import ContextMismatchError, ContractError, RiskCoverageError
 
 CONFIG_ROOT = Path(__file__).parents[2] / "configs"
 
@@ -90,6 +91,19 @@ def test_in_memory_source_selects_latest_as_of_revision() -> None:
     assert new_view == (revised,)
 
 
+def test_in_memory_source_publish_is_content_idempotent_and_rejects_collision() -> None:
+    config = _configuration()
+    original = _fixture(config, frame_count=2, shape=(4, 4)).frames[0]
+    equivalent = replace(original)
+    collision = replace(original, model_version="different-model")
+    source = InMemoryRiskSource()
+
+    source.publish(original)
+    source.publish(equivalent)
+    with pytest.raises(ContractError, match="不同内容"):
+        source.publish(collision)
+
+
 def test_get_window_rejects_corridor_mismatch_before_planning() -> None:
     config = _configuration()
     frame = _fixture(config, frame_count=2, shape=(4, 4)).frames[0]
@@ -157,7 +171,7 @@ def test_risk_frame_rejects_non_2d_payload() -> None:
     frame = fixture.frames[0]
     broken = frame.payload.expand_dims(member=[0])
 
-    with pytest.raises(ContractError, match="二维网格"):
+    with pytest.raises(ContractError, match=r"二维网格|未声明坐标"):
         replace(frame, payload=broken)
 
 
@@ -223,3 +237,51 @@ def test_formal_frame_requires_declared_environment_effect() -> None:
             payload=frame.payload.drop_vars("environment_speed_factor"),
             provenance=ProvenanceKind.FORMAL,
         )
+
+
+def _query(frames):
+    first = frames[0]
+    return RiskWindowQuery(
+        start=first.valid_time,
+        end=frames[-1].valid_time,
+        interval=HOURLY_RISK_INTERVAL,
+        run_id=first.run_id,
+        scenario_id=first.scenario_id,
+        corridor_id=first.corridor_id,
+        generation_id=first.generation_id,
+        vessel_profile_id=first.vessel_profile_id,
+        config_digest=first.config_digest,
+        model_config_digest=first.model_config_digest,
+        as_of=first.as_of_time,
+    )
+
+
+def test_in_memory_source_only_returns_explicit_exact_commit() -> None:
+    config = _configuration()
+    frames = _fixture(config, frame_count=3, shape=(4, 4)).frames
+    source = InMemoryRiskSource()
+    for frame in frames:
+        source.publish(frame)
+    query = _query(frames)
+
+    with pytest.raises(ContextMismatchError, match="已提交"):
+        source.get_committed_window(query)
+    committed = source.commit_window(query)
+
+    assert source.get_committed_window(query) is committed
+    assert committed.start == frames[0].valid_time
+    assert committed.end == frames[-1].valid_time
+    assert committed.interval == timedelta(hours=1)
+    assert committed.count == 3
+    assert committed.commit_id == f"risk-window-sha256-{committed.content_digest}"
+
+
+def test_commit_rejects_missing_hour_in_closed_window() -> None:
+    config = _configuration()
+    frames = _fixture(config, frame_count=3, shape=(4, 4)).frames
+    source = InMemoryRiskSource()
+    source.publish(frames[0])
+    source.publish(frames[2])
+
+    with pytest.raises(RiskCoverageError, match=r"frames 数量|逐点覆盖"):
+        source.commit_window(_query(frames))

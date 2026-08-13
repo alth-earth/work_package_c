@@ -1,6 +1,6 @@
 # 架构追踪与矛盾处理
 
-实现依据（当前 `0.2.x` 合同迁移基线）：
+实现依据（当前 `0.3.x` 正式 BC 边界基线）：
 
 - `北极航线预测驱动动态规划系统架构设计与实施方案 V2.0`（2026-07-15）；
 - `/root/my_project/工作包C项目整体认识与继续开发指南.md`（2026-08-09 审阅版）；
@@ -8,7 +8,7 @@
 
 | 需求/矛盾 | 本版处理 | 证据位置 |
 |---|---|---|
-| B 尚未有正式逐小时 BC 输出 | 合同优先：`RiskSource` + 合成夹具 + 严格旧制品适配；核心不知道旧文件名 | `contracts/`, `adapters/`, `tests/contract/` |
+| 正式 B 不能复用旧 ZIP/私有 C 核心 | `work_package_b/` 只用公共 codec、committed-window 和 ingress；旧制品仍隔离，核心不知道旧文件名 | `contracts/`, `ingress.py`, `adapters/`, 跨包集成测试 |
 | 旧 `route_cost_grid` 与当前风险不一致 | 适配器明确拒绝；C 从 `RiskFrame` 重新计算边成本 | `adapters/legacy_b.py` |
 | 有效航速责任不清 | 正式 B 帧必须给 `(0,1]` 综合环境因子；C 应用船型底线和速度曲线。风险/置信度不映射为物理减速 | `contracts/models.py`, `cost/vessel.py` |
 | 24 h BC 窗口不足以覆盖 2–5.5 天 | 规划核心必须有 ETA 全覆盖；合成演示生成全场景时域，稀疏旧制品明确失败。未实现伪外推或隐式背景场 | `risk/sampler.py`, `cli.py` |
@@ -19,11 +19,15 @@
 | 合成/旧风险的路线可能被误当正式输出 | `provenance` 进入 RiskIdentity 和 RoutePlan；formal planner 缺可验证身份或身份不匹配均拒绝 | `risk/sampler.py`, `service.py`, `contracts/models.py` |
 | 旧网格的场景坐标与硬掩膜/连通分量不完全吻合 | 规划核心严格拒绝；CLI 只在显式距离上限内映射并原子写出审计文件 | `grid/regular.py`, `cli.py`, `endpoint-mapping.json` |
 | seek 向过去跳转会保留未来发布的 A 静态帧 | A 跨代只保留 `issue_time <= simulation_time` 的 static；缺省时刻安全清空 | `work_package_a/src/arctic_route_data/cache.py` 及回归测试 |
+| C 配置摘要可与实际执行参数脱离 | 正式 ingress 接收完整 `PlanningConfiguration`，从 vessel model、planner、replanning 对象重算摘要并用同一配置构造运行组件 | `ingress.py`, `tests/integration/test_formal_ingress.py` |
 | 演示需要可运行，但粗网格会产生较大端点调整 | `make demo` 优先在 5×5 网格快速冒烟，输出完整调整距离。它不是科学基线；细网格应通过 CLI 参数显式选择并单独做性能验证 | `README.md`, `cli.py`, `output/demo/` |
 
 ## 未假装完成的部分
 
-- 正式 B 的预测/补帧、完整硬约束和速度影响尚未交付；
+- B 已交付 `demo_unvalidated` 的确定性逐小时连续化、陆海 hard mask、置信度和速度影响
+  工程基线；真实标签校准、方向相关物理模型、Q50/Q90/概率模型和神经网络仍未交付；
+- A→B→C 已完成公共接口夹具与归档重启测试，但指定共享场景的真实 12/14 类长窗尚未
+  验收，不能称为实源闭环；
 - 演示散货船未经冰级、POLARIS/RIO、历史航行或真船性能校准；
 - 转弯半径已进入船型合同，v1 基线仅计算方向变化惩罚，还没有几何航迹平滑/可操纵性求解；
 - v1 不允许等待，不包含 D* Lite、MPC 或真实海事导航规则；
