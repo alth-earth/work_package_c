@@ -1,35 +1,46 @@
-# 架构追踪与矛盾处理
+> [!NOTE]
+> **文档治理声明**
+>
+> - 文件角色：工作包 C 的需求/决策到实现证据追踪表。
+> - 改造时间：2026-08-14（Asia/Shanghai）。
+> - 原文件去向：`ARCHITECTURE_TRACE.archive-20260814-pre-governance.md`。
+> - 改造原因：移除对混合历史指南和冲刺日历的依赖，只保留可复核的当前证据。
 
-实现依据（当前 `0.4.0` 工程基线）：
+# 工作包 C 架构追踪
 
-- `北极航线预测驱动动态规划系统架构设计与实施方案 V2.0`；
-- [工作包 C 继续开发指南](../工作包C项目整体认识与继续开发指南.md)；
-- 用户冻结决策：A 提供正式运行数据，B 给环境影响，C 算最终有效航速；共享场景、航区、
-  船舶和 `RunContext` 来自 `arctic_route_contracts`；开发冲刺最多 10 个自然日。
+## 证据优先级
 
-| 需求/矛盾 | 0.4.0 处理 | 证据位置 |
+1. 当前 C 代码、Python 合同、Schema、配置和自动测试；
+2. 当前 [`README`](../README.md)、[`handoff`](../work_package_c_handoff.md) 和本目录规范文档；
+3. 顶层 [`ARCTIC_ROUTE_SYSTEM.md`](../../ARCTIC_ROUTE_SYSTEM.md) 与当前工作包 A/B/contracts/orchestrator；
+4. 归档文档只用于历史审计，不作为现状依据。
+
+## 需求与证据
+
+| 需求/矛盾 | 当前处理 | 实现/验证证据 |
 |---|---|---|
-| 正式 B 不能复用旧 ZIP 或依赖 C 私有核心 | B 只实现公共 canonical codec、committed-window source；旧制品保持隔离 | `contracts/`, `ingress.py`, `adapters/` |
-| B 窗口可能在规划期间切换 | prepare 后执行仍持有同一 source execution lease，复核 commit 并使用 canonical 私有快照 | `ingress.py` |
-| 起终点取整可能落在 allowed region 外、陆地或断开的海区 | 公共 endpoint mapping 先检查 allowed region、hard mask、距离，再要求同一连通分量 | `endpoints.py`, `tests/unit/test_endpoints.py` |
-| 有效航速责任不清 | B 提供 `(0,1]` 环境因子；C 应用船型速度曲线和底线。风险/置信度不重复映射为物理减速 | `contracts/models.py`, `cost/vessel.py` |
-| 24 h 风险窗不足以覆盖长航程 | 正式入口要求 ETA 全覆盖的逐小时闭区间；不外推、不隐式补安全背景场 | `risk/sampler.py`, `ingress.py` |
-| 四层可能被实现成四次无关运行 | 四层共享全航程推荐线、同一 request/revision、B 窗口和 execution lease；下层锚点由全航程线派生 | `contracts/layered.py`, `layered.py`, `ingress.py` |
-| 下层提前到终点时 `destination_reached` 语义不清 | 截止前全航程结束则用业务终点并标真；否则仅表示到达分层锚点 | `contracts/layered.py` |
-| 任一层失败仍可能留下部分结果 | 先内存生成四层 12 路线，完整校验和 canonical ID 后，由 layered latest 一次原子发布 | `layered.py`, `publishing/layered_store.py` |
-| 旧任务可能迟到覆盖新四层整组 | generation/request/revision、取消状态和 canonical digest 在发布时再次校验 | `publishing/layered_store.py`, `replanning/` |
-| v2 与 v3 双写会产生两个“正式最新值” | v2 保留历史读取、回归和 Day 7 门槛；新运行由上层显式选择一个合同，v3 推广后不双写 v2 | `ingress.py`, `docs/CD_CONTRACT.md` |
-| 配置摘要可与实际执行参数脱离 | ingress 从完整 `PlanningConfiguration` 重算摘要并与请求核对 | `ingress.py`, `tests/integration/test_formal_ingress.py` |
-| 同名共享配置内容可能原地变化 | 服务和 CLI 重算 Scenario/Corridor/Vessel 内容摘要及公共 `config_digest` | `context_validation.py`, `tests/contract/test_configuration.py` |
-| 主线设计窗、航区上限和开发期限被混用 | 主线/测试线默认 168/96 h，上限仍 216/144 h；10 天只表示开发冲刺 | `../README.md`, `../工作包C项目整体认识与继续开发指南.md` |
-| 工程夹具可能被误报为实源验收 | provenance 贯穿输入/输出，文档明确真实 12 类、168 h A bundle 尚未交付 | `contracts/`, `docs/ACCEPTANCE.md` |
+| C 不应耦合 A/B 私有实现 | 只依赖 `arctic_route_contracts`、`CommittedRiskSource` 和公共合同 | `config.py`、`contracts/sources.py`、`ingress.py` |
+| 同名共享配置可能原地变化 | 重算 Scenario/Corridor/Vessel 内容摘要和公共 `config_digest` | `context_validation.py`、`tests/contract/test_configuration.py` |
+| 配置摘要可能与实际执行参数脱离 | ingress 接收完整 `PlanningConfiguration` 并重算 C digest | `config.py`、`ingress.py`、`tests/integration/test_formal_ingress.py` |
+| B 窗口可能在规划期间切换 | prepare 后执行仍持有 source lease，重验 commit 并使用 canonical 私有快照 | `contracts/windows.py`、`ingress.py` |
+| 稀疏/部分风险可能被误当完整时域 | 正式入口要求 60 min 严格闭区间原子 commit，不外推 | `contracts/windows.py`、`risk/sampler.py`、`ingress.py` |
+| 缺测可能被当作零风险 | 未知 risk 必须由 hard mask 或 confidence=0 防止当安全 | `contracts/models.py`、`risk/sampler.py` |
+| 有效航速责任不清 | B 提供环境因子；C 应用版本化船模计算最终速度 | `contracts/models.py`、`cost/vessel.py`、`docs/COST_MODEL.md` |
+| 经纬度取整可能落在限制区、陆地或断开海区 | 公共 endpoint mapping 检查 allowed region、首帧 hard mask、距离和连通性 | `endpoints.py`、`tests/unit/test_endpoints.py` |
+| 四层可能被实现成四次无关运行 | 共享全航程推荐线、一次 lease、一个 request/revision 和整组身份 | `contracts/layered.py`、`layered.py`、`ingress.py` |
+| 下层锚点或 `destination_reached` 可能模糊 | 锚点为全航程推荐线 72/24/6 h 前最后非起点；提前结束才标记业务终点 | `contracts/layered.py`、`layered.py` |
+| 任一层失败仍可能留下部分结果 | 先在内存中生成四层 12 路线，再原子发布完整整组 | `layered.py`、`publishing/layered_store.py` |
+| 旧任务可能迟到覆盖新结果 | generation/request/revision、取消状态和 digest 在发布时再验 | `replanning/`、`publishing/store.py`、`publishing/layered_store.py` |
+| v2/v3 双写可能产生两个“正式最新值” | 一次运行由上层显式选择一个输出合同 | `ingress.py`、`docs/CD_CONTRACT.md` |
+| 旧 B 制品可能被提升为正式输入 | 只经 legacy adapter，永久 `legacy_unverified`，不读 `route_cost_grid` | `adapters/legacy_b.py`、`tests/integration/test_legacy_adapter.py` |
+| `formal` 可能被误解为科学校准 | provenance 只表示身份/来源合格；模型仍用独立 calibration status | `contracts/models.py`、`domain/models.py`、`configs/vessel_models/` |
 
-## 未假装完成的部分
+## 与架构蓝本的当前差异
 
-- A→B→C 公共接口和 v3 四层工程能力已实现，但主航区真实 12 类、168 h bundle 尚未验收；
-- B 仍为确定性 `demo_unvalidated` 工程基线，未交付真实标签校准、Q50/Q90、概率模型或
-  方向相关物理响应；
-- C 的船型、操舵、转弯、净空、成本权重和重规划阈值未经真船/冰级/航次校准；
-- 当前 hard mask 不能证明净水深、法律限制区或完整海事规则；
-- 0–2/2–4/4–6 h 可信度分级、等待、D* Lite、MPC 和 D 消费不属于 0.4.0 已验收范围；
-- 默认 5×5 合成 smoke 只验证流程，不是路线质量或性能基线。
+- 已落地：单向 A→B→C→D 合同、时间依赖规划、三目标、四层编排、重规划和原子发布。
+- 工程落地但未实源/科学验收：正式 BC ingress、v3 四层、风险与船模参数。
+- 尚未交付：D 正式消费、完整海事硬约束、方向相关风浪流性能、等待动作、科学置信度分级。
+- 高级算法（LPA*/D* Lite/MPC）只能由真实网格性能证据触发，不属于 0.4.0 已验收能力。
+
+未完成项的当前状态见 [`STATUS_AND_TODO.md`](STATUS_AND_TODO.md)，技术验收闸门见
+[`ACCEPTANCE.md`](ACCEPTANCE.md)。

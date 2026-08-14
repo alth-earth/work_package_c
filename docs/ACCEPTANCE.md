@@ -1,63 +1,102 @@
-# 验收清单
+> [!NOTE]
+> **文档治理声明**
+>
+> - 文件角色：工作包 C 的稳定验收真源。
+> - 改造时间：2026-08-14（Asia/Shanghai）。
+> - 原文件去向：`ACCEPTANCE.archive-20260814-pre-governance.md`。
+> - 改造原因：使用可重复的技术闸门代替逐日排期；实际日程统一由顶层冲刺文档管理。
 
-## 自动验收
+# 工作包 C 验收清单
+
+本文定义“什么证据才能宣称某项能力已通过”。排期与人员安排以
+[`ABC_10_DAY_SPRINT.md`](../../ABC_10_DAY_SPRINT.md) 为准。
+
+## A. 工程基线闸门
 
 ```bash
+cd /root/my_project/work_package_c
 make env-create
 make lock
 make sync
-make check
-make demo
+UV_OFFLINE=1 make check
 git diff --check
 ```
 
 `make check` 必须同时通过 Ruff、pytest、`uv lock --check`、`uv sync --check` 和 CLI help。
-测试通过只证明工程基线，不能替代真实数据、船舶和风险模型的科研有效性验证。
+当前已复验：`138 passed, 1 skipped`；唯一跳过项是未提供指定旧 `交付包.zip` 的可选
+legacy 外部制品测试。报告时必须保留“1 skipped”，不得写成 139 项全通过。
 
-## v2 基线不变量
+## B. 共享上下文闸门
 
-- 非 UTC 时间、超范围/形状错误、上下文不匹配、未来信息或不完整正式来源明确拒绝。
-- 正式入口只接受 canonical、原子提交、严格逐小时闭区间的 `RiskFrame v2` 窗口。
-- ETA 整点、帧间、超窗口、超间隔和 hard mask 行为有手算测试；风险不外推，缺失不当零。
-- 小网格 A* 与零启发式 Dijkstra 同成本；路线按 ETA 而非单帧风险变化。
-- 三目标路线的 ETA 严格递增、硬约束违规为 0，距离/ETA/风险和来源 risk IDs 可复算。
-- generation、request、revision、取消和切换门槛阻止旧任务覆盖 latest。
+- `ScenarioDefinition`、`CorridorDefinition`、`VesselProfile` 和 `RunContext.v2` 来自
+  `arctic_route_contracts`，不使用 C 的 legacy 场景/船型夹具。
+- `RunContext` 的 ID、版本、内容摘要、时间窗和公共 `config_digest` 必须与实际共享配置一致。
+- 冻结预报不得使用出发后知识；历史最佳估计必须明确声明其知识截止。
+- C 请求时域不得超过 `RunContext.simulation_end` 或 C 216 h 硬上限。
 
-## v3 四层不变量
+## C. 正式 B→C 输入闸门
 
-- `map_corridor_endpoints` 只在起终点 allowed region 内映射未阻断节点，满足显式最大距离，
-  并证明两点属于同一可通航连通分量；失败不能静默换点。
-- `RoutePlanV3` 与 `FourLayerRoutePlanSet` 的 Python、JSON、GeoJSON round-trip 通过四份 v3
-  Schema；额外字段、非法整数/bool、身份或 canonical digest 篡改必须拒绝。
-- 四层固定按全航程、24–72 h 主通道、0–24 h 滚动、0–6 h 可执行顺序出现；每层恰好
-  三目标，共 12 条路线。
-- 全航程到业务终点；下层终点是全航程推荐线在 72/24/6 h 截止时刻及之前的最后一个
-  非起点航点。提前到达使用业务终点；无锚点时返回 `layer_not_materializable`。
-- 所有层共享 run/scenario/corridor/vessel、三类摘要、provenance、generation、request、
-  revision、B committed window 和一次 execution lease。
-- 任一层失败、代次/修订过期、取消、ID 篡改或发布冲突时，layered latest 不留下部分
-  结果；成功重规划用新完整整组原子替换旧整组。
-- 正式重规划要求已有同代次计划、严格递增 `input_revision`、观测/风险时刻等于新请求
-  `start_time`，且 `risk_revision` 等于当前 B 窗口 commit ID。
-- v2 历史 Schema/解析保持可用；一次新运行显式选择 v2 或 v3，不双写。
+- 只接受 `bc.risk-frame.v2`、`provenance=formal` 的 canonical RiskFrame。
+- 每个正式来源项都有 `data_id`、UTC `issue_time/valid_time` 和小写 SHA-256 checksum。
+- payload 含 `risk_score`、`risk_level`、`hard_mask`、`confidence` 和
+  `environment_speed_factor`；未知风险不能当安全。
+- B store 对完整身份查询返回 canonical、内容寻址的 `CommittedRiskWindow`。
+- 窗口按 60 min 严格覆盖闭区间，无缺帧、重复、错位或超窗外推。
+- prepare 与 execute 之间的 commit ID/content digest 一致，execution lease 持续到发布结束。
 
-## 10 个自然日门槛
+## D. 端点映射闸门
 
-1. Day 7 前：真实 12 类、168 h A bundle；B 恰好 169 帧 formal canonical 风险窗；C v2
-   三目标和一次 6 h 时间触发重规划，可断网重复。
-2. Day 8–9：主线稳定后，以同一运行身份验收 v3 四层 12 条路线和原子整组重规划。
-3. Day 10：只做短航区验收或阻断修复，不再增加功能。
+- 正式调用方使用 `map_corridor_endpoints(...)`，不自行四舍五入经纬度。
+- 节点位于起点/终点 allowed region 内，未被首帧 hard mask 阻断，且属于同一可通航连通分量。
+- 调整距离不超过调用方显式给定的上限；请求/解析坐标、距离和连通性证据可审计。
+- allowed region 无网格点、无可航点、无同分量点、超距离或起终点合并时明确失败。
 
-10 天是开发期限，不是预测/规划运行时域；主线/测试线 216/144 h 上限保持不变。
+## E. v2 三目标闸门
 
-## 当前未完成的验收
+- 同一请求返回 `fastest`、`low_risk`、`recommended`。
+- ETA 严格递增，硬约束违规数为 0，距离、ETA、风险和 `source_risk_ids` 可复算。
+- 小网格时间依赖 A* 与零启发 Dijkstra 成本一致。
+- 路线随 ETA 时刻的风险变化，而不是对一张风险图做静态路径。
+- v2 只用于兼容读取、回归和显式选择的基线运行；不与 v3 在同一运行双写。
 
-- 截至 2026-08-14，指定主航区的真实 12 类、168 h A `DatasetBundle v2` 尚未取得；
-  当前工程夹具不得表述为实源闭环。
-- B 风险权重、C 船型性能和规划权重仍是 `demo_unvalidated`，未完成真实标签、冰级、
-  AIS/事故数据或真船航次校准。
-- 旧 B 稀疏、不规则制品只能经隔离适配器读取，永久保持 `legacy_unverified`；它不能替代
-  正式 v2/v3 验收。
-- 当前 hard mask 不能证明净水深、法律限制区或完整海事规则；系统不得用于真实航行。
-- 等待动作、非 FIFO 标签设置、D* Lite、MPC、方向相关风浪流和 0–2/2–4/4–6 h 科学
-  可信度分级仍未实现。
+## F. v3 四层整组闸门
+
+- 四层固定为 `full_voyage`、`main_corridor_24_72h`、`rolling_0_24h`、
+  `executable_0_6h`；每层恰好三目标，共 12 条路线。
+- 四层共享同一 RunContext、B committed window/execution lease、generation、revision、
+  三类配置摘要和全航程推荐线。
+- 下层终点为全航程推荐线在 72/24/6 h 截止时刻及之前的最后一个非起点航点。
+- 全航程提前结束时使用业务终点；无可物化锚点时整组拒绝。
+- JSON/GeoJSON codec 重算 canonical 路线和整组 ID，拒绝额外字段和篡改。
+- 任一层失败、取消、过期代次/修订或发布冲突时，layered latest 不留部分整组。
+
+## G. 重规划与发布闸门
+
+- 发布令牌同时绑定 run/scenario/generation/request/revision 和三类 digest。
+- 同 run 新 generation 或更新 revision 能取消旧任务；不同 run 相互隔离。
+- 正式重规划前已有同代次发布计划；`input_revision` 严格递增。
+- `observed_at` 和 `risk_valid_time` 等于新请求 `start_time`；`risk_revision` 等于当前 B 窗口 commit ID。
+- 成功 v3 重规划以新完整整组原子替换旧整组。
+
+## H. 实源、科学和 D 验收闸门
+
+只有同时满足以下条件，才能把工程结果提升为相应的实源/科学主张：
+
+- 指定主航区的真实 A `DatasetBundle v2` 与可重放 `RunContext.v2` 通过 A 验收；
+- B 对该上下文发布完整 formal canonical 窗口；
+- C 的 v2/v3 输出和至少一次可解释重规划可断网重复；
+- 风险、船型、冰级、航速、操舵、转弯、净空、权重和阈值具有真实标签/航次校准证据；
+- D 按完整运行身份只读消费 v3 原子整组，不读取部分或过期结果。
+
+截至 2026-08-14，上述实源、科学校准和 D 闸门尚未在 C 交付证据中关闭。
+
+## 禁止的验收替代
+
+- 不得用 `make demo` 代替正式 orchestrator/ingress 验收。
+- 不得用 `synthetic`、`legacy_unverified` 或 test source snapshot 冒充实源。
+- 不得把 `formal` provenance 解释为风险模型或船模已 calibrated。
+- 不得用测试全绿代替净水深、法规区、真船参数或真实航次证据。
+- 不得把默认 5×5 粗网格 smoke 当作路线质量或性能基线。
+
+验收报告至少记录：输入 provenance、calibration status、RunContext/config/model/planner
+digests、B commit ID、端点调整、帧数/时域、路线指标、重规划原因、测试结果及未关闭闸门。
