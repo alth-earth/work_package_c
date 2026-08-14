@@ -9,23 +9,64 @@
 - 版本按时间倒序记录；`Unreleased` 表示已规划但尚未纳入当前版本的工作。
 - “新增/变更/修复”只描述已经落入代码、配置、Schema、测试或文档的内容。
 - “后续工作”不是完成声明，也不构成正式接口承诺。
-- BC/CD 合同版本与 Python 包版本是不同概念。例如包版本 `0.3.0` 使用
-  `bc.risk-frame.v2` 和 `cd.route-plan.v2`。
+- BC/CD 合同版本与 Python 包版本是不同概念。例如包版本 `0.4.0` 继续消费
+  `bc.risk-frame.v2`，并提供 `cd.route-plan.v3` 整组输出。
 - 当前系统仅用于科研演示；未经标定的船舶、风险和规划参数不得用于真实航行决策。
 
 ## Unreleased
 
 ### 后续工作
 
-- 当前 B 已实现公共 `CommittedRiskSource` 并完成同一 `RunContext` 的 A → B → C 工程
-  夹具联调；后续仍需以指定共享场景的真实完整 A bundle 完成实源联调。`synthetic`、
-  `legacy_unverified` 和测试 source snapshot 不能冒充真实来源验收。
-- 按顺序实现导师提出的四层规划：全航程参考线、24–72 h 主通道、0–24 h 滚动优化、
-  0–6 h 可执行线；最后一层再细分 0–2 h 高可信、2–4 h 推荐和 4–6 h 预测区。
+- 以指定主航区的真实 12 类、168 h `DatasetBundle v2` 完成 A→B→C 实源联调，并验收
+  B 的 169 个 formal canonical 风险帧、v2 三目标、v3 四层 12 条路线和一次 6 h 时间触发
+  重规划。`synthetic`、`legacy_unverified` 和测试 source snapshot 不能冒充实源证据。
 - 使用真实船舶与航次数据标定航速、操舵、转弯、净空、风险权重和重规划阈值，并建立
   主线冻结参数向测试线迁移的验收基线。
-- 在 B/C/D 均实现正式 v2 消费者后，再评估移除 v1 Schema 和旧 B 隔离适配器；在此之前
-  保留它们用于审计和显式迁移。
+- 评估 D 对 v3 原子整组的只读消费；在完整迁移证据形成前，继续保留 v2 历史解析和 v1
+  审计材料。
+
+## 0.4.0 - 2026-08-14：公共端点映射与原子四层 RoutePlan v3
+
+### 新增
+
+- 新增公共 `map_corridor_endpoints(...)`：只在 Corridor 声明的 allowed region 内选择未被
+  hard mask 阻断的节点，要求起终点位于同一可通航连通分量，并严格执行显式最大调整
+  距离；返回可审计的请求/解析坐标、距离、网格和连通性证据。
+- 新增不可变 `PlanLayer`、`RoutePlanV3`、`LayerRouteBundle` 与
+  `FourLayerRoutePlanSet` 合同。整组按固定顺序包含四层，每层恰好包含最快、低风险和
+  综合推荐三目标，共 12 条路线。
+- 新增 v3 JSON/GeoJSON Schema、严格 codec 和规范内容身份。路线使用
+  `route-v3-sha256-<64hex>`，整组使用 `layer-set-sha256-<64hex>`；解码与发布都会重算
+  canonical ID 并拒绝篡改或额外字段。
+- 新增 `FourLayerPlanningService`：全航程层到业务终点，主通道、滚动和可执行层分别到
+  全航程推荐线 72/24/6 h 截止时刻及之前的最后一个非起点航点；提前到达时使用业务
+  终点，无可物化锚点时整组拒绝。
+- 新增 `LayeredRoutePlanLatestStore`，以 run/scenario/generation/request/revision 围栏原子
+  发布完整整组；任何一层失败、任务取消、旧代次/修订或发布冲突都不会留下部分结果。
+- 正式 `PreparedRiskPlanning` 与 `RiskSourcePlanningIngress` 新增
+  `execute_four_layer()`、`replan_four_layer_if_needed()`；v3 初始规划和重规划与 v2 一样
+  在同一个 B committed-window execution lease 内执行。
+
+### 变更与兼容性
+
+- 包版本提升到 `0.4.0`；`bc.risk-frame.v2` 不变。A*、风险采样、规则网格、成本和最终
+  航速算法不变，四层能力位于合同、应用编排、ingress 和发布边界。
+- v3 的三个下层都引用全航程推荐计划，并显式携带关注时间窗、分层目标是否到达以及
+  是否到达业务终点。四层共享同一运行身份、B 窗口、generation、revision 和三类摘要。
+- `cd.route-plan.v2` Schema/codec 和三目标入口继续用于历史读取、回归与 Day 7 稳定门槛；
+  v3 推广后新正式运行选择 v3，不在同一次运行双写 v2。
+- v1 仍仅用于审计/显式迁移，不得进入正式 latest。
+
+### 验收边界
+
+- 已加入端点 allowed-region/连通性、v3 Python/JSON/GeoJSON 往返、四层锚点、12 路线
+  完整性、原子发布、失败不留部分结果、取消/迟到拒绝及 v3 重规划覆盖。
+- 当前 `UV_OFFLINE=1 make check` 已通过 Ruff、uv lock/sync 与 CLI；pytest 为
+  `138 passed, 1 skipped`，唯一跳过项仍是未提供的可选旧版外部归档。
+- 真实主航区的 12 类、168 h A bundle 尚待交付；因此本版本不能宣称完成实源四层验收、
+  科学调参或真实船舶校准。
+- 当前最多 10 个自然日是开发冲刺期限，不改变主/测试航区 216/144 h 运行时上限；Day 7
+  先冻结可重复的 v2 主线，Day 8–9 再推广 v3，Day 10 仅做验收或阻断修复。
 
 ## 0.3.0 - 2026-08-13：规范 BC codec、原子窗口与正式规划入口
 

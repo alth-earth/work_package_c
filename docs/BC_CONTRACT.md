@@ -69,7 +69,8 @@ start/end/interval + run_id/scenario_id/corridor_id/generation_id
 `RiskSourcePlanningIngress` 只请求 60 min 严格闭区间，要求首尾、数量和每个有效时刻完全
 匹配，验证正式帧 canonical ID、知识截止、网格和起终点 Node 后，才构造现有
 `RiskSampler`、`RegularGrid`、`VesselPerformanceModel`、`TimeDependentAStar` 与
-`PlanningService`。`PreparedRiskPlanning.execute()` 必须在 execution lease 内再次验证同一
+规划服务。`PreparedRiskPlanning.execute()`、`replan_if_needed()`、
+`execute_four_layer()` 和 `replan_four_layer_if_needed()` 都必须在 execution lease 内再次验证同一
 query、`commit_id` 和 `content_digest`，把当前帧经 canonical encode→decode 形成私有
 快照并从该快照重建 sampler/planner，且让租约保持到 RoutePlan 发布完成；因此 source
 必须让同一 run 的共享执行租约与 generation 独占切换互斥，同时允许同代次新修订进入以
@@ -80,8 +81,13 @@ model、planner 和 replanning 对象重算 `planner_config_digest`，不信任�
 迟到发布；不同 run 使用独立 coordinator。该入口不修改规划核心算法，也不接受普通未提交
 `get_window()` 结果。
 
-`PreparedRiskPlanning` 只暴露 query/window 等审计信息和安全 `.execute()`；它不暴露可直接
-调用的 prepare 阶段 `PlanningService`，避免调用者绕过上述租约与内容复核旁路发布。
+`PreparedRiskPlanning` 只暴露 query/window 等审计信息和上述安全执行入口；它不暴露可直接
+调用的 prepare 阶段 `PlanningService`，避免调用者绕过租约与内容复核旁路发布。v3 四层
+必须在同一租约中完整生成；C 不为每一层重新获取或混用 B 窗口。
+
+端点经纬度到网格 Node 的解析由 C 公共 `map_corridor_endpoints(...)` 完成：候选节点必须在
+共享 Corridor 的对应 allowed region 内、首帧 hard mask 可通航、位于同一连通分量且不超过
+显式距离上限。调用方不得用简单四舍五入或无限距离吸附绕开该边界。
 
 ## v1 与旧 B
 

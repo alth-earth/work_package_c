@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import math
 import sys
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
@@ -27,8 +26,9 @@ from arctic_route_planning.context_validation import validate_run_context_bindin
 from arctic_route_planning.cost import VesselPerformanceModel
 from arctic_route_planning.development import create_development_run_context
 from arctic_route_planning.domain import CalibrationStatus
+from arctic_route_planning.endpoints import map_corridor_endpoints
 from arctic_route_planning.errors import PlanningError
-from arctic_route_planning.grid import GeoPoint, RegularGrid, SnapResult
+from arctic_route_planning.grid import RegularGrid
 from arctic_route_planning.planners import TimeDependentAStar
 from arctic_route_planning.publishing import (
     atomic_write_json,
@@ -319,8 +319,6 @@ def _plan_frames(
 ) -> tuple[PlanningBatch, dict[str, Any]]:
     if not frames:
         raise ValueError("at least one RiskFrame is required")
-    if not math.isfinite(max_snap_km) or max_snap_km < 0:
-        raise ValueError("max_snap_km must be finite and non-negative")
     sampler = RiskSampler(
         frames,
         max_frame_gap=timedelta(minutes=configuration.planner.max_risk_frame_gap_minutes),
@@ -339,20 +337,12 @@ def _plan_frames(
         ordered_frames[0],
         allow_diagonal=configuration.planner.connectivity == 8,
     )
-    start_snap, destination_snap = _snap_endpoints(
+    endpoint_mapping = map_corridor_endpoints(
         configuration,
-        grid,
-        np.asarray(ordered_frames[0].payload["hard_mask"].values, dtype=np.bool_),
-        max_snap_km=max_snap_km,
+        ordered_frames[0],
+        max_adjustment_km=max_snap_km,
     )
-    endpoint_report = {
-        "start": _snap_report(configuration.corridor.start, start_snap, max_snap_km),
-        "destination": _snap_report(
-            configuration.corridor.destination,
-            destination_snap,
-            max_snap_km,
-        ),
-    }
+    endpoint_report = endpoint_mapping.to_document()
     if endpoint_report_path is not None:
         atomic_write_json(
             endpoint_report_path,
@@ -381,59 +371,12 @@ def _plan_frames(
             input_revision=input_revision,
             as_of_time=max(frame.as_of_time for frame in ordered_frames),
             start_time=start_time,
-            start=start_snap.node,
-            goal=destination_snap.node,
+            start=endpoint_mapping.start.node,
+            goal=endpoint_mapping.goal.node,
             maximum_elapsed=sampler.end_time - start_time,
         )
     )
     return batch, endpoint_report
-
-
-def _snap_endpoints(
-    configuration: PlanningConfiguration,
-    grid: RegularGrid,
-    hard_mask: np.ndarray,
-    *,
-    max_snap_km: float,
-) -> tuple[SnapResult, SnapResult]:
-    start = grid.snap_to_navigable(
-        GeoPoint(
-            configuration.corridor.start.longitude,
-            configuration.corridor.start.latitude,
-        ),
-        hard_mask,
-        max_adjustment_km=max_snap_km,
-    )
-    component = grid.connected_component(start.node, hard_mask)
-    try:
-        destination = grid.snap_to_navigable(
-            GeoPoint(
-                configuration.corridor.destination.longitude,
-                configuration.corridor.destination.latitude,
-            ),
-            hard_mask,
-            max_adjustment_km=max_snap_km,
-            required_component=component,
-        )
-    except ValueError as exc:
-        raise ValueError(
-            "start endpoint mapped by "
-            f"{start.adjustment_km:.3f} km, but destination mapping failed: {exc}"
-        ) from exc
-    if start.node == destination.node:
-        raise ValueError("bounded endpoint mapping resolved start and destination to one node")
-    return start, destination
-
-
-def _snap_report(requested: Any, resolved: SnapResult, max_snap_km: float) -> dict[str, Any]:
-    return {
-        "requested": [requested.longitude, requested.latitude],
-        "resolved": [resolved.point.longitude, resolved.point.latitude],
-        "adjustment_km": resolved.adjustment_km,
-        "snap_applied": resolved.adjustment_km > 1e-9,
-        "max_snap_km": max_snap_km,
-    }
-
 
 def _write_outputs(
     output_dir: Path,

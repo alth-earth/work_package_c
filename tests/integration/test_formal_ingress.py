@@ -18,13 +18,17 @@ from arctic_route_planning.contracts import (
     canonical_risk_id,
 )
 from arctic_route_planning.development import create_development_run_context
+from arctic_route_planning.domain import PlanKind, ReplanReason
 from arctic_route_planning.errors import (
     ContextMismatchError,
     ContractError,
     PlanningCancelledError,
 )
 from arctic_route_planning.ingress import RiskSourcePlanningIngress
-from arctic_route_planning.replanning import PlanningCoordinator
+from arctic_route_planning.replanning import (
+    PlanningCoordinator,
+    ReplanObservation,
+)
 from arctic_route_planning.service import ServicePlanningRequest
 
 CONFIG_ROOT = Path(__file__).parents[2] / "configs"
@@ -46,10 +50,13 @@ class RecordingCommittedSource:
             yield window
 
 
-def _formal_frame(frame):
+def _formal_frame(frame, *, longitude_step: float = 0.001):
     payload = frame.payload.assign_coords(
         latitude=np.asarray([70.0, 70.001, 70.002], dtype=np.float64),
-        longitude=np.asarray([18.0, 18.001, 18.002], dtype=np.float64),
+        longitude=np.asarray(
+            [18.0, 18.0 + longitude_step, 18.0 + 2 * longitude_step],
+            dtype=np.float64,
+        ),
     )
     payload.attrs["grid_id"] = "formal-ingress-test-grid"
     draft = replace(
@@ -144,6 +151,163 @@ def test_formal_ingress_queries_full_exact_commit_and_executes_existing_planner(
     )
     with pytest.raises(ContractError, match=r"risk_level|risk_id"):
         prepared.execute()
+
+
+def test_formal_ingress_executes_one_atomic_four_layer_set_under_the_lease() -> None:
+    configuration = load_configuration(
+        CONFIG_ROOT, "tromso_isfjorden_july_2026_retrospective_v1"
+    )
+    run_context = create_development_run_context(configuration, source_kind="formal")
+    fixture = FixtureRiskSource(
+        scenario=configuration.scenario,
+        corridor=configuration.corridor,
+        vessel=configuration.vessel,
+        run_context=run_context,
+        generation_id=7,
+        as_of_time=configuration.scenario.simulation_start,
+        frame_count=3,
+        shape=(3, 3),
+    )
+    frames = tuple(_formal_frame(frame) for frame in fixture.frames)
+    store = InMemoryRiskSource()
+    for frame in frames:
+        store.publish(frame)
+    query = RiskWindowQuery(
+        start=frames[0].valid_time,
+        end=frames[-1].valid_time,
+        interval=timedelta(hours=1),
+        run_id=frames[0].run_id,
+        scenario_id=frames[0].scenario_id,
+        corridor_id=frames[0].corridor_id,
+        generation_id=frames[0].generation_id,
+        vessel_profile_id=frames[0].vessel_profile_id,
+        config_digest=frames[0].config_digest,
+        model_config_digest=frames[0].model_config_digest,
+        as_of=frames[0].as_of_time,
+    )
+    store.commit_window(query)
+    recording = RecordingCommittedSource(store)
+    request = ServicePlanningRequest(
+        run_context=run_context,
+        scenario=configuration.scenario,
+        corridor=configuration.corridor,
+        vessel=configuration.vessel,
+        vessel_model=configuration.vessel_model,
+        model_config_digest=frames[0].model_config_digest,
+        planner_config_digest=configuration.planner_config_digest,
+        risk_provenance=ProvenanceKind.FORMAL,
+        generation_id=7,
+        input_revision=1,
+        as_of_time=frames[0].as_of_time,
+        start_time=frames[0].valid_time,
+        start=(0, 0),
+        goal=(0, 2),
+        maximum_elapsed=timedelta(hours=2),
+    )
+
+    outcome = RiskSourcePlanningIngress(
+        recording,
+        configuration=configuration,
+    ).execute_four_layer(request)
+
+    assert recording.queries == [query, query]
+    assert outcome.published
+    assert len(outcome.plan_set.layers) == 4
+    assert sum(len(bundle.plans) for bundle in outcome.plan_set.layers) == 12
+    assert all(
+        plan.provenance is ProvenanceKind.FORMAL
+        and plan.generation_id == request.generation_id
+        and plan.input_revision == request.input_revision
+        and plan.source_risk_ids
+        for bundle in outcome.plan_set.layers
+        for plan in bundle.plans.values()
+    )
+
+
+def test_formal_four_layer_replan_uses_six_hour_suffix_and_new_revision() -> None:
+    configuration = load_configuration(
+        CONFIG_ROOT, "tromso_isfjorden_july_2026_retrospective_v1"
+    )
+    run_context = create_development_run_context(configuration, source_kind="formal")
+    fixture = FixtureRiskSource(
+        scenario=configuration.scenario,
+        corridor=configuration.corridor,
+        vessel=configuration.vessel,
+        run_context=run_context,
+        generation_id=7,
+        as_of_time=configuration.scenario.simulation_start,
+        frame_count=11,
+        shape=(3, 3),
+    )
+    frames = tuple(_formal_frame(frame, longitude_step=1.0) for frame in fixture.frames)
+    store = InMemoryRiskSource()
+    for frame in frames:
+        store.publish(frame)
+    initial_query = RiskWindowQuery(
+        start=frames[0].valid_time,
+        end=frames[-1].valid_time,
+        interval=timedelta(hours=1),
+        run_id=frames[0].run_id,
+        scenario_id=frames[0].scenario_id,
+        corridor_id=frames[0].corridor_id,
+        generation_id=frames[0].generation_id,
+        vessel_profile_id=frames[0].vessel_profile_id,
+        config_digest=frames[0].config_digest,
+        model_config_digest=frames[0].model_config_digest,
+        as_of=frames[0].as_of_time,
+    )
+    store.commit_window(initial_query)
+    initial_request = ServicePlanningRequest(
+        run_context=run_context,
+        scenario=configuration.scenario,
+        corridor=configuration.corridor,
+        vessel=configuration.vessel,
+        vessel_model=configuration.vessel_model,
+        model_config_digest=frames[0].model_config_digest,
+        planner_config_digest=configuration.planner_config_digest,
+        risk_provenance=ProvenanceKind.FORMAL,
+        generation_id=7,
+        input_revision=0,
+        as_of_time=frames[0].as_of_time,
+        start_time=frames[0].valid_time,
+        start=(0, 0),
+        goal=(0, 2),
+        maximum_elapsed=timedelta(hours=10),
+    )
+    ingress = RiskSourcePlanningIngress(store, configuration=configuration)
+    initial = ingress.execute_four_layer(initial_request)
+    trigger_time = initial_request.start_time + timedelta(hours=6)
+    suffix_query = replace(
+        initial_query,
+        start=trigger_time,
+    )
+    suffix = store.commit_window(suffix_query)
+    replan_request = replace(
+        initial_request,
+        input_revision=1,
+        start_time=trigger_time,
+        start=(0, 1),
+        maximum_elapsed=timedelta(hours=4),
+    )
+    previous = initial.plan_set.recommended.metrics
+    observation = ReplanObservation(
+        observed_at=trigger_time,
+        risk_valid_time=trigger_time,
+        data_revision=1,
+        risk_revision=suffix.commit_id,
+        route_avg_risk=previous.avg_risk,
+        route_max_risk=previous.max_risk,
+    )
+
+    replanned = ingress.replan_four_layer_if_needed(replan_request, observation)
+
+    assert replanned.decision.triggered
+    assert set(replanned.decision.reasons) == {ReplanReason.TIME, ReplanReason.DATA}
+    assert replanned.outcome is not None and replanned.outcome.published
+    assert replanned.outcome.plan_set.input_revision == 1
+    assert replanned.outcome.plan_set.start_time == trigger_time
+    assert replanned.outcome.plan_set.plan_kind is PlanKind.REPLANNED
+    assert replanned.outcome.snapshot.previous == initial.plan_set
 
 
 def test_ingress_recomputes_digest_from_complete_execution_configuration() -> None:

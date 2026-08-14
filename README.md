@@ -1,16 +1,31 @@
 # 北极航线工作包 C
 
-工作包 C 是一个独立、可运行、可测试的 Python 3.13 项目：它消费 B → C
-`RiskFrame v2` 时间序列，按船舶到达每条边的 ETA 采样风险，运行时间依赖 A*，
-生成最快、低风险和综合推荐路线，并通过最新值缓存向 D 发布 `RoutePlan`。
+工作包 C 是独立、可运行、可测试的 Python 3.13 航线规划项目。它消费 B 原子提交的
+逐小时 `bc.risk-frame.v2` 风险窗，按船舶到达每条边的 ETA 采样风险，运行既有时间依赖
+A*，并生成最快、低风险和综合推荐路线。
 
-当前版本为 `0.3.0`；在共享 `RunContext.v2` 与 BC/CD v2 身份合同之上，新增规范
-RiskFrame JSON codec、逐小时原子窗口提交合同和正式 `RiskSource` 规划入口。四层规划仍是
-后续增量路线图。逐版本变化、兼容性和验收证据见
-[CHANGELOG.md](CHANGELOG.md)。
+当前包版本为 `0.4.0`。本版在不改 A*、风险采样、规则网格和成本算法的前提下，新增：
 
-> 安全声明：当前场景、船型、风险和成本参数都是科研演示基线，未经真实标定，
-> 不得用于真实航行或安全决策。
+- 公共、可审计的 allowed-region 端点映射；
+- `cd.route-plan.v3` 与 `cd.four-layer-route-plan-set.v3`；
+- 全航程、24–72 h 主通道、0–24 h 滚动、0–6 h 可执行四层编排；
+- 每层三目标，共 12 条路线的 JSON/GeoJSON codec 和原子 latest 发布；
+- 正式 ingress 的 v2/v3 初始规划与重规划入口。
+
+工程实现和合同测试不能代替实源验收：指定主航区的真实 12 类、168 h A
+`DatasetBundle v2` 尚待取得，因此 C 0.4.0 仍是 `demo_unvalidated` 科研基线，不得用于
+真实航行或安全决策。逐版本变化见 [CHANGELOG.md](CHANGELOG.md)。
+
+## 当前口径
+
+| 项目 | 当前状态 |
+|---|---|
+| B→C 输入 | 正式入口只接受完整、逐小时、原子提交的 `RiskFrame v2` 窗口 |
+| C 核心算法 | 时间依赖 A*、ETA 风险采样、网格和成本算法沿用既有实现 |
+| C→D 正式新输出 | `RoutePlanV3` + 原子 `FourLayerRoutePlanSet` |
+| v2 兼容 | Schema/codec/历史结果继续可读；v2 基线入口保留作回归与 Day 7 门槛 |
+| 发布策略 | 一次运行选择 v2 或 v3，不双写；v3 只在 12 条路线齐全后原子替换 |
+| 实源证据 | A→B→C 工程夹具已覆盖合同；真实主航区长窗验收仍待完成 |
 
 ## 快速开始
 
@@ -25,110 +40,64 @@ make check
 make demo
 ```
 
-`make demo` 使用确定性合成风险帧运行三种目标，将 JSON、GeoJSON 和摘要写入
-`output/demo/`。它不需要 A、B 或外部网络即可完成。
-为把默认冒烟运行控制在数十秒内，该命令默认使用 5×5 粗网格，因此端点映射可达百公里级；调整距离会被完整报告，结果不应用作路线质量基线。需要更细的工程演示时，显式增加 `--rows/--columns` 并重新设定可接受的 `--max-snap-km`。
+`make demo` 使用确定性合成风险帧运行 v2 三目标冒烟，将 JSON、GeoJSON 和摘要写入
+`output/demo/`。它不需要 A、B 或外部网络。默认 5×5 粗网格用于快速流程检查，端点调整
+可能达到百公里级，不能作为路线质量基线；更细演示应显式增加网格行列并重新设定
+`--max-snap-km`。
 
 ## 责任边界
 
 ```text
-A StandardDataFrame
-        │
-        ▼
-B 时间处理/预测/风险融合
-        │ RiskFrame + environment_speed_factor（正式帧必需）
-        ▼
-C RiskSampler → Grid/Cost/Vessel → TimeDependentAStar
-        │                         │
-        │                         └─ Replanning/Cancel/Revision
-        ▼
-  RoutePlan（显式 provenance）+ CD latest
-        │
-        ▼
-D 只读渲染
+A DatasetBundle v2 + RunContext v2
+                │
+                ▼
+B CommittedRiskWindow / RiskFrame v2
+                │  同一 execution lease
+                ▼
+C endpoint mapping → ETA sampling → time-dependent A*
+                │
+                ├─ v2 三目标基线（兼容/回归）
+                └─ v3 四层 × 三目标 → atomic layered latest
+                                      │
+                                      ▼
+                                  D 只读消费
 ```
 
-- B 提供环境影响；C 把它应用到版本化船型，计算最终有效航速。
-- C 不读 A 内部数据库/缓存，不调用 B 内部函数，不修改 B 的风险权重。
-- C 不从 `risk_score` 或 `confidence` 重复推导速度损失。
-- 核心不外推风险、不把缺测当安全、不暗中吸附被硬掩膜阻断的起终点。
+- A 拥有环境数据获取、归一化、归档和精确回放；C 不读 A 内部数据库或缓存。
+- B 提供风险、硬约束、置信度和 `environment_speed_factor`；C 不调用 B 私有函数。
+- C 把环境因子应用到版本化船型并计算最终速度、ETA、成本、路线和重规划。
+- C 不从 `risk_score` 或 `confidence` 重复推导物理减速。
+- C 不外推风险、不把缺测当安全、不跨 run/代次/配置混合输入。
+- D 只读消费已发布合同，不参与规划。
 
-更完整的取舍见 [决策记录](docs/DECISIONS.md)。
+完整决策见 [决策记录](docs/DECISIONS.md)。
 
-## 命令行
+## 公共端点映射
 
-### 合成演示
+正式调用方应使用 `map_corridor_endpoints(...)`，而不是自行把经纬度取整到网格：
 
-```bash
-.mamba-env/bin/uv run arctic-route-plan synthetic-demo \
-  --scenario tromso_isfjorden_july_2026_retrospective_v1 \
-  --output-dir output/demo
+```python
+from arctic_route_planning import map_corridor_endpoints
+
+mapping = map_corridor_endpoints(
+    configuration,
+    committed_window.frames[0],
+    max_adjustment_km=80.0,
+)
 ```
 
-可将 `--scenario` 替换为
-`murmansk_dikson_july_2026_retrospective_v1`。输出中会记录配置摘要、
-演示警告、起终点到离散网格的有限距离映射以及三种路线指标。
+该入口先在共享 Corridor 声明的起点/终点 allowed region 内选择未被首帧 hard mask 阻断的
+网格节点，再要求两点位于同一可通航连通分量，并严格执行调用方给定的最大调整距离。
+返回的 `EndpointMapping` 显式记录请求坐标、解析坐标、调整距离、网格形状和连通分量大小。
+allowed region 无网格点、无可航节点、无同分量节点、超距离或起终点解析为同一节点都会
+明确失败。
 
-### 隔离读取旧版嵌套 B 样例（可选）
+## 正式 B 风险入口
 
-```bash
-.mamba-env/bin/uv run arctic-route-plan legacy-inspect \
-  --scenario tromso_isfjorden_july_2026_retrospective_v1 \
-  --archive '/mnt/c/Users/asd233/Desktop/挑战杯/挑战/交付包.zip' \
-  --as-of 2026-07-31T00:00:00Z \
-  --allow-unverified-legacy \
-  --acknowledge-valid-time
-```
-
-这两个 acknowledgement 参数不能省略。此适配器只接受早期“外层 ZIP + 嵌套
-综合风险.zip”的已知结构。当前用户提供的 `工作包B.zip` 是另一种直接成果目录，已在
-`work_package_b_handoff/` 审计，C 不为它扩展新的半正式适配路径；当前
-`work_package_b/` 已按 v2 committed-source 合同重建。旧数据没有可证明的 `issue_time`，
-只能用于开发联调，不能进入正式历史
-回放。`legacy-plan` 还要求显式 `--max-snap-km`；旧帧间隔超限时明确失败。
-
-## 共享运行上下文与当前演示配置
-
-- 场景、航区和船舶事实来自独立的 `arctic_route_contracts`，C 不再复制这些配置。
-- 主线为摩尔曼斯克外海—迪克森外海；测试线为特罗姆瑟外海—伊斯峡湾外部入口。朗伊尔城只保留为 AIS 航次识别参考点，不是规划终点。
-- 参考船为公开资料可核查的 `nordic_odyssey_reference_v1`；C 的最低操舵速度、环境阈值、转弯和 UKC 仍是 `demo_unvalidated` 算法参数。
-- 默认时间桶 60 min、8 邻接、每边 3 个时空采样点；216 h 是硬上限，实际时域由已物化场景/`RunContext` 请求。
-- 默认不允许等待动作。
-
-全航程时域不是固定 9 天。冻结运行前由共享包按候选航线距离、参考船速和缓冲评估：
-
-```bash
-cd /root/my_project/arctic_route_contracts
-.venv/bin/arctic-route-context recommend-horizon \
-  --corridor offshore_murmansk_to_offshore_dikson \
-  --vessel nordic_odyssey_reference_v1 \
-  --candidate-route-distance-nm 1250
-```
-
-C 只消费随后物化且已绑定 A bundle 的具体 `RunContext`，不会自行延长场景；若所需
-时域超过共享来源/设备上限，流程在 A 下载和 C 规划前就以
-`forecast_coverage_insufficient` 失败。
-正式运行 C 时应把完全相同的开始时刻与候选距离传入，并提供 A 生成的 RunContext：
-
-```bash
-.mamba-env/bin/uv run arctic-route-plan synthetic-demo \
-  --scenario murmansk_dikson_frozen_forecast_template_v1 \
-  --simulation-start 2026-08-12T00:00:00Z \
-  --candidate-route-distance-nm 1250 \
-  --run-context /path/from-shared/run-context.json \
-  --output-dir output/frozen-contract-smoke
-```
-
-上例的 `synthetic-demo` 仍只用于合同/规划冒烟。当前 `work_package_b/` 已通过下面的正式
-Python 入口完成 A→B→C 工程夹具联调；指定共享场景的完整真实 A bundle 尚未取得，因此
-不能把该结果称为实源联调。
-
-### 正式 B 风险入口
-
-B 不需要继承 C 的实现类，只需结构化实现
-`CommittedRiskSource.get_committed_window(query)`，并返回公共
-`CommittedRiskWindow`。C 用完整 run/场景/航区/船型/代次/公共配置/B 模型配置和
-`as_of` 查询严格逐小时闭区间，随后通过公共入口装配现有规划组件：
+B 结构化实现
+`CommittedRiskSource.get_committed_window(query)` 与
+`lease_committed_window(query)`。C 用完整 run/场景/航区/船型/代次、公共配置摘要、B 模型
+摘要和 `as_of` 查询严格的 60 min 闭区间：
 
 ```python
 from arctic_route_planning.ingress import RiskSourcePlanningIngress
@@ -138,81 +107,127 @@ ingress = RiskSourcePlanningIngress(
     configuration=configuration,
 )
 prepared = ingress.prepare(service_request)
-batch = prepared.execute()
+
+# 二选一：同一次正式运行不能双写。
+result = prepared.execute()  # Day 7 v2 基线
+# result = prepared.execute_four_layer()  # v3 整组
 ```
 
-`prepare()` 会重算窗口 content digest、正式帧 canonical `risk_id`，核对完整身份、知识
-截止、首尾、帧数、60 min 间隔和起终点网格归属。`execute()` 再通过
-`lease_committed_window(query)` 复核同一 commit，并让租约贯穿规划和 RoutePlan 发布；B
-对同一 run 切换 generation 必须与共享执行租约互斥；同代次新修订和不同 run 则可并发，
-以便 coordinator 及时取消旧工作。租约内的帧还会经 canonical encode→decode 形成私有
-快照并重建 sampler/planner，避免 prepare 返回的可检查 xarray 对象被替换后进入规划。
-缺帧、未提交窗口、过期代次、不同模型/网格或越过 `as_of` 都会失败。同一 ingress 对同一
-`(run_id, scenario_id)` 复用 `PlanningCoordinator`，使新修订取消并阻止较旧请求迟到发布；
-不同 run 使用独立 coordinator，互不误取消。
+一次正式运行只能选择其中一个发布路径。`prepare()` 会验证窗口 content digest、commit ID、
+canonical `risk_id`、完整身份、知识截止、首尾、帧数、60 min 间隔和起终点节点。
+执行阶段在 B 的同一 execution lease 内重新复核 commit，并把帧经 canonical
+encode→decode 形成私有快照，再构造 sampler、grid、vessel model 和 planner；租约保持到
+RoutePlan 或完整 v3 整组发布结束。
 
-入口接收完整、已验证的 `PlanningConfiguration`，并从其中实际执行的 vessel model、
-planner 与 replanning 配置重算 `planner_config_digest`；摘要与对象不一致会在读取 B 窗口
-前拒绝。
+同一 ingress 对同一 `(run_id, scenario_id)` 复用协调器和重规划状态。新 generation、较新
+`input_revision`、取消或发布冲突会阻止旧任务迟到覆盖；不同 run 相互隔离。
 
-`PreparedRiskPlanning` 不暴露可直接执行的 prepare 阶段 `PlanningService`；正式调用必须走
-`.execute()`，从而不能绕过 source lease、commit 复核和 canonical 私有快照。
+## RoutePlan v3 四层语义
 
-`RunContext` 把 A 的精确 `DatasetBundle`、场景和船型锁成公共 `config_digest`；
-B 和 C 分别另发 `model_config_digest`、`planner_config_digest`。三者不可混称。
-C 本地 `configs/` 只保存规划、重规划和船舶性能模型参数。正式 ingress 是边界装配层，
-本次未修改 `risk/grid/cost/planners/replanning/service/publishing` 核心模块。
-服务与 CLI 都会重算共享事实的内容摘要和公共 `config_digest`，并要求场景起止与
-`RunContext` 完全相等。出发、搜索时域和 RiskFrame 窗口只要越过上下文就明确失败，
-不会静默裁剪。历史最佳估计允许知识时间晚于模拟时间；冻结预报仍禁止使用出发后知识。
-正式 B 来源的 `data_id/issue_time/valid_time/checksum` 缺任一项都会拒绝；
-RiskFrame 窗口的来源级别必须一致，并原样写入 RoutePlan。合成/旧数据输出因此不会被冒充为正式路线。
+四层共享同一 `RunContext`、B committed window、execution lease、generation、revision、
+三类配置摘要和全航程推荐线：
 
-## 后续四层规划路线
+| 层 | 目标与关注时间窗 | 锚点规则 |
+|---|---|---|
+| `full_voyage` | 到业务终点；关注全航程 | 业务终点 |
+| `main_corridor_24_72h` | 主通道；关注 24–72 h | 全航程推荐线在 72 h 及之前的最后一个非起点航点 |
+| `rolling_0_24h` | 滚动优化；关注 0–24 h | 全航程推荐线在 24 h 及之前的最后一个非起点航点 |
+| `executable_0_6h` | 可执行线；关注 0–6 h | 全航程推荐线在 6 h 及之前的最后一个非起点航点 |
 
-导师提出的四层结构纳入 C 的后续路线图，但本次合同迁移不重写现有规划器：
+若全航程在某个截止时刻前已经结束，该层以业务终点为锚点，并显式标记
+`destination_reached=true`。若截止时刻及之前不存在非起点航点，整组以
+`layer_not_materializable` 失败，不发布部分结果。
 
-1. 全航程参考线：覆盖完整实际航程（并非固定 9 天），判断总体航道与大尺度通道；
-2. 24–72 h 主通道：判断未来进入哪个冰区通道；
-3. 0–24 h 滚动优化：面向高精度气象导航和冰区避险；
-4. 0–6 h 可执行线：细分为 0–2 h 高可信、2–4 h 推荐、4–6 h 预测区。
+每层必须恰好包含 `fastest`、`low_risk`、`recommended` 三目标。`RoutePlanV3` 在 v2 路线
+字段上新增 `planning_layer`、`layer_set_id`、关注时间窗、`reference_plan_id`、
+`layer_goal_reached` 和 `destination_reached`。三个下层的全部路线都引用全航程推荐路线。
 
-四层必须共享同一个 `RunContext`。先在主线上冻结 B 风险参数和 C 目标权重，再原样迁移到测试线；若针对测试线重新调参，不能称为迁移能力验证。
+JSON/GeoJSON Schema 位于：
+
+- `schemas/route-plan-v3.schema.json`
+- `schemas/route-plan-v3.geojson.schema.json`
+- `schemas/four-layer-route-plan-set-v3.schema.json`
+- `schemas/four-layer-route-plan-set-v3.geojson.schema.json`
+
+codec 会严格拒绝额外字段并重算路线和整组的规范内容身份。`LayeredRoutePlanLatestStore`
+只有在四层、12 条路线、身份、锚点和 canonical ID 全部通过后才原子发布；任一层失败、
+代次/修订过期、取消或冲突都不会留下部分 v3 结果。
+
+## 初始规划与重规划
+
+正式 ingress 同时提供 v2 和 v3 入口：
+
+```python
+initial_v2 = ingress.execute(service_request)
+replanned_v2 = ingress.replan_if_needed(next_request, observation)
+
+initial_v3 = ingress.execute_four_layer(service_request)
+replanned_v3 = ingress.replan_four_layer_if_needed(next_request, observation)
+```
+
+重规划要求已存在同 run、同 scenario、同 generation 的已发布计划；新请求的
+`input_revision` 必须严格递增，`observed_at` 和 `risk_valid_time` 必须等于新请求的
+`start_time`，`risk_revision` 必须等于当前 B 窗口 commit ID。v3 接受重规划时以新完整整组
+原子替换旧整组。正式冲刺在 `simulation_start + 6 h` 验证一次时间触发重规划。
+
+## v2 兼容策略
+
+- `cd.route-plan.v2` 的 Python 模型、Schema 和解析链继续保留，用于历史结果读取、回归和
+  Day 7 的三目标稳定门槛。
+- v3 通过完整门槛后成为新正式运行输出；运行器必须显式选择合同版本，禁止同一次运行
+  同时发布 v2 与 v3。
+- v1 仅作审计/显式迁移；它缺少完整 run/model/planner 身份，不能进入正式 latest。
+
+## 场景、时域与 10 日冲刺
+
+- 主线：摩尔曼斯克外海—迪克森外海，默认设计窗 168 h；运行时上限仍为 216 h。
+- 测试线：特罗姆瑟外海—伊斯峡湾外部入口，默认设计窗 96 h；运行时上限仍为 144 h。
+- 默认窗来自保守设计航时加至少 48 h 缓冲；C 只消费已物化并绑定 A bundle 的
+  `RunContext`，不会自行延长时域。
+- 10 个自然日是开发冲刺期限，不是运行时域，也不改变 216/144 h 航区上限。
+- Day 7 门槛是可重复的真实 v2 三目标主线和一次重规划；Day 8–9 才在主线稳定后推广
+  v3；Day 10 只做验收或阻断修复。
+
+截至 2026-08-14，v3 工程实现已落地，但真实 12 类、168 h A bundle 尚未交付，因此不能
+声称完成实源四层验收。若实源受阻，可保留正式夹具链，但必须明确标注“未完成实源验收”。
+
+## 旧 B 制品
+
+旧嵌套 B 样例只能经 `LegacyBArchiveAdapter` 隔离读取，并要求显式确认未知
+`issue_time`/`valid_time`。它永久标记 `legacy_unverified`，不能升级为 formal，也不能用来
+替代当前 12 类 A bundle 或正式 B committed window。
 
 ## 项目导航
 
 | 位置 | 用途 |
 |---|---|
 | `../arctic_route_contracts/configs/` | 全系统唯一的场景、航区和船舶事实 |
-| `configs/` | C 自有船舶性能模型、规划和重规划配置 |
-| `schemas/` | B→C 与 C→D 的 JSON Schema |
-| `contracts/` | 不可变 Python 合同和 `RiskSource` 协议 |
-| `ingress.py` | 已提交正式 BC 窗口到现有 C 规划组件的公共入口 |
-| `adapters/` | 确定性夹具与隔离的旧 B 适配层 |
-| `risk/` | 严格时空 ETA 采样 |
-| `grid/`, `cost/` | 规则网格、显式吸附工具、船模和等价小时成本 |
-| `planners/` | 隐式时空状态上的时间依赖 A* / Dijkstra oracle |
-| `replanning/` | 五类触发、防抖、迟滞、取消和修订围栏 |
-| `publishing/` | RoutePlan JSON/GeoJSON 与 CD latest |
-| `service.py` | 三目标求解、候选路线和原子发布编排 |
+| `configs/` | C 自有船舶性能、规划和重规划配置 |
+| `schemas/` | B→C 与 C→D JSON Schema |
+| `src/arctic_route_planning/contracts/` | 不可变 Python 合同和 RiskSource 协议 |
+| `src/arctic_route_planning/endpoints.py` | allowed-region 端点映射 |
+| `src/arctic_route_planning/ingress.py` | 正式 v2/v3 初始规划与重规划入口 |
+| `src/arctic_route_planning/layered.py` | 四层应用编排，不改规划核心 |
+| `src/arctic_route_planning/publishing/` | v2/v3 codec 与原子 latest |
+| `src/arctic_route_planning/adapters/` | 确定性夹具与隔离的旧 B 适配层 |
 
-合同和算法细节：
+进一步阅读：
 
-- [版本变更记录](CHANGELOG.md)
 - [B→C 合同](docs/BC_CONTRACT.md)
 - [C→D 合同](docs/CD_CONTRACT.md)
 - [航速与成本模型](docs/COST_MODEL.md)
-- [验收清单与已知限制](docs/ACCEPTANCE.md)
+- [验收清单](docs/ACCEPTANCE.md)
 - [架构追踪与矛盾处理](docs/ARCHITECTURE_TRACE.md)
+- [继续开发指南](工作包C项目整体认识与继续开发指南.md)
 
-## 开发规则
+## 开发检查
 
 ```bash
 make lint
 make test
 make check
+git diff --check
 ```
 
-当前 `../work_package_b/` 已结构化实现 `CommittedRiskSource`，使用公共 canonical codec
-发布通过验证的 `RiskFrame` 和原子 `CommittedRiskWindow`；
-`RiskSampler`、网格、成本、规划和重规划源码不应因输入实现切换而改动。
+最终交付应同时报告自动测试结果、真实/夹具来源等级、配置摘要、B commit ID、端点调整、
+路线指标以及未完成的实源或科学验收，不能用“测试全绿”替代科研有效性证明。

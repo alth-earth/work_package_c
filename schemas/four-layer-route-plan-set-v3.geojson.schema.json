@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arctic-route.local/schemas/four-layer-route-plan-set-v3.geojson.schema.json",
+  "title": "CD FourLayerRoutePlanSet v3 GeoJSON",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "properties", "features"],
+  "properties": {
+    "type": {"const": "FeatureCollection"},
+    "properties": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "layer_set_id", "run_id", "scenario_id", "corridor_id",
+        "vessel_profile_id", "config_digest", "model_config_digest", "planner_config_digest",
+        "provenance", "generation_id", "planning_request_id", "input_revision", "generated_at",
+        "as_of_time", "start_time", "plan_kind", "replan_reasons"
+      ],
+      "properties": {
+        "schema_version": {"const": "cd.four-layer-route-plan-set.v3"},
+        "layer_set_id": {"type": "string", "pattern": "^layer-set-sha256-[0-9a-f]{64}$"},
+        "run_id": {"type": "string", "minLength": 1},
+        "scenario_id": {"type": "string", "minLength": 1},
+        "corridor_id": {"type": "string", "minLength": 1},
+        "vessel_profile_id": {"type": "string", "minLength": 1},
+        "config_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "model_config_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "planner_config_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "provenance": {"enum": ["formal", "legacy_unverified", "synthetic"]},
+        "generation_id": {"type": "integer", "minimum": 0},
+        "planning_request_id": {"type": "string", "minLength": 1},
+        "input_revision": {"type": "integer", "minimum": 0},
+        "generated_at": {"type": "string", "format": "date-time", "pattern": "Z$"},
+        "as_of_time": {"type": "string", "format": "date-time", "pattern": "Z$"},
+        "start_time": {"type": "string", "format": "date-time", "pattern": "Z$"},
+        "plan_kind": {"enum": ["initial", "replanned"]},
+        "replan_reasons": {"type": "array", "items": {"enum": ["time", "data", "risk", "deviation", "event", "manual"]}, "uniqueItems": true}
+      }
+    },
+    "features": {
+      "type": "array",
+      "minItems": 12,
+      "maxItems": 12,
+      "items": {"$ref": "route-plan-v3.geojson.schema.json#/$defs/routeFeature"}
+    }
+  }
+}

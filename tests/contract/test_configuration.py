@@ -98,8 +98,8 @@ def test_frozen_template_requires_explicit_start_and_materializes() -> None:
         simulation_start=datetime(2026, 8, 12, tzinfo=UTC),
         candidate_route_distance_nm=1000,
     )
-    assert route_specific.scenario.horizon_hours == 120
-    assert route_specific.scenario.scenario_id.endswith("_h120_v1")
+    assert route_specific.scenario.horizon_hours == 144
+    assert route_specific.scenario.scenario_id.endswith("_h144_v1")
 
 
 def test_frozen_candidate_beyond_shared_cap_fails_before_planning() -> None:

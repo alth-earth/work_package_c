@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from threading import RLock
 
 import numpy as np
@@ -21,10 +21,17 @@ from arctic_route_planning.contracts import (
 from arctic_route_planning.cost import VesselPerformanceModel
 from arctic_route_planning.errors import ContextMismatchError, RiskCoverageError
 from arctic_route_planning.grid import RegularGrid
+from arctic_route_planning.layered import (
+    FourLayerPlanningOutcome,
+    FourLayerPlanningService,
+    FourLayerReplanningOutcome,
+)
 from arctic_route_planning.planners import TimeDependentAStar
+from arctic_route_planning.publishing import LayeredRoutePlanLatestStore
 from arctic_route_planning.replanning import (
     PlanningCoordinator,
     ReplanningPolicy,
+    ReplanObservation,
     ReplanTriggerEvaluator,
     RouteSwitchGate,
 )
@@ -32,8 +39,32 @@ from arctic_route_planning.risk import RiskSampler
 from arctic_route_planning.service import (
     PlanningBatch,
     PlanningService,
+    ReplanningOutcome,
     ServicePlanningRequest,
 )
+
+
+@dataclass(slots=True)
+class _PlanningSession:
+    coordinator: PlanningCoordinator
+    policy: ReplanningPolicy
+    trigger_evaluator: ReplanTriggerEvaluator
+    switch_gate: RouteSwitchGate
+    layered_store: LayeredRoutePlanLatestStore
+    generation_id: int | None = None
+    state_lock: RLock = field(default_factory=RLock)
+
+    def enter_generation(self, generation_id: int) -> None:
+        """Reset trigger state on a forward generation transition only."""
+
+        with self.state_lock:
+            if self.generation_id is not None and generation_id < self.generation_id:
+                raise ContextMismatchError("旧 generation 不得重新进入正式规划会话")
+            if self.generation_id == generation_id:
+                return
+            self.generation_id = generation_id
+            self.trigger_evaluator = ReplanTriggerEvaluator(self.policy)
+            self.switch_gate = RouteSwitchGate(self.policy)
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,60 +76,141 @@ class PreparedRiskPlanning:
     window: CommittedRiskWindow
     source: CommittedRiskSource
     configuration: PlanningConfiguration
-    coordinator: PlanningCoordinator
+    session: _PlanningSession
+
+    @property
+    def coordinator(self) -> PlanningCoordinator:
+        """Compatibility view of the persistent per-run coordinator."""
+
+        return self.session.coordinator
 
     def execute(self) -> PlanningBatch:
         """Invoke the unchanged planning service against the frozen preparation."""
 
-        planner_config_digest = _verified_planning_configuration_digest(
-            self.configuration
-        )
+        result = self._with_private_planner(observation=None, layered=False)
+        assert isinstance(result, PlanningBatch)
+        return result
+
+    def replan_if_needed(self, observation: ReplanObservation) -> ReplanningOutcome:
+        """Evaluate and execute one v2 replan under the same source lease."""
+
+        return self._with_private_planner(observation=observation, layered=False)
+
+    def execute_four_layer(self) -> FourLayerPlanningOutcome:
+        """Build and atomically publish all four v3 layers under one lease."""
+
+        return self._execute_layered(observation=None)
+
+    def replan_four_layer_if_needed(
+        self,
+        observation: ReplanObservation,
+    ) -> FourLayerReplanningOutcome:
+        """Evaluate and atomically replace one complete four-layer set."""
+
+        result = self._execute_layered(observation=observation)
+        assert isinstance(result, FourLayerReplanningOutcome)
+        return result
+
+    def _execute_layered(
+        self,
+        *,
+        observation: ReplanObservation | None,
+    ) -> FourLayerPlanningOutcome | FourLayerReplanningOutcome:
+        return self._with_private_planner(observation=observation, layered=True)
+
+    def _with_private_planner(
+        self,
+        *,
+        observation: ReplanObservation | None,
+        layered: bool,
+    ):
+        planner_config_digest = _verified_planning_configuration_digest(self.configuration)
         if self.request.planner_config_digest != planner_config_digest:
-            raise ContextMismatchError(
-                "请求 planner_config_digest 与执行时冻结配置不一致"
-            )
+            raise ContextMismatchError("请求 planner_config_digest 与执行时冻结配置不一致")
+        # The source lease fences B's generation/content for the duration of
+        # planning.  Do not also hold the session state lock here: the shared
+        # PlanningCoordinator must remain able to activate a newer revision
+        # and cancel an older in-flight request.  Session generation changes
+        # and both publication stores provide their own narrow atomic locks.
         with self.source.lease_committed_window(self.query) as current:
-            current.assert_matches(self.query)
-            private_frames = tuple(
-                risk_frame_from_document(risk_frame_to_document(frame))
-                for frame in current.frames
-            )
-            private_window = CommittedRiskWindow.create(self.query, private_frames)
-            if (
-                private_window.commit_id != self.window.commit_id
-                or private_window.content_digest != self.window.content_digest
-            ):
-                raise ContextMismatchError(
-                    "RiskFrame 窗口在 prepare 与 execute 之间发生改变"
+            self.session.enter_generation(self.request.generation_id)
+            planner = self._private_planner(current)
+            if layered:
+                service = FourLayerPlanningService(
+                    planner,
+                    planner_config=self.configuration.planner,
+                    coordinator=self.session.coordinator,
+                    store=self.session.layered_store,
+                    switch_gate=self.session.switch_gate,
+                    trigger_evaluator=self.session.trigger_evaluator,
                 )
-            sampler = RiskSampler(
-                private_frames,
-                max_frame_gap=HOURLY_RISK_INTERVAL,
-            )
-            grid = RegularGrid.from_risk_frame(
-                private_frames[0],
-                allow_diagonal=self.configuration.planner.connectivity == 8,
-            )
-            vessel_model = VesselPerformanceModel.from_configuration(
-                self.configuration.vessel_model
-            )
-            planner = TimeDependentAStar(
-                grid,
-                sampler,
-                vessel_model,
-                planner_config=self.configuration.planner,
-            )
-            replanning_policy = ReplanningPolicy.from_config(
-                self.configuration.replanning
-            )
+                if observation is None:
+                    outcome = service.execute(self.request)
+                    _mark_replanning_baseline(
+                        self.session,
+                        request=self.request,
+                        risk_revision=current.commit_id,
+                        route_avg_risk=outcome.plan_set.recommended.metrics.avg_risk,
+                        route_max_risk=outcome.plan_set.recommended.metrics.max_risk,
+                    )
+                    return outcome
+                _validate_formal_replan(
+                    self.session,
+                    request=self.request,
+                    observation=observation,
+                    risk_revision=current.commit_id,
+                    layered=True,
+                )
+                return service.replan_if_needed(self.request, observation)
             service = PlanningService(
                 planner,
                 planner_config=self.configuration.planner,
-                coordinator=self.coordinator,
-                switch_gate=RouteSwitchGate(replanning_policy),
-                trigger_evaluator=ReplanTriggerEvaluator(replanning_policy),
+                coordinator=self.session.coordinator,
+                switch_gate=self.session.switch_gate,
+                trigger_evaluator=self.session.trigger_evaluator,
             )
-            return service.execute(self.request)
+            if observation is None:
+                batch = service.execute(self.request)
+                _mark_replanning_baseline(
+                    self.session,
+                    request=self.request,
+                    risk_revision=current.commit_id,
+                    route_avg_risk=batch.selected.metrics.avg_risk,
+                    route_max_risk=batch.selected.metrics.max_risk,
+                )
+                return batch
+            _validate_formal_replan(
+                self.session,
+                request=self.request,
+                observation=observation,
+                risk_revision=current.commit_id,
+                layered=False,
+            )
+            return service.replan_if_needed(self.request, observation)
+
+    def _private_planner(self, current: CommittedRiskWindow) -> TimeDependentAStar:
+        current.assert_matches(self.query)
+        private_frames = tuple(
+            risk_frame_from_document(risk_frame_to_document(frame)) for frame in current.frames
+        )
+        private_window = CommittedRiskWindow.create(self.query, private_frames)
+        if (
+            private_window.commit_id != self.window.commit_id
+            or private_window.content_digest != self.window.content_digest
+        ):
+            raise ContextMismatchError("RiskFrame 窗口在 prepare 与 execute 之间发生改变")
+        sampler = RiskSampler(private_frames, max_frame_gap=HOURLY_RISK_INTERVAL)
+        grid = RegularGrid.from_risk_frame(
+            private_frames[0],
+            allow_diagonal=self.configuration.planner.connectivity == 8,
+        )
+        vessel_model = VesselPerformanceModel.from_configuration(self.configuration.vessel_model)
+        return TimeDependentAStar(
+            grid,
+            sampler,
+            vessel_model,
+            planner_config=self.configuration.planner,
+        )
 
 
 class RiskSourcePlanningIngress:
@@ -121,8 +233,7 @@ class RiskSourcePlanningIngress:
             source, "lease_committed_window"
         ):
             raise TypeError(
-                "source 必须结构化实现 get_committed_window(query) 与 "
-                "lease_committed_window(query)"
+                "source 必须结构化实现 get_committed_window(query) 与 lease_committed_window(query)"
             )
         planner_config_digest = _verified_planning_configuration_digest(configuration)
         self.source = source
@@ -130,51 +241,53 @@ class RiskSourcePlanningIngress:
         self.planner_config = configuration.planner
         self.planner_config_digest = planner_config_digest
         self.coordinator = coordinator or PlanningCoordinator()
-        self._coordinators: dict[tuple[str, str], PlanningCoordinator] = {}
+        self._sessions: dict[tuple[str, str], _PlanningSession] = {}
         self._coordinator_lock = RLock()
 
-    def _coordinator_for(
+    def _session_for(
         self,
         *,
         run_id: str,
         scenario_id: str,
-    ) -> PlanningCoordinator:
+    ) -> _PlanningSession:
         """Reuse fences within one run without cancelling an unrelated run."""
 
         key = (run_id, scenario_id)
         with self._coordinator_lock:
-            coordinator = self._coordinators.get(key)
-            if coordinator is None:
+            session = self._sessions.get(key)
+            if session is None:
                 # Preserve the public/injected coordinator for the first run;
                 # every additional run receives independent active state.
-                coordinator = (
-                    self.coordinator
-                    if not self._coordinators
-                    else PlanningCoordinator()
+                coordinator = self.coordinator if not self._sessions else PlanningCoordinator()
+                policy = ReplanningPolicy.from_config(self.configuration.replanning)
+                session = _PlanningSession(
+                    coordinator=coordinator,
+                    policy=policy,
+                    trigger_evaluator=ReplanTriggerEvaluator(policy),
+                    switch_gate=RouteSwitchGate(policy),
+                    layered_store=LayeredRoutePlanLatestStore(),
                 )
-                self._coordinators[key] = coordinator
-            return coordinator
+                self._sessions[key] = session
+            return session
 
     def prepare(self, request: ServicePlanningRequest) -> PreparedRiskPlanning:
         """Query, validate, and assemble one immutable formal planning input."""
 
         if request.risk_provenance is not ProvenanceKind.FORMAL:
             raise ContextMismatchError("正式 RiskSource 入口只接受 formal RiskFrame")
-        current_planner_config_digest = _verified_planning_configuration_digest(
-            self.configuration
-        )
+        current_planner_config_digest = _verified_planning_configuration_digest(self.configuration)
         if current_planner_config_digest != self.planner_config_digest:
             raise ContextMismatchError("入口 PlanningConfiguration 在构造后发生改变")
         if request.planner_config_digest != self.planner_config_digest:
             raise ContextMismatchError("请求 planner_config_digest 与入口配置不一致")
-        for field, actual, expected in (
+        for name, actual, expected in (
             ("scenario", request.scenario, self.configuration.scenario),
             ("corridor", request.corridor, self.configuration.corridor),
             ("vessel", request.vessel, self.configuration.vessel),
             ("vessel_model", request.vessel_model, self.configuration.vessel_model),
         ):
             if actual != expected:
-                raise ContextMismatchError(f"请求 {field} 与入口冻结配置不一致")
+                raise ContextMismatchError(f"请求 {name} 与入口冻结配置不一致")
         if request.maximum_elapsed is None:  # resolved by ServicePlanningRequest
             raise RuntimeError("maximum_elapsed was not resolved")
         query = RiskWindowQuery(
@@ -223,7 +336,7 @@ class RiskSourcePlanningIngress:
         # safe execute path rebuilds every planning component from its private
         # canonical snapshot while holding the source lease.
         VesselPerformanceModel.from_configuration(request.vessel_model)
-        coordinator = self._coordinator_for(
+        session = self._session_for(
             run_id=request.run_context.run_id,
             scenario_id=request.scenario.scenario_id,
         )
@@ -233,13 +346,36 @@ class RiskSourcePlanningIngress:
             window=window,
             source=self.source,
             configuration=self.configuration,
-            coordinator=coordinator,
+            session=session,
         )
 
     def execute(self, request: ServicePlanningRequest) -> PlanningBatch:
         """Prepare and run all existing C objective policies."""
 
         return self.prepare(request).execute()
+
+    def replan_if_needed(
+        self,
+        request: ServicePlanningRequest,
+        observation: ReplanObservation,
+    ) -> ReplanningOutcome:
+        """Formal v2 replanning with persistent per-run policy state."""
+
+        prepared = self.prepare(request)
+        return prepared._with_private_planner(observation=observation, layered=False)
+
+    def execute_four_layer(
+        self,
+        request: ServicePlanningRequest,
+    ) -> FourLayerPlanningOutcome:
+        return self.prepare(request).execute_four_layer()
+
+    def replan_four_layer_if_needed(
+        self,
+        request: ServicePlanningRequest,
+        observation: ReplanObservation,
+    ) -> FourLayerReplanningOutcome:
+        return self.prepare(request).replan_four_layer_if_needed(observation)
 
 
 def _verified_planning_configuration_digest(
@@ -256,6 +392,60 @@ def _verified_planning_configuration_digest(
             "vessel/planner/replanning objects"
         )
     return planner_config_digest
+
+
+def _mark_replanning_baseline(
+    session: _PlanningSession,
+    *,
+    request: ServicePlanningRequest,
+    risk_revision: str,
+    route_avg_risk: float,
+    route_max_risk: float,
+) -> None:
+    session.trigger_evaluator.mark_replanned(
+        ReplanObservation(
+            observed_at=request.start_time,
+            risk_valid_time=request.start_time,
+            data_revision=request.input_revision,
+            risk_revision=risk_revision,
+            route_avg_risk=route_avg_risk,
+            route_max_risk=route_max_risk,
+        )
+    )
+
+
+def _validate_formal_replan(
+    session: _PlanningSession,
+    *,
+    request: ServicePlanningRequest,
+    observation: ReplanObservation,
+    risk_revision: str,
+    layered: bool,
+) -> None:
+    if observation.observed_at != request.start_time:
+        raise ContextMismatchError("正式重规划 observed_at 必须等于新请求 start_time")
+    if observation.risk_valid_time != request.start_time:
+        raise ContextMismatchError("正式重规划 risk_valid_time 必须等于新请求 start_time")
+    if observation.data_revision != request.input_revision:
+        raise ContextMismatchError("正式重规划 data_revision 必须等于 input_revision")
+    if observation.risk_revision != risk_revision:
+        raise ContextMismatchError("正式重规划 risk_revision 必须等于当前窗口 commit_id")
+    if layered:
+        previous = session.layered_store.latest(
+            run_id=request.run_context.run_id,
+            scenario_id=request.scenario.scenario_id,
+            generation_id=request.generation_id,
+        )
+    else:
+        previous = session.coordinator.store.latest(
+            run_id=request.run_context.run_id,
+            scenario_id=request.scenario.scenario_id,
+            generation_id=request.generation_id,
+        )
+    if previous is None:
+        raise ContextMismatchError("正式重规划前必须已有同代次已发布计划")
+    if request.input_revision <= previous.input_revision:
+        raise ContextMismatchError("正式重规划 input_revision 必须严格递增")
 
 
 __all__ = ["PreparedRiskPlanning", "RiskSourcePlanningIngress"]

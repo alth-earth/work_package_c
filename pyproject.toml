@@ -1,11 +1,11 @@
 [project]
 name = "arctic-route-planning"
-version = "0.3.0"
+version = "0.4.0"
 description = "北极航线工作包 C：预测风险驱动的时间依赖规划与滚动重规划"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
 dependencies = [
-    "arctic-route-contracts",
+    "arctic-route-contracts>=0.3,<0.4",
     "h5py>=3.13,<4",
     "h5netcdf>=1.6,<2",
     "jsonschema>=4.23,<5",

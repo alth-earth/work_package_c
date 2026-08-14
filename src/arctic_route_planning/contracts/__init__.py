@@ -9,6 +9,12 @@ from arctic_route_planning.contracts.codec import (
     risk_frame_to_document,
     validate_canonical_risk_id,
 )
+from arctic_route_planning.contracts.layered import (
+    FourLayerRoutePlanSet,
+    LayerRouteBundle,
+    PlanLayer,
+    RoutePlanV3,
+)
 from arctic_route_planning.contracts.models import (
     GridDefinition,
     PlanRequest,
@@ -36,8 +42,11 @@ __all__ = [
     "HOURLY_RISK_INTERVAL",
     "CommittedRiskSource",
     "CommittedRiskWindow",
+    "FourLayerRoutePlanSet",
     "GridDefinition",
     "InMemoryRiskSource",
+    "LayerRouteBundle",
+    "PlanLayer",
     "PlanRequest",
     "ProvenanceKind",
     "RiskFrame",
@@ -46,6 +55,7 @@ __all__ = [
     "RiskWindowQuery",
     "RouteMetrics",
     "RoutePlan",
+    "RoutePlanV3",
     "SourceReference",
     "Waypoint",
     "canonical_risk_frame_bytes",

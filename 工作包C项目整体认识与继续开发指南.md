@@ -1,7 +1,7 @@
 # 北极航线预测驱动动态规划系统：工作包 C 项目整体认识与继续开发指南
 
 > 文档定位：面向工作包 C 的接手开发者，先建立完整项目心智模型，再说明当前真实进度、A/B/C/D 交付边界、可用接口、已知矛盾，以及 C 下一步如何安全开发。  
-> 首次审阅日期：2026-08-09（Asia/Shanghai）；最近实施状态更新：2026-08-13  
+> 首次审阅日期：2026-08-09（Asia/Shanghai）；最近实施状态更新：2026-08-14
 > 核心依据：《北极航线预测驱动动态规划系统架构设计与实施方案 V2.0》  
 > 重要声明：本项目当前是科研演示系统，不是业务化海上导航系统，不能直接用于真实航行安全决策。
 
@@ -33,15 +33,17 @@
 | **[已冻结]** | 已在当前 A/C 代码、配置、Schema 和测试中落地的口径 |
 | **[历史审计]** | 2026-08-09 首次审计时的原始发现；保留用于追溯，但不再代表当前状态 |
 
-### 0.1 2026-08-13 当前状态（优先于下文历史叙述）
+### 0.1 2026-08-14 当前状态（优先于下文历史叙述）
 
 当前有效工程已经变为：
 
 ```text
-arctic_route_contracts → A 0.4.1 → B 0.1.0 → C 0.3.0 → D 尚未实现
+arctic_route_contracts 0.3.0 → A 0.4.2 → B 0.2.0 → C 0.4.0 → D 延期
+                              ▲              ▲              ▲
+                              └── orchestrator 0.1.0 ───────┘
 ```
 
-- [`work_package_b/`](work_package_b/) 已建立独立 Mamba + uv 工程，交付确定性的
+- [`work_package_b/`](../work_package_b/) 已建立独立 Mamba + uv 工程，交付确定性的
   `demo_unvalidated` 逐小时风险基线、canonical `RiskFrame`、持久 committed window、
   generation fence/lease 和 C 正式入口；旧 ZIP 继续永久隔离为 `legacy_unverified`。
 - A 现在向 B 交付深拷贝 `PreparedWindow` 与逐 data ID payload attestation，并提供公共
@@ -50,16 +52,19 @@ arctic_route_contracts → A 0.4.1 → B 0.1.0 → C 0.3.0 → D 尚未实现
 - C 通过公共 `RiskSourcePlanningIngress` 消费 B committed window；入口接收完整
   `PlanningConfiguration` 并从实际执行对象重算摘要，execution lease 覆盖规划和发布，执行时
   从 canonical 私有快照重建规划输入。同 run 的修订共享 coordinator，不同 run 隔离。
+- C 0.4.0 已新增 allowed-region 端点映射、`RoutePlanV3`、原子
+  `FourLayerRoutePlanSet`、四层 × 三目标编排和正式 v2/v3 重规划入口；A*、风险采样、网格
+  和成本核心未改。一次运行必须显式选择 v2 或 v3，不能双写。
 - 工程夹具已验证 12 类、96/168/216 h（97/169/217 帧）、两走廊相同
   `model_config_digest`、A→B→C formal RoutePlan；归档夹具还验证 A 发布→重启→公共精确恢复
   →B，以及恢复后 payload 篡改拒绝。
 - 上述是**工程合同夹具证据**。当前真实 A 长窗仍是历史 v1、旧 corridor、9 类，不能创建
   当前正式 RunContext；真实完整场景的 A→B→C 联调、风险/船舶校准和 D 仍未完成。
 
-除明确标为 2026-08-13 当前状态的段落外，下文大量 B“尚未实现”、旧版本号和旧测试数是
+除明确标为 2026-08-14 当前状态的段落外，下文大量 B“尚未实现”、旧版本号和旧测试数是
 2026-08-09/10 的历史审计证据，保留用于追溯，不再代表当前工作区。当前入口依次为
-[`ARCTIC_ROUTE_SYSTEM.md`](ARCTIC_ROUTE_SYSTEM.md)、
-[`work_package_b/README.md`](work_package_b/README.md) 和各包当前 README/合同。
+[`ARCTIC_ROUTE_SYSTEM.md`](../ARCTIC_ROUTE_SYSTEM.md)、
+[`work_package_b/README.md`](../work_package_b/README.md) 和各包当前 README/合同。
 
 ### 0.2 2026-08-10 修订说明（历史）
 
@@ -70,8 +75,8 @@ arctic_route_contracts → A 0.4.1 → B 0.1.0 → C 0.3.0 → D 尚未实现
 3. 当前 A 提交为 `2d38819`，C 提交为 `67f0322`，两个工作树均干净；
 4. A 的向过去 seek/static 问题已修复，最新 `make check` 为 32 tests passed；
 5. C 已成为独立、可运行、可测试的 Python 3.13 + Mamba + uv 项目，最新 `make check` 为 74 tests passed；
-6. 本条是历史状态：当时 B 没有被修改；当前实现位于 [`work_package_b/`](work_package_b/)，
-   原交接材料保留在 [`work_package_b_handoff/`](work_package_b_handoff/)。
+6. 本条是历史状态：当时 B 没有被修改；当前实现位于 [`work_package_b/`](../work_package_b/)，
+   原交接材料保留在 [`work_package_b_handoff/`](../work_package_b_handoff/)。
 
 当前最小闭环状态是：
 
@@ -90,7 +95,8 @@ A 正式实现 ──► B 正式工程基线 ──► C 正式边界/核心 �
 
 这是一个“**离线准备环境数据，但按模拟时钟在线执行风险计算、动态规划和渲染**”的科研演示系统。工作包 A、B、C 现均已形成独立工程；B 已生成逐小时、可追溯的正式形状
 `RiskFrame` 并通过 C committed ingress，但风险规则仍未经科学校准。A→B→C 工程合同闭环
-已由可复核夹具证明；真实完整场景闭环和 D 尚未完成。
+已由可复核夹具证明；C 的 v3 四层工程合同也已实现。真实完整场景闭环、科学校准和 D
+仍未完成。
 
 ### 1.2 最重要的五个判断
 
@@ -99,19 +105,21 @@ A 正式实现 ──► B 正式工程基线 ──► C 正式边界/核心 �
    连续化和正式 BC store，但没有训练权重、Q50/Q90 或真实标签校准，必须保持
    `demo_unvalidated`。
 3. **两份 `route_cost_grid` 只能作为历史原型样例。**它们内嵌的综合风险与同交付包当前的综合风险文件不一致，生成源码也未随包交付；其 `passable_mask` 实际只等于广播后的 `sea_mask`，不能代替正式 `hard_mask`。
-4. **C 已按“合同优先、夹具驱动”完成首版。**正式 `RiskFrame`/`RoutePlan`、时空采样、三目标时间依赖 A*、重规划和竞态围栏已经由测试固定；旧文件结构和 `route_cost_grid` 被隔离在适配层之外。
-5. **当前最高优先级转为真实源统一运行。**先按共享场景重采 A 的完整 v2 bundle，再用
-   当前 B/C 公共入口验收；随后才做风险/船舶科学校准和 C 四层路线。C 的采样、图、成本和
-   规划核心未因 B 接入修改。
+4. **C 已按“合同优先、夹具驱动”完成 0.4.0 工程基线。**正式 `RiskFrame`、v2/v3
+   `RoutePlan`、时空采样、三目标时间依赖 A*、四层整组、重规划和竞态围栏已经由测试固定；
+   旧文件结构和 `route_cost_grid` 被隔离在适配层之外。
+5. **当前最高优先级是实际完成真实源统一运行。**先按共享场景重采 A 的完整 v2 bundle，
+   再用根级运行器验收 B 的 169 帧、C v2 三目标、`+6 h` 重规划和 v3 四层 12 路线；随后
+   才做风险/船舶科学校准。C 的采样、图、成本和规划核心未因四层编排修改。
 
 ### 1.3 各工作包的当前定位
 
 | 工作包 | 目标职责 | 当前状态摘要 | C 应如何对待 |
 |---|---|---|---|
 | A | 获取/接收、规范化、索引、回放、AB 发布 | 主体能力已实现并工程化；向过去 seek 的 static 未来泄漏缺口已修复，仍有科学 QC/真实数据等限制 | B 通过稳定 AB 契约消费；C 不直接读取 A 内部数据库或缓存 |
-| B | 时间处理、连续化、风险分量、融合、BC 发布 | v0.1.0 工程基线已实现；正式形状/来源/代次/store 完整，科学规则仍 `demo_unvalidated` | 只经公共 A 输入和 C 合同；旧 ZIP 仅作历史证据 |
-| C | 时间依赖航线规划、候选路线、滚动重规划、CD 发布 | v0.3.0 已实现 canonical BC ingress、现有规划核心和发布；四层专用编排/科学校准仍待完成 | 通过 committed source 接 B；不同 run 隔离 coordinator |
-| D | 地图、风险、路线、船位和指标渲染 | 当前工作区未见正式项目 | C 先输出稳定 RoutePlan，不与 UI 内部逻辑耦合 |
+| B | 时间处理、连续化、风险分量、融合、BC 发布 | v0.2.0 已配置化全部数值规则并支持 full/suffix commit；科学规则仍 `demo_unvalidated` | 只经公共 A 输入和 C 合同；旧 ZIP 仅作历史证据 |
+| C | 时间依赖航线规划、候选路线、四层整组、滚动重规划、CD 发布 | v0.4.0 已实现 canonical BC ingress、v2 基线、v3 四层和原子发布；实源/科学验收待完成 | 通过 committed source 接 B；一次运行显式选择 v2 或 v3 |
+| D | 地图、风险、路线、船位和指标渲染 | 当前十日冲刺明确延期 | 以后只读消费稳定合同，不与 C 内部逻辑耦合 |
 
 ---
 
@@ -124,9 +132,9 @@ A 正式实现 ──► B 正式工程基线 ──► C 正式边界/核心 �
 | 架构设计压缩包 | `/mnt/c/Users/asd233/Desktop/挑战杯/挑战/北极航线预测驱动动态规划系统架构设计.zip` | 目标架构、模块边界、算法路线、缓存和接口的最高层依据 |
 | 架构正文 | 压缩包内 `a2dabb9c40fc421fb317303282202f09_md_full.md`，文档版本 V2.0，日期 2026-07-15 | 逐章追踪架构要求 |
 | 工作包 B 交付包 | `/mnt/c/Users/asd233/Desktop/挑战杯/挑战/交付包.zip` | 审计 B 当前代码、说明、测试和结果制品 |
-| 工作包 A 项目 | [`work_package_a/`](work_package_a/)；版本 `0.2.0`；当前提交 `2d38819` | 审计当前 A 的真实实现、接口、测试和限制 |
-| 工作包 C 项目 | [`work_package_c/`](work_package_c/)；当前提交 `67f0322` | 核对 C 已落地合同、算法、配置、适配器、CLI 和测试 |
-| B 完善交接包 | [`work_package_b_handoff/`](work_package_b_handoff/) | 提供给 B 负责人的矛盾、字段、任务、AI 约束和验收文档 |
+| 工作包 A 项目 | [`work_package_a/`](../work_package_a/)；版本 `0.2.0`；当前提交 `2d38819` | 2026-08-09 历史审计时的实现快照 |
+| 工作包 C 项目 | [`work_package_c/`](./)；当前提交 `67f0322` | 2026-08-10 历史审计时的实现快照 |
+| B 完善交接包 | [`work_package_b_handoff/`](../work_package_b_handoff/) | 提供给 B 负责人的矛盾、字段、任务、AI 约束和验收文档 |
 | 用户补充说明 | 本次对话 | 确认 B 尚未开发完成；完整 B 还应包含类似插帧的预测模型并输出逐小时风险序列；场景初步考虑两条航线和散货船 |
 
 压缩包完整性检查均通过。为保证资料快照可追踪：
@@ -393,7 +401,7 @@ A→B→C→D 动态闭环已经完成
 ### 7.2 B 交付包结构
 
 > **[历史审计]** 本节记录 2026-08-09 的旧 ZIP 结构。上段“尚无正式
-> `work_package_b/`”已失效；当前工程见 [`work_package_b/`](work_package_b/) 和本文件 0.1 节。
+> `work_package_b/`”已失效；当前工程见 [`work_package_b/`](../work_package_b/) 和本文件 0.1 节。
 
 ```text
 交付包/
@@ -983,8 +991,8 @@ A -- StandardDataFrame --> B -- RiskFrame --> C -- RoutePlan --> D
 ### 10.3 B→C：历史 `RiskFrame v1`（当前正式合同已为 v2）
 
 > **[历史审计]** 下述字段是 2026-08-09 的 v1 基线。当前正式真源为
-> [`work_package_c/docs/BC_CONTRACT.md`](work_package_c/docs/BC_CONTRACT.md) 与
-> [`work_package_c/schemas/risk-frame-v2.schema.json`](work_package_c/schemas/risk-frame-v2.schema.json)；
+> [`docs/BC_CONTRACT.md`](docs/BC_CONTRACT.md) 与
+> [`schemas/risk-frame-v2.schema.json`](schemas/risk-frame-v2.schema.json)；
 > 当前 B 已发布 canonical v2 committed window。
 
 **[已冻结][代码确认]** Python 真源为 `work_package_c/src/arctic_route_planning/contracts/models.py`，跨语言结构为 `work_package_c/schemas/risk-frame-v1.schema.json`。当前顶层对象是：
@@ -1528,32 +1536,32 @@ BC/CD 契约最好由一个小型共享契约包或共享 Schema 维护，而不
 
 ### 工作包 A
 
-- 项目入口与当前边界：[`work_package_a/README.md`](work_package_a/README.md)
-- AI/工程不变量：[`work_package_a/AGENTS.md`](work_package_a/AGENTS.md)
-- AB 已实现接口：[`work_package_a/docs/AB_INTERFACE.md`](work_package_a/docs/AB_INTERFACE.md)
-- BC/CD 现行交接契约：[`work_package_a/docs/BCD_HANDOFF.md`](work_package_a/docs/BCD_HANDOFF.md)
-- 架构追踪：[`work_package_a/docs/ARCHITECTURE_TRACE.md`](work_package_a/docs/ARCHITECTURE_TRACE.md)
-- 发布时间规则：[`work_package_a/docs/ISSUE_TIME_POLICY.md`](work_package_a/docs/ISSUE_TIME_POLICY.md)
-- 旧下载器迁移：[`work_package_a/docs/LEGACY_MIGRATION.md`](work_package_a/docs/LEGACY_MIGRATION.md)
-- AB 对象：[`work_package_a/src/arctic_route_data/models.py`](work_package_a/src/arctic_route_data/models.py)
-- manifest：[`work_package_a/src/arctic_route_data/manifest.py`](work_package_a/src/arctic_route_data/manifest.py)
-- 数据源：[`work_package_a/src/arctic_route_data/sources.py`](work_package_a/src/arctic_route_data/sources.py)
-- 模拟时钟：[`work_package_a/src/arctic_route_data/clock.py`](work_package_a/src/arctic_route_data/clock.py)
-- AB 缓存：[`work_package_a/src/arctic_route_data/cache.py`](work_package_a/src/arctic_route_data/cache.py)
-- A 编排服务：[`work_package_a/src/arctic_route_data/service.py`](work_package_a/src/arctic_route_data/service.py)
+- 项目入口与当前边界：[`work_package_a/README.md`](../work_package_a/README.md)
+- AI/工程不变量：[`work_package_a/AGENTS.md`](../work_package_a/AGENTS.md)
+- AB 已实现接口：[`work_package_a/docs/AB_INTERFACE.md`](../work_package_a/docs/AB_INTERFACE.md)
+- BC/CD 现行交接契约：[`work_package_a/docs/BCD_HANDOFF.md`](../work_package_a/docs/BCD_HANDOFF.md)
+- 架构追踪：[`work_package_a/docs/ARCHITECTURE_TRACE.md`](../work_package_a/docs/ARCHITECTURE_TRACE.md)
+- 发布时间规则：[`work_package_a/docs/ISSUE_TIME_POLICY.md`](../work_package_a/docs/ISSUE_TIME_POLICY.md)
+- 旧下载器迁移：[`work_package_a/docs/LEGACY_MIGRATION.md`](../work_package_a/docs/LEGACY_MIGRATION.md)
+- AB 对象：[`work_package_a/src/arctic_route_data/models.py`](../work_package_a/src/arctic_route_data/models.py)
+- manifest：[`work_package_a/src/arctic_route_data/manifest.py`](../work_package_a/src/arctic_route_data/manifest.py)
+- 数据源：[`work_package_a/src/arctic_route_data/sources.py`](../work_package_a/src/arctic_route_data/sources.py)
+- 模拟时钟：[`work_package_a/src/arctic_route_data/clock.py`](../work_package_a/src/arctic_route_data/clock.py)
+- AB 缓存：[`work_package_a/src/arctic_route_data/cache.py`](../work_package_a/src/arctic_route_data/cache.py)
+- A 编排服务：[`work_package_a/src/arctic_route_data/service.py`](../work_package_a/src/arctic_route_data/service.py)
 
 ### 工作包 C 与 B 交接
 
-- C 项目入口：[`work_package_c/README.md`](work_package_c/README.md)
-- C 决策记录：[`work_package_c/docs/DECISIONS.md`](work_package_c/docs/DECISIONS.md)
-- 正式 BC 合同：[`work_package_c/docs/BC_CONTRACT.md`](work_package_c/docs/BC_CONTRACT.md)
-- BC Python 模型：[`work_package_c/src/arctic_route_planning/contracts/models.py`](work_package_c/src/arctic_route_planning/contracts/models.py)
-- `RiskSource` 协议：[`work_package_c/src/arctic_route_planning/contracts/sources.py`](work_package_c/src/arctic_route_planning/contracts/sources.py)
-- 正式 BC v2 JSON Schema：[`work_package_c/schemas/risk-frame-v2.schema.json`](work_package_c/schemas/risk-frame-v2.schema.json)
-- 历史 BC v1 JSON Schema：[`work_package_c/schemas/risk-frame-v1.schema.json`](work_package_c/schemas/risk-frame-v1.schema.json)
-- B 交接目录：[`work_package_b_handoff/README.md`](work_package_b_handoff/README.md)
-- B 矛盾、字段和开发任务：[`work_package_b_handoff/工作包B矛盾与完善开发交接书.md`](work_package_b_handoff/工作包B矛盾与完善开发交接书.md)
-- B 的 AI 约束模板：[`work_package_b_handoff/AGENTS.md`](work_package_b_handoff/AGENTS.md)
+- C 项目入口：[`README.md`](README.md)
+- C 决策记录：[`docs/DECISIONS.md`](docs/DECISIONS.md)
+- 正式 BC 合同：[`docs/BC_CONTRACT.md`](docs/BC_CONTRACT.md)
+- BC Python 模型：[`src/arctic_route_planning/contracts/models.py`](src/arctic_route_planning/contracts/models.py)
+- `RiskSource` 协议：[`src/arctic_route_planning/contracts/sources.py`](src/arctic_route_planning/contracts/sources.py)
+- 正式 BC v2 JSON Schema：[`schemas/risk-frame-v2.schema.json`](schemas/risk-frame-v2.schema.json)
+- 历史 BC v1 JSON Schema：[`schemas/risk-frame-v1.schema.json`](schemas/risk-frame-v1.schema.json)
+- B 交接目录：[`work_package_b_handoff/README.md`](../work_package_b_handoff/README.md)
+- B 矛盾、字段和开发任务：[`工作包B矛盾与完善开发交接书.md`](../work_package_b_handoff/工作包B矛盾与完善开发交接书.md)
+- B 的 AI 约束模板：[`work_package_b_handoff/AGENTS.md`](../work_package_b_handoff/AGENTS.md)
 
 ### 架构与 B 交付包
 

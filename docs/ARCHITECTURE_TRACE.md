@@ -1,35 +1,35 @@
 # 架构追踪与矛盾处理
 
-实现依据（当前 `0.3.x` 正式 BC 边界基线）：
+实现依据（当前 `0.4.0` 工程基线）：
 
-- `北极航线预测驱动动态规划系统架构设计与实施方案 V2.0`（2026-07-15）；
-- `/root/my_project/工作包C项目整体认识与继续开发指南.md`（2026-08-09 审阅版）；
-- 用户冻结决策：B 给环境影响、C 算最终有效航速；场景、航区、船舶事实已迁移到独立共享包 `arctic_route_contracts`。
+- `北极航线预测驱动动态规划系统架构设计与实施方案 V2.0`；
+- [工作包 C 继续开发指南](../工作包C项目整体认识与继续开发指南.md)；
+- 用户冻结决策：A 提供正式运行数据，B 给环境影响，C 算最终有效航速；共享场景、航区、
+  船舶和 `RunContext` 来自 `arctic_route_contracts`；开发冲刺最多 10 个自然日。
 
-| 需求/矛盾 | 本版处理 | 证据位置 |
+| 需求/矛盾 | 0.4.0 处理 | 证据位置 |
 |---|---|---|
-| 正式 B 不能复用旧 ZIP/私有 C 核心 | `work_package_b/` 只用公共 codec、committed-window 和 ingress；旧制品仍隔离，核心不知道旧文件名 | `contracts/`, `ingress.py`, `adapters/`, 跨包集成测试 |
-| 旧 `route_cost_grid` 与当前风险不一致 | 适配器明确拒绝；C 从 `RiskFrame` 重新计算边成本 | `adapters/legacy_b.py` |
-| 有效航速责任不清 | 正式 B 帧必须给 `(0,1]` 综合环境因子；C 应用船型底线和速度曲线。风险/置信度不映射为物理减速 | `contracts/models.py`, `cost/vessel.py` |
-| 24 h BC 窗口不足以覆盖 2–5.5 天 | 规划核心必须有 ETA 全覆盖；合成演示生成全场景时域，稀疏旧制品明确失败。未实现伪外推或隐式背景场 | `risk/sampler.py`, `cli.py` |
-| 长航线是主线、短航线是迁移测试线 | 共享包维护两条 Corridor；CLI 默认测试线快速冒烟，主线冻结调参后同核回归，测试线不得重调 | `arctic_route_contracts/configs/`, `tests/contract/test_configuration.py` |
-| 共享配置同名但内容已被原地修改 | 服务与 CLI 统一重算 Scenario/Corridor/Vessel 内容摘要及公共 `config_digest`，并与 `RunContext` 严格比对；仅 ID/version 相同也会失败 | `context_validation.py`, `tests/integration/test_service.py`, `tests/integration/test_cli.py` |
-| 场景、上下文和风险窗口可能跨越不同模拟时段 | Scenario 的起止必须与 `RunContext` 完全相等；出发和最大搜索时域不得越过上下文；CLI 对任何越界 RiskFrame 选择 fail closed，不静默裁剪 | `service.py`, `cli.py`, `tests/integration/` |
-| 历史最佳估计的知识时间晚于模拟时间 | `retrospective_best_estimate` 允许晚到知识；`frozen_forecast` 仍要求 `as_of_time <= start_time`。风险帧知识截止不得晚于请求截止 | `service.py`, `risk/sampler.py` |
-| 合成/旧风险的路线可能被误当正式输出 | `provenance` 进入 RiskIdentity 和 RoutePlan；formal planner 缺可验证身份或身份不匹配均拒绝 | `risk/sampler.py`, `service.py`, `contracts/models.py` |
-| 旧网格的场景坐标与硬掩膜/连通分量不完全吻合 | 规划核心严格拒绝；CLI 只在显式距离上限内映射并原子写出审计文件 | `grid/regular.py`, `cli.py`, `endpoint-mapping.json` |
-| seek 向过去跳转会保留未来发布的 A 静态帧 | A 跨代只保留 `issue_time <= simulation_time` 的 static；缺省时刻安全清空 | `work_package_a/src/arctic_route_data/cache.py` 及回归测试 |
-| C 配置摘要可与实际执行参数脱离 | 正式 ingress 接收完整 `PlanningConfiguration`，从 vessel model、planner、replanning 对象重算摘要并用同一配置构造运行组件 | `ingress.py`, `tests/integration/test_formal_ingress.py` |
-| 演示需要可运行，但粗网格会产生较大端点调整 | `make demo` 优先在 5×5 网格快速冒烟，输出完整调整距离。它不是科学基线；细网格应通过 CLI 参数显式选择并单独做性能验证 | `README.md`, `cli.py`, `output/demo/` |
+| 正式 B 不能复用旧 ZIP 或依赖 C 私有核心 | B 只实现公共 canonical codec、committed-window source；旧制品保持隔离 | `contracts/`, `ingress.py`, `adapters/` |
+| B 窗口可能在规划期间切换 | prepare 后执行仍持有同一 source execution lease，复核 commit 并使用 canonical 私有快照 | `ingress.py` |
+| 起终点取整可能落在 allowed region 外、陆地或断开的海区 | 公共 endpoint mapping 先检查 allowed region、hard mask、距离，再要求同一连通分量 | `endpoints.py`, `tests/unit/test_endpoints.py` |
+| 有效航速责任不清 | B 提供 `(0,1]` 环境因子；C 应用船型速度曲线和底线。风险/置信度不重复映射为物理减速 | `contracts/models.py`, `cost/vessel.py` |
+| 24 h 风险窗不足以覆盖长航程 | 正式入口要求 ETA 全覆盖的逐小时闭区间；不外推、不隐式补安全背景场 | `risk/sampler.py`, `ingress.py` |
+| 四层可能被实现成四次无关运行 | 四层共享全航程推荐线、同一 request/revision、B 窗口和 execution lease；下层锚点由全航程线派生 | `contracts/layered.py`, `layered.py`, `ingress.py` |
+| 下层提前到终点时 `destination_reached` 语义不清 | 截止前全航程结束则用业务终点并标真；否则仅表示到达分层锚点 | `contracts/layered.py` |
+| 任一层失败仍可能留下部分结果 | 先内存生成四层 12 路线，完整校验和 canonical ID 后，由 layered latest 一次原子发布 | `layered.py`, `publishing/layered_store.py` |
+| 旧任务可能迟到覆盖新四层整组 | generation/request/revision、取消状态和 canonical digest 在发布时再次校验 | `publishing/layered_store.py`, `replanning/` |
+| v2 与 v3 双写会产生两个“正式最新值” | v2 保留历史读取、回归和 Day 7 门槛；新运行由上层显式选择一个合同，v3 推广后不双写 v2 | `ingress.py`, `docs/CD_CONTRACT.md` |
+| 配置摘要可与实际执行参数脱离 | ingress 从完整 `PlanningConfiguration` 重算摘要并与请求核对 | `ingress.py`, `tests/integration/test_formal_ingress.py` |
+| 同名共享配置内容可能原地变化 | 服务和 CLI 重算 Scenario/Corridor/Vessel 内容摘要及公共 `config_digest` | `context_validation.py`, `tests/contract/test_configuration.py` |
+| 主线设计窗、航区上限和开发期限被混用 | 主线/测试线默认 168/96 h，上限仍 216/144 h；10 天只表示开发冲刺 | `../README.md`, `../工作包C项目整体认识与继续开发指南.md` |
+| 工程夹具可能被误报为实源验收 | provenance 贯穿输入/输出，文档明确真实 12 类、168 h A bundle 尚未交付 | `contracts/`, `docs/ACCEPTANCE.md` |
 
 ## 未假装完成的部分
 
-- B 已交付 `demo_unvalidated` 的确定性逐小时连续化、陆海 hard mask、置信度和速度影响
-  工程基线；真实标签校准、方向相关物理模型、Q50/Q90/概率模型和神经网络仍未交付；
-- A→B→C 已完成公共接口夹具与归档重启测试，但指定共享场景的真实 12/14 类长窗尚未
-  验收，不能称为实源闭环；
-- 演示散货船未经冰级、POLARIS/RIO、历史航行或真船性能校准；
-- 转弯半径已进入船型合同，v1 基线仅计算方向变化惩罚，还没有几何航迹平滑/可操纵性求解；
-- v1 不允许等待，不包含 D* Lite、MPC 或真实海事导航规则；
-- 5×5 默认网格只是快速工程冒烟，不是路线质量评估网格。
-- development-only 合成/旧制品上下文由 C 的隔离工厂构造，不调用 A 正式 DatasetBundle 验收入口，也不得作为正式上下文发布。
+- A→B→C 公共接口和 v3 四层工程能力已实现，但主航区真实 12 类、168 h bundle 尚未验收；
+- B 仍为确定性 `demo_unvalidated` 工程基线，未交付真实标签校准、Q50/Q90、概率模型或
+  方向相关物理响应；
+- C 的船型、操舵、转弯、净空、成本权重和重规划阈值未经真船/冰级/航次校准；
+- 当前 hard mask 不能证明净水深、法律限制区或完整海事规则；
+- 0–2/2–4/4–6 h 可信度分级、等待、D* Lite、MPC 和 D 消费不属于 0.4.0 已验收范围；
+- 默认 5×5 合成 smoke 只验证流程，不是路线质量或性能基线。
