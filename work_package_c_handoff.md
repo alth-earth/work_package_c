@@ -1,65 +1,58 @@
 > [!NOTE]
 > **文档治理声明**
->
-> - 文件角色：工作包 C 的唯一详细交接入口，供人和 AI 判断现状、边界、依赖与接手顺序。
-> - 改造时间：2026-08-14（Asia/Shanghai）。
-> - 原文件去向：旧综合指南已归档为
->   `工作包C项目整体认识与继续开发指南.archive-20260814-pre-governance.md`；旧 README 已归档为
->   `README.archive-20260814-pre-governance.md`。
-> - 改造原因：把历史审计、当前状态、架构说明和操作步骤分责，消除旧 v1/B 原型叙述与
->   C 0.4.0 现状混杂的问题。
+> - 文件角色：工作包 C 当前唯一详细交接入口，供人和 AI 判断边界、现状、演示目标与接手顺序。
+> - 改造时间：2026-08-15（Asia/Shanghai）。
+> - 原文件去向：[work_package_c_handoff_归档_20260815.md](work_package_c_handoff_归档_20260815.md)。
+> - 改造原因：落实挑战杯工程演示优先、双运行模式、散货船参数和非阻塞科学接口。
 
 # 工作包 C 交接说明
 
-> 状态快照：2026-08-14；包版本 `0.4.0`；整体状态 **进行中**。
-> 工程合同与规划主线已具备，真实来源闭环、科学校准和 D 消费验收尚未完成。
-
 ## 1. 项目目标与边界
 
-工作包 C 把 B 发布的时空风险窗转换为可审计路线计划。核心链路是：端点映射 → 风险窗
-准备 → 按候选边 ETA 采样 → 时间依赖 A* → 航速/成本/指标计算 → 原子发布 → 按事件
-重规划。
+C 把 B 的时空风险窗口转换为候选航线、ETA、风险/成本指标和重规划结果。挑战杯目标是让路线
+不穿陆地、没有明显荒谬绕行、随风险变化而合理更新，并向 D 提供稳定制品。
 
-C 负责：
+C 负责：按 ETA 采样风险、组合演示船型得到最终速度、时间依赖规划、三目标/v3 四层、发布
+围栏和重规划。C 不负责 A 下载、B 风险模型、D 页面，也不要求科学或适航认证。
 
-- 将 B 的 `environment_speed_factor` 应用于版本化船模，计算最终航速、ETA 和成本；
-- 生成 v2 三目标路线，或 v3 四层 × 三目标共 12 条路线的原子整组；
-- 校验上下文、时间窗、身份与来源，并阻止旧 generation/request/revision 覆盖新结果；
-- 提供重规划协调、序列化、Schema 和 latest store。
+## 2. 挑战杯统一口径
 
-C 不负责：
+- 默认稳定演示：读取 A/B 冻结本地制品，按模拟时钟和 generation 运行，可断网重演。
+- 历史回放：严格保持 `issue_time <= as_of_time <= simulation_time`。
+- 工程演示通过即成功；科学准确、真船校准和跨专业签字不是 C 完成条件。
+- 必需船型/成本参数优先公开典型值，次选透明拟合，否则使用明确标注的演示默认值。
+- 五类专业接口保留，但本轮及以后默认只维护替换点、来源、版本和状态字段。
+- 项目负责人对 C 有完整决策权。
 
-- A 的数据下载、规范化、归档和回放；
-- B 的预测、风险融合和模型权重；
-- D 的可视化、交互和业务展示；
-- 航海安全认证或科学参数校准。
+## 3. 当前状态
 
-正式集成不得读取 A/B 私有数据库、缓存或实现模块，只能使用
-[`arctic_route_contracts`](../arctic_route_contracts/) 和版本化公共接口。
-
-## 2. 当前状态
-
-| 能力域 | 状态 | 当前口径 |
+| 能力 | 状态 | 当前口径 |
 |---|---|---|
-| 包、环境与工程检查 | 已完成 | Python 3.13、Mamba + uv、锁文件和 CLI 检查可复现 |
-| 端点映射与公共上下文 | 已完成 | `map_corridor_endpoints(...)`；共享 `RunContext.v2` 与配置摘要校验 |
-| B→C 正式入口 | 已完成 | `CommittedRiskSource`、逐小时 canonical window、execution lease |
-| v2 三目标规划 | 已完成 | 最短时间、最低风险、综合成本；时间依赖 A* |
-| v3 四层规划 | 已完成 | 四层共享同一输入快照和身份，12 条路线整组原子发布 |
-| 滚动重规划与发布围栏 | 已完成 | generation/request/revision/cancel fencing |
-| v1/旧 B 支持 | 已冻结 | 只允许显式 `legacy_unverified` 审计/迁移，不进正式 latest |
-| 当前主航区真实 A→B→C 验收 | 待执行 | 尚无可据以宣称实源闭环通过的 C 侧验收制品 |
-| 风险模型与船舶性能科学校准 | 待执行 | 当前校准状态为 `demo_unvalidated` |
-| D 端消费/展示验收 | 待执行 | 需由 D 对稳定 v2/v3 合同完成消费者测试 |
+| 环境与工程门禁 | 已完成 | Python 3.13、Mamba+uv、lock/CLI；2026-08-14 为 138 passed |
+| 正式 B→C ingress | 已完成 | canonical hourly committed window + execution lease |
+| v2 三目标 | 已完成 | `fastest`、`low_risk`、`recommended` |
+| v3 四层十二路线 | 已完成 | 整组原子发布，单次运行显式选择 |
+| 重规划与围栏 | 已完成 | generation/request/revision/cancel fencing |
+| 比赛冻结场景验收 | 进行中 | 仍需对真实演示数据检查路线质量和性能 |
+| D 消费 | 待完成 | 挑战杯展示闭环必需 |
+| 科学校准 | 非阻塞 | 保持 `demo_unvalidated` 和接口 |
 
-来源合法性和科学可信度是两个独立维度：
+## 4. 已完成清单
 
-- `formal` provenance：来源、身份、时间和合同链合格；
-- `demo_unvalidated` calibration：模型/船舶参数尚未经科学或真船校准。
+| 功能 | 路径 |
+|---|---|
+| 公共模型/Schema | `src/arctic_route_planning/contracts/`、`schemas/` |
+| 正式 ingress 与快照 | `ingress.py` |
+| 有界端点映射 | `endpoints.py` |
+| 时空风险采样 | `risk/sampler.py` |
+| 时间依赖 A* | `planners/time_dependent_astar.py` |
+| 船速和成本 | `cost/` |
+| v2/v3 服务 | `service.py`、`layered.py` |
+| 重规划 | `replanning/` |
+| 原子 latest 与 codec | `publishing/` |
+| legacy 隔离 | `adapters/legacy_b.py` |
 
-因此正式来源可以同时是未校准模型，任何文档或界面都不得把 `formal` 写成“科学有效”。
-
-## 3. 已完成清单
+关键实现明细（源自：work_package_c_handoff_归档_20260815.md）：
 
 | 功能 | 关键路径 | 主要验证 |
 |---|---|---|
@@ -77,69 +70,105 @@ C 不负责：
 | JSON/GeoJSON 合同 | `schemas/` | `test_schemas.py` |
 | 显式旧制品隔离 | `adapters/legacy_b.py` | `test_legacy_adapter.py` |
 
-当前本地复验命令 `UV_OFFLINE=1 make check` 的结果为 `138 passed, 1 skipped`。唯一跳过项
-依赖一个未提供的、路径写死为 `/mnt/c/.../交付包.zip` 的可选旧制品；它不影响正式 v2/v3
-主线，但报告时必须保留 skipped 事实。
+当前本地复验命令 `UV_OFFLINE=1 make check` 的结果为 138 passed。
 
-## 4. 未完成与待办
+## 5. 两种运行模式与缓存
 
-| 优先级 | 任务 | 前置依赖 | 完成证据 |
-|---|---|---|---|
-| P0 | 用当前 A 的真实、完整目标时窗经当前 B 生成并提交 RiskFrame v2 | A/B handoff 均确认同一 RunContext、时域、变量和 provenance | 保存 A bundle、B commit、C request 与 C 输出的身份/摘要；C 正式入口通过 |
-| P0 | 验证真实窗口覆盖路线实际 ETA，拒绝未来、陈旧、缺帧或上下文不匹配输入 | 上一项 | 通过用例与各类拒绝用例均有日志/测试制品 |
-| P0 | 与 D 完成 v2/v3 消费合同验收 | D 明确选择 v2 或 v3；确认原子 latest 读取方式 | D 消费者测试、Schema 校验和失败语义记录 |
-| P1 | 校准风险、环境速度因子和船舶性能参数 | 可追溯观测/真船数据、评估协议与领域评审 | 参数版本、数据版本、误差指标和评审结论齐全后才标 `calibrated` |
-| P1 | 固化系统级实源回放/重规划验收 | P0 实源链路 | 同一 generation 的初始计划、`+6 h` 或业务事件重规划及围栏证据 |
-| P2 | 按 D/演示需求扩展可观测性和制品保留策略 | D 需求稳定 | 不破坏公共合同的指标、日志和保留策略 |
+| 模式 | C 的行为 |
+|---|---|
+| 历史回放/验证 | 只消费模拟时刻已可见的风险，拒绝未来信息并保留比较指标 |
+| 稳定演示 | 读取预置 BC 窗口，仍按 simulation time、版本、generation 规划并至少重规划一次 |
 
-具体日期和人员只在 [`ABC_10_DAY_SPRINT.md`](../ABC_10_DAY_SPRINT.md) 维护，本文件不复制
-逐日排期。
-
-## 5. 技术架构要点与关键决策
-
-```text
-RunContext.v2 + committed RiskFrame v2 window
-                  │
-                  ▼
-endpoint mapping ── RiskSourcePlanningIngress.prepare()
-                  │  validates identity, hourly coverage, canonical commit
-                  │  retains execution lease + private snapshot
-                  ▼
-RiskSampler ── time-dependent A* ── vessel speed/cost
-                  │
-                  ├─ execute()             → RoutePlan v2 × 3
-                  └─ execute_four_layer()  → FourLayerRoutePlanSet v3 × 12
-                                                   │
-                                                   ▼
-                                        fenced atomic latest → D
-```
+C 只消费按 `valid_time` 排序的 BC 风险窗口；CD 以原子 latest 发布当前路线与指标并保留候选，
+D 不持有 C 计算锁。旧 generation/request/revision 不能覆盖当前结果。
 
 与架构蓝本一致之处：A/B/C/D 分责、预测驱动动态规划、滚动更新、版本化中间结果和多目标
-路线仍是主干。当前实现对蓝本作了可验证的工程化收敛：
+路线仍是主干。工程化收敛（源自：work_package_c_handoff_归档_20260815.md）：
 
 - 共享上下文集中到 `arctic_route_contracts`，不靠同名文件或私有模块隐式对齐；
-- BC 正式边界是逐小时、canonical、原子 committed window 和 execution lease，不是松散静态文件；
+- BC 正式边界是逐小时、canonical、原子 committed window 和 execution lease，不是松散静态
+  文件；
 - C→D 已从旧 v1 演进为 v2 兼容基线与 v3 原子四层整组；
 - generation/request/revision、内容摘要和 publication token 形成并发/回放围栏；
 - 端点由 orchestrator 显式映射并留下审计结果，C 不静默吸附到任意网格节点。
 
-尚未达到蓝本最终目标的是：真实来源闭环、科学校准和 D 应用验收。详细决策见
-[`ARCHITECTURE_AND_DECISIONS.md`](docs/ARCHITECTURE_AND_DECISIONS.md) 和
-[`DECISIONS.md`](docs/DECISIONS.md)。
+## 6. 航线与端点
 
-## 6. 已知问题、坑与风险
+1. 先完成 `offshore_murmansk_to_offshore_dikson`：69.15°N, 33.60°E →
+   73.55°N, 80.40°E；端点修正必须留在各自允许区域。
+2. 后迁移 `tromso_to_isfjorden_outer`：69.75°N, 19.00°E → 78.15°N, 13.00°E。
+3. 朗伊尔城 78.22°N, 15.65°E 只用于 AIS 完整航次识别；峡湾内部不参与路线优化评价。
 
-1. **证据等级混淆**：synthetic 通过、formal provenance 和 calibrated 三者不能互相替代。
-2. **时域不足**：C 不等待也不外推；B 窗口必须覆盖搜索实际 ETA，缺一小时也会拒绝。
-3. **缺测误判安全**：未知风险必须由 hard mask 或 `confidence=0` 保守处理，不能补零。
-4. **重复减速**：B 提供环境因子，C 计算最终速度；不得再从 risk/confidence 推导减速。
-5. **跨代覆盖**：任何自定义发布器若绕开 token/identity 校验，都可能让旧结果覆盖新结果。
-6. **v2/v3 双写**：同一运行只能显式选择一种发布路径，不能自动双写或拼接历史结果。
-7. **旧制品诱导**：v1 和旧 B ZIP 缺少当前身份/时域证据，只能标 `legacy_unverified`。
-8. **端点沉默吸附**：调用方必须保存映射距离/理由并遵守阈值；不得绕过 orchestrator 映射。
-9. **文档漂移**：归档综合指南含 74 tests、B 未工程化、v1 正式等历史说法，不可回填现状。
+完整 allowed region 见 [系统权威](../ARCTIC_ROUTE_SYSTEM.md)与 contracts corridor 配置。旧
+`tromso_to_svalbard`/朗伊尔城算法终点只用于历史审计。
 
-## 7. 数据、模型与输出位置
+## 7. 船型与参数
+
+当前使用明确标注的“演示散货船参数集”。共享 `nordic_odyssey_reference_v1` 提供公开参考
+尺寸、Ice Class 1A 和标称速度，但不是校准性能模型，Ice Class 1A 不等于 PC6。
+
+C 仍需版本化表达经济/最大/最小速度、转向能力、风浪流相对航向性能、等待策略、吃水/净空等。
+参数不足时使用公开典型值或透明演示值；不得把演示值写成真船结果。当前等待动作仍关闭。
+
+## 8. 未完成与待办
+
+### P0：挑战杯演示
+
+1. 使用冻结 A/B 场景运行 v2 三目标并保存输入/输出摘要。
+2. 人工检查路线不穿陆、ETA 递增、端点合理、无明显绕行和风险错位。
+3. 推进模拟时钟或更新风险，完成至少一次可解释重规划。
+4. 向 D 提供原子 JSON/GeoJSON、路线指标、风险帧引用和重规划原因。
+5. 与 orchestrator 完成两次断网演示和失败恢复。
+
+### P1：工程增强
+
+- 分段测量 RiskSampler/A* 性能，设置安全超时和阶段报告；
+- 有余量时用同一冻结输入验证 v3 四层整组；
+- 完成第二走廊迁移 smoke；
+- 增强 D 所需历史/候选制品保留，但不破坏合同。
+
+### P2：仅保留接口
+
+- 真船、风险、法规和科学校准；
+- 等待、方向相关完整性能、净水深 hard mask；
+- D* Lite/LPA*/MPC 等算法升级。
+
+P2 不阻塞挑战杯完成。
+
+## 9. 工程演示验收
+
+详见 [ACCEPTANCE.md](docs/ACCEPTANCE.md)。核心不是“科学正确”，而是：合同全绿、路线逻辑无
+明显错误、风险变化能驱动合理路线变化、重规划和 D 展示稳定、参数和局限清楚。
+
+```bash
+cd /root/my_project/work_package_c
+UV_OFFLINE=1 make check
+```
+
+## 10. 已知风险
+
+- 真实冻结场景的规划性能和路线质量尚未完整复验；
+- 编排器集成长运行曾超过 24 分钟，缺阶段预算；
+- 当前船型、风险和成本参数未科学校准；
+- bathymetry/法规区不是正式 hard constraints；
+- D 仍未实现；
+- v2/v3 同时展示会增加性能和解释复杂度。
+
+风险保持记录，但只有 P0 项进入当前挑战杯主线。
+
+补充风险清单（源自：work_package_c_handoff_归档_20260815.md）：
+
+1. **证据等级混淆**：synthetic 通过、formal provenance 和 calibrated 三者不能互相替代；
+2. **时域不足**：C 不等待也不外推；B 窗口必须覆盖搜索实际 ETA，缺一小时也会拒绝；
+3. **缺测误判安全**：未知风险必须由 hard mask 或 `confidence=0` 保守处理，不能补零；
+4. **重复减速**：B 提供环境因子，C 计算最终速度；不得再从 risk/confidence 推导减速；
+5. **跨代覆盖**：自定义发布器若绕开 token/identity 校验，可能让旧结果覆盖新结果；
+6. **v2/v3 双写**：同一运行只能显式选择一种发布路径，不能自动双写或拼接历史结果；
+7. **旧制品诱导**：v1 和旧 B ZIP 缺少当前身份/时域证据，只能标 `legacy_unverified`；
+8. **端点沉默吸附**：调用方必须保存映射距离/理由并遵守阈值，不得绕过 orchestrator 映射；
+9. **文档漂移**：旧综合指南含 74 tests、B 未工程化、v1 正式等历史说法，不可回填现状。
+
+## 10.1 数据、模型与输出位置（源自：work_package_c_handoff_归档_20260815.md）
 
 | 内容 | 位置/责任 | 说明 |
 |---|---|---|
@@ -154,33 +183,15 @@ RiskSampler ── time-dependent A* ── vessel speed/cost
 `configs/scenarios/` 与 `configs/vessels/` 只保留旧夹具说明；正式共享配置不得从这些目录
 重新分叉。
 
-## 8. 下一步接手顺序
+## 11. 相关入口
 
-1. 先阅读本 handoff、[`BC_CONTRACT.md`](docs/BC_CONTRACT.md)、
-   [`CD_CONTRACT.md`](docs/CD_CONTRACT.md) 和 [`ACCEPTANCE.md`](docs/ACCEPTANCE.md)。
-2. 分别核对 A、B、contracts、orchestrator 的当前 handoff，确认同一 RunContext 与合同版本。
-3. 在不改 C 算法的前提下完成真实 committed window → formal ingress → v2/v3 输出验收。
-4. 与 D 固定读取、Schema、原子 latest 和失败语义；再决定持久制品/可视化扩展。
-5. 最后开展科学校准；证据不足时继续保留 `demo_unvalidated`。
+- [C README](README.md)
+- [状态与待办](docs/STATUS_AND_TODO.md)
+- [验收清单](docs/ACCEPTANCE.md)
+- [决策记录](docs/DECISIONS.md)
+- [B→C 合同](docs/BC_CONTRACT.md)
+- [C→D 合同](docs/CD_CONTRACT.md)
+- [系统权威](../ARCTIC_ROUTE_SYSTEM.md)
+- [十日计划](../ABC_10_DAY_SPRINT.md)
 
-修改 C 时按 [`DEVELOPMENT_GUIDE.md`](docs/DEVELOPMENT_GUIDE.md) 执行，并在提交前运行
-`UV_OFFLINE=1 make check` 与 `git diff --check`。
-
-## 9. 相关文档索引
-
-- 首读入口：[`README.md`](README.md)
-- 概述：[`docs/PROJECT_OVERVIEW.md`](docs/PROJECT_OVERVIEW.md)
-- 状态与待办：[`docs/STATUS_AND_TODO.md`](docs/STATUS_AND_TODO.md)
-- 架构与决策：[`docs/ARCHITECTURE_AND_DECISIONS.md`](docs/ARCHITECTURE_AND_DECISIONS.md)
-- 开发指南：[`docs/DEVELOPMENT_GUIDE.md`](docs/DEVELOPMENT_GUIDE.md)
-- 系统架构：[`ARCTIC_ROUTE_SYSTEM.md`](../ARCTIC_ROUTE_SYSTEM.md)
-- 系统排期：[`ABC_10_DAY_SPRINT.md`](../ABC_10_DAY_SPRINT.md)
-- 版本历史：[`CHANGELOG.md`](CHANGELOG.md)
-
-## 10. 需要人工确认的决策
-
-1. D 的下一轮主消费合同是 v2 三目标还是 v3 四层整组；C 不替 D 默认选择。
-2. 哪一套真实主航区 A bundle/B commit 被指定为系统验收基准，并由谁保管证据制品。
-3. 科学校准的数据集、指标阈值、评审人和“允许标 calibrated”的批准流程。
-4. 旧 `/mnt/c/.../交付包.zip` 是否仍需保留回归；若不再需要，应显式退役该可选测试，
-   而不是把 skipped 隐去。
+Git 提交与同步由项目负责人在本会话结束后手动执行。

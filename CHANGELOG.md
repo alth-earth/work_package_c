@@ -15,6 +15,12 @@
 
 ## Unreleased
 
+### 变更
+
+- 按用户确认退役 C 对旧 B `交付包.zip` 固定 `/mnt/c/...` 路径的外部制品回归及 pytest 标记；
+  保留不读取该 ZIP 的显式 development-mode 门禁。当前 `UV_OFFLINE=1 make check` 为
+  `138 passed`。
+
 ### 后续工作
 
 - 以指定主航区的真实 12 类、168 h `DatasetBundle v2` 完成 A→B→C 实源联调，并验收

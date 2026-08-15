@@ -34,8 +34,7 @@ UV_OFFLINE=1 make check
 ```
 
 `make check` 依次验证 Ruff、pytest、`uv lock --check`、`uv sync --check` 和 CLI help。当前
-基线为 `138 passed, 1 skipped`；skipped 是缺少可选旧 `/mnt/c/.../交付包.zip`，不能在报告中
-省略。
+基线为 `138 passed`。已退役旧 B `交付包.zip` 的硬编码外部回归，不再要求本机存在该文件。
 
 只改文档时至少运行：
 
@@ -145,7 +144,7 @@ run/context/commit/plan 身份。C 单包测试不能替代系统级实源验收
 | 无可行路线 | hard mask、confidence=0、端点映射、速度下限和 allowed regions |
 | 旧结果未发布 | request/revision/generation/cancellation token 是否已被更新结果淘汰 |
 | v3 整组失败 | 四层 anchor/focus window、12 路线完整性和同一 lease |
-| legacy 测试 skipped | 可选旧 ZIP 不存在；不要改名为通过或 formal |
+| legacy adapter 拒绝输入 | 确认显式 development mode、`legacy_unverified` 与用户提供的实际路径 |
 
 ## 8. 文档维护规则
 

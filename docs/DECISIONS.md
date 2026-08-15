@@ -1,60 +1,74 @@
 > [!NOTE]
 > **文档治理声明**
->
-> - 文件角色：工作包 C 0.4.0 的稳定架构与安全决策真源。
-> - 改造时间：2026-08-14（Asia/Shanghai）。
-> - 原文件去向：`DECISIONS.archive-20260814-pre-governance.md`。
-> - 改造原因：只保留长期技术决策，将日历排期交还顶层冲刺文档，并明确 provenance/calibration 双维语义。
+> - 文件角色：工作包 C 当前稳定架构、挑战杯定位和参数治理决策真源。
+> - 改造时间：2026-08-15（Asia/Shanghai）。
+> - 原文件去向：[DECISIONS_归档_20260815.md](DECISIONS_归档_20260815.md)。
+> - 改造原因：补入项目负责人已定的工程演示优先、参数来源和权责口径。
 
 # 工作包 C 决策记录
 
-> 适用基线：C `0.4.0`、BC v2、CD v3（v2 兼容）。
-> 本系统仅用于科研演示，不得用于真实航行安全决策。
+## 项目与权责
+
+1. 本项目是挑战杯演示；工程链稳定、风险与路线大体合理即为成功。
+2. 科学校准、真船适航和业务化不是验收项；所有结果禁止用于真实导航。
+3. 项目负责人拥有 A、B、C 的全部决策权，不要求子项目或跨专业人员签字。
+4. 五类专业接口保留；必需参数优先公开典型值、次选透明拟合、最后用演示默认值。
 
 ## 包与数据边界
 
-1. A 发布规范环境帧和不可变 DatasetBundle；B 负责环境时间处理、预测和风险融合；C 不直接读 A 数据库、目录或缓存。
-2. C 不导入 A/B 实现模块；只通过 `arctic_route_contracts`、版本化 Schema 和结构化 protocol 集成。
-3. 场景、航区、船舶事实和 `RunContext` 的唯一正式来源是相邻 `arctic_route_contracts`；C 本地只拥有船舶性能、规划器和重规划参数。
-4. 公共 `config_digest` 绑定共享 Scenario/Corridor/Vessel 和 A DatasetBundle；B 发布 `model_config_digest`；C 发布 `planner_config_digest`。`generation_id` 不进入 digest。
+5. A 下载、标准化并持久化环境数据；B 生成风险；C 生成航线；D 只读展示。
+6. C 不导入 A/B 私有实现，只经 contracts 和版本化公共接口集成。
+7. 稳定演示默认读取预置本地制品；历史回放继续执行未来信息门禁。
 
 ## 时间、身份与来源
 
-5. `issue_time` 是可见性门禁，`valid_time` 是环境/风险时间轴，`ingest_time` 只用于审计。C 不从文件名、mtime 或相近时间猜测语义。
-6. `generation_id` 隔离 seek/reset；`planning_request_id` 和 `input_revision` 阻止同代次旧请求迟到覆盖。
-7. 数据 provenance 只包含 `formal`、`synthetic`、`legacy_unverified`。`formal` 表示身份、时间和来源链合格，不表示模型已校准。
-8. 船模/算法 calibration status 独立表达 `demo_unvalidated` 或 `calibrated`；不得用 formal provenance 掩盖 demo 参数。
+8. issue/valid/ingest/as-of/generated 五类时间不可互换。
+9. generation 隔离 seek/reset；request/revision 隔离同代次旧任务。
+10. `formal` 和 `demo_unvalidated` 可同时成立；前者不推出 scientific/calibrated。
 
-## B→C 与风险采样
+## 风险、船速与规划
 
-9. 正式 `RiskFrame v2` 必须提供 risk、hard mask、confidence 和 `environment_speed_factor`。B 不发布最终船速。
-10. C 只在两个已发布、身份与网格完全兼容的风险帧之间做 ETA 采样；不外推、不跨上下文插值。
-11. 软风险按时间线性插值；hard mask 取逻辑 OR；confidence 和环境速度因子取保守最小值；`risk_level` 由插值后 risk 重算。
-12. 正式 C ingress 只消费 canonical、完整逐小时闭区间的 `CommittedRiskWindow`；普通 `get_window()` 结果不得冒充 commit。
-13. prepare 只生成可审计输入；execute 必须持有 source execution lease、复核 commit，并从 canonical 私有快照重建规划组件。
+11. B 输出环境速度因子，C 组合演示散货船参数得到最终速度，不重复折减。
+12. C 按候选边 ETA 读取对应风险，不外推、不把缺测当安全。
+13. 正式端点只在 allowed region 内有界映射并留证。
+14. v2 三目标是挑战杯主线；v3 四层必须完整原子发布，可作为增强项。
+15. 当前无等待动作；引入等待或非 FIFO 成本时必须升级算法和合同。
 
-## 端点、航速与成本
+补充技术决策（源自：DECISIONS_归档_20260815.md）：
 
-14. 正式调用方只能在 Corridor allowed region 内选择首帧 hard mask 可通航节点，同时满足显式距离上限和连通性；规划核心不暗中改坐标。
-15. B 提供环境因子；C 将其应用到版本化船型，检查最低安全因子和操舵速度，计算最终航速、边耗时和 ETA。
-16. C 不从 `risk_score` 或 `confidence` 再推导物理减速。风险是政策成本，不是第二套船速模型。
-17. 当前使用 8 邻接规则网格、Haversine 距离、边内采样和等价小时成本。A* 启发式只使用可证明下界。
-18. 当前不允许等待动作；风险时域必须覆盖实际 ETA。若未来引入等待或非 FIFO 成本，必须升级状态/算法和合同。
+- 公共 `config_digest` 绑定共享 Scenario/Corridor/Vessel 和 A DatasetBundle；B 发布
+  `model_config_digest`；C 发布 `planner_config_digest`；`generation_id` 不进入 digest；
+- 软风险按时间线性插值；hard mask 取逻辑 OR；confidence 和环境速度因子取保守最小值；
+  `risk_level` 由插值后 risk 重算；
+- 正式 C ingress 只消费 canonical、完整逐小时闭区间的 `CommittedRiskWindow`；普通
+  `get_window()` 结果不得冒充 commit；
+- prepare 只生成可审计输入；execute 必须持有 source execution lease、复核 commit，并从
+  canonical 私有快照重建规划组件；
+- 当前使用 8 邻接规则网格、Haversine 距离、边内采样和等价小时成本；A* 启发式只使用可证明
+  下界；
+- 正式调用方只能在 allowed region 内选择首帧 hard mask 可通航节点，同时满足显式距离上限
+  和连通性；规划核心不暗中改坐标；
+- C 检查最低安全因子和操舵速度后计算最终航速、边耗时和 ETA。
 
-## v2/v3 、四层与发布
+## 航线与船型
 
-19. v2 保留历史读取、兼容回归和显式基线运行；v3 用于原子四层整组。一次正式运行只选一个输出合同，不双写。
-20. v3 四层不是四次独立运行；它们共享同一 B commit/lease、运行身份、全航程推荐线和发布令牌。
-21. 每层恰好三目标；完整 12 条路线才能原子发布。任一层失败、取消、过期或冲突都不得留部分整组。
-22. 主通道、滚动和可执行层分别以全航程推荐线在 72/24/6 h 前的最后非起点航点为目标；无锚点则整组失败。
-23. 重规划保留 generation/request/revision 围栏、取消、最小间隔、收益门槛和迟滞。新整组成功时原子替换旧整组。
+16. 先摩尔曼斯克外海—迪克森外海，后迁移特罗姆瑟外海—伊斯峡湾外部入口。
+17. 朗伊尔城只作为 AIS 航次参考；峡湾内部不进入气象路线优化评价。
+18. 当前使用演示散货船参数集；Ice Class 1A 不等于 PC6，未补齐参数不写成真船结果。
 
-## 默认值、运行时域与延期项
+## 延期项
 
-- 共享 `nordic_odyssey_reference_v1` 是事实参考，不等于 C 性能模型已校准。C 的航速、操舵、转弯、净空和阈值仍为 `demo_unvalidated`。
-- 水深接口保留，但核心 bathymetry 硬约束当前关闭。
-- 主线/测试线的设计窗和 216/144 h 航区上限是运行时事实；开发日程不得改变它们。
-- 真实数据验收、真船校准、D 消费、0–2/2–4/4–6 h 科学可信度分级、等待、D* Lite 和 MPC 均不属于 0.4.0 已验收范围。
+19. 科学校准、净水深/法规 hard mask、等待、D* Lite/LPA*/MPC 保留接口，不阻塞比赛。
+20. 实验 B 仅在真实主线稳定后做 I001、lock、Mamba 和 `make check`，不接入 C。
+21. 其余风险与决策本轮只记录，不自动扩展开发范围。
 
-当前日历安排见 [`ABC_10_DAY_SPRINT.md`](../../ABC_10_DAY_SPRINT.md)；进度状态见
-[`STATUS_AND_TODO.md`](STATUS_AND_TODO.md)。
+运行时事实与延期边界（源自：DECISIONS_归档_20260815.md）：
+
+- 共享 `nordic_odyssey_reference_v1` 是事实参考，不等于 C 性能模型已校准；C 的航速、操舵、
+  转弯、净空和阈值仍为 `demo_unvalidated`；
+- 水深接口保留，但核心 bathymetry 硬约束当前关闭；
+- 主线/测试线的设计窗和 216/144 h 航区上限是运行时事实；开发日程不得改变它们；
+- 真实数据验收、真船校准、D 消费、0–2/2–4/4–6 h 科学可信度分级、等待、D* Lite 和 MPC
+  均不属于 0.4.0 已验收范围。
+
+系统级完整依据见 [ARCTIC_ROUTE_SYSTEM.md](../../ARCTIC_ROUTE_SYSTEM.md)。

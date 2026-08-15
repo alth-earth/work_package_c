@@ -16,5 +16,6 @@ Read `README.md` first, then `docs/DECISIONS.md`, `docs/BC_CONTRACT.md`, and
 
 ## Required verification
 
-Run `make check` after code changes. Add a focused regression test for every contract, ETA-sampling, planner, replanning, or publication bug. If legacy behavior changes, run the external artifact integration test against the user-provided `交付包.zip` when it is available.
-
+Run `make check` after code changes. Add a focused regression test for every contract, ETA-sampling,
+planner, replanning, or publication bug. Legacy behavior must use repository-controlled fixtures or
+explicit user-supplied paths; do not hard-code retired external delivery archives.
