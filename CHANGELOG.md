@@ -15,6 +15,15 @@
 
 ## Unreleased
 
+### 2026-08-16（RC1）
+
+- `RiskSampler` 重构为构造期预计算每帧 numpy 数组 + bisect 时间 bracket + 直接数组索引
+  （消除热循环中的 xarray transpose/.values），数值语义不变；
+- `TimeDependentAStar` 增加边几何/启发式距离/平静航速缓存与搜索进度计数
+  （`C_ASTAR_PROGRESS_SECONDS` 心跳）；单目标 144h 由 >1h 优化至 ≈96s；
+- 隔离 benchmark 工具 `scripts/bench_initial_planning.py`（真实 r5 risk-store 输入）；
+  C 61 项单元测试（含 Dijkstra 等价性）通过。
+
 ### 变更
 
 - 按用户确认退役 C 对旧 B `交付包.zip` 固定 `/mnt/c/...` 路径的外部制品回归及 pytest 标记；

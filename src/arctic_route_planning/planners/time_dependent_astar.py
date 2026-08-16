@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import resource
+import sys
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from heapq import heappop, heappush
 from itertools import count
 from math import isfinite
+import os
 from time import perf_counter
 
 from arctic_route_planning.cost import (
@@ -51,6 +54,7 @@ class PlanningRequest:
     max_expansions: int = 250_000
     cancel_check: Callable[[], bool] | None = None
     use_heuristic: bool = True
+    progress_interval_seconds: float | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "objective", ObjectiveMode(self.objective))
@@ -69,6 +73,11 @@ class PlanningRequest:
             raise ValueError("maximum_risk must be in [0, 1]")
         if self.max_expansions < 1:
             raise ValueError("max_expansions must be positive")
+        if self.progress_interval_seconds is not None and (
+            not isfinite(self.progress_interval_seconds)
+            or self.progress_interval_seconds <= 0
+        ):
+            raise ValueError("progress_interval_seconds must be positive")
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,6 +106,12 @@ class SearchMetrics:
     rejected_coverage_edges: int
     queue_peak: int
     compute_ms: float
+    unique_states: int = 0
+    heap_pushes: int = 0
+    heap_pops: int = 0
+    stale_pops: int = 0
+    reopened_states: int = 0
+    max_time_index: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,11 +151,20 @@ class _EdgeTraversal:
 class _Counters:
     expanded: int = 0
     generated: int = 0
+    unique: int = 1
     hard: int = 0
     risk: int = 0
     speed: int = 0
     coverage: int = 0
     queue_peak: int = 1
+    stale_pop: int = 0
+    reopened: int = 0
+    heap_pushes: int = 0
+    heap_pops: int = 0
+    best_f: float = float("inf")
+    last_f: float = 0.0
+    last_g: float = 0.0
+    max_bucket: int = 0
 
 
 class _RejectedEdge(Exception):
@@ -176,6 +200,8 @@ class TimeDependentAStar:
             self._weights.update(
                 {ObjectiveMode(mode): weights for mode, weights in cost_weights.items()}
             )
+        self._edge_cache: dict[tuple[Node, Node], tuple[float, float, tuple[GeoPoint, ...]]] = {}
+        self._heur_dist: dict[Node, float] = {}
         self._validate_grid_alignment()
 
     @property
@@ -192,6 +218,15 @@ class TimeDependentAStar:
 
     def plan(self, request: PlanningRequest) -> PlanningResult:
         started = perf_counter()
+        self._last_counters: _Counters | None = None
+        self._heur_dist = {}
+        self._calm_speed = self.vessel_model.effective_speed(1.0)
+        env_progress = float(os.environ.get("C_ASTAR_PROGRESS_SECONDS", "0") or 0)
+        self._progress_interval = (
+            request.progress_interval_seconds
+            if request.progress_interval_seconds is not None
+            else (env_progress if env_progress > 0 else None)
+        )
         self._check_cancelled(request)
         self._validate_request_nodes(request)
         start_sample = self._sample_node(request.start, request.departure_time)
@@ -210,17 +245,43 @@ class TimeDependentAStar:
         heuristic = self._heuristic(request.start, request.goal, cost_model, request)
         heappush(queue, (heuristic, 0.0, next(serial), start_state))
         counters = _Counters()
+        counters = replace(counters, heap_pushes=1)
+        next_progress = 0.0
 
         while queue:
             self._check_cancelled(request)
-            _, queued_cost, _, state = heappop(queue)
+            popped_priority, queued_cost, _, state = heappop(queue)
+            counters = replace(counters, heap_pops=counters.heap_pops + 1)
             best_cost, arrival_time = labels[state]
             if queued_cost != best_cost:
+                counters = replace(counters, stale_pop=counters.stale_pop + 1)
                 continue
             node, _, incoming_code = state
             counters = replace(counters, expanded=counters.expanded + 1)
+            counters = replace(counters, unique=len(labels))
+            self._last_counters = counters
+            counters = replace(counters, best_f=min(counters.best_f, popped_priority))
+            counters = replace(counters, last_f=popped_priority, last_g=queued_cost)
             if counters.expanded > request.max_expansions:
                 raise NoRouteError(f"planning exceeded max_expansions={request.max_expansions}")
+            if (
+                self._progress_interval is not None
+                and perf_counter() - next_progress >= self._progress_interval
+            ):
+                next_progress = perf_counter()
+                elapsed = next_progress - started
+                rate = counters.expanded / elapsed if elapsed > 0 else 0.0
+                rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
+                print(
+                    f"[astar] obj={request.objective.value} horizon_h={request.maximum_elapsed.total_seconds()/3600:.0f} "
+                    f"elapsed={elapsed:.1f}s expanded={counters.expanded} generated={counters.generated} "
+                    f"unique={len(labels)} open={len(queue)} stale={counters.stale_pop} "
+                    f"reopened={counters.reopened} rate={rate:.0f}/s max_bucket={counters.max_bucket} "
+                    f"f={counters.last_f:.3f} g={counters.last_g:.3f} "
+                    f"h={counters.last_f - counters.last_g:.3f} rss={rss_mb:.0f}MB",
+                    file=sys.stderr,
+                    flush=True,
+                )
             if node == request.goal:
                 return self._build_result(
                     request,
@@ -232,14 +293,10 @@ class TimeDependentAStar:
                     started,
                 )
 
-            previous_heading = (
-                None
-                if incoming_code is None
-                else self.grid.heading_degrees(
-                    (node[0] - incoming_code[0], node[1] - incoming_code[1]),
-                    node,
-                )
-            )
+            previous_heading = None
+            if incoming_code is not None:
+                prev_node = (node[0] - incoming_code[0], node[1] - incoming_code[1])
+                previous_heading = self._edge_geometry(prev_node, node)[1]
             for neighbor in self.grid.neighbors(node):
                 self._check_cancelled(request)
                 try:
@@ -270,12 +327,18 @@ class TimeDependentAStar:
                 time_bucket = int(
                     elapsed.total_seconds() // request.time_bucket_size.total_seconds()
                 )
+                counters = replace(
+                    counters,
+                    max_bucket=max(counters.max_bucket, time_bucket),
+                )
                 heading_code = (neighbor[0] - node[0], neighbor[1] - node[1])
                 next_state: State = (neighbor, time_bucket, heading_code)
                 tentative_cost = best_cost + traversal.cost.total_equivalent_hours
                 previous = labels.get(next_state)
                 if previous is not None and tentative_cost >= previous[0] - 1e-12:
                     continue
+                if previous is not None:
+                    counters = replace(counters, reopened=counters.reopened + 1)
                 labels[next_state] = (tentative_cost, traversal.arrival_time)
                 predecessor[next_state] = (state, traversal)
                 priority = tentative_cost + self._heuristic(
@@ -288,13 +351,16 @@ class TimeDependentAStar:
                 counters = replace(
                     counters,
                     generated=counters.generated + 1,
+                    heap_pushes=counters.heap_pushes + 1,
                     queue_peak=max(counters.queue_peak, len(queue)),
                 )
 
         if counters.coverage:
+            self._last_counters = counters
             raise PlanningHorizonExceeded(
                 "no complete route fits inside the available risk time window"
             )
+        self._last_counters = counters
         raise NoRouteError("no route satisfies hard, risk, and vessel constraints")
 
     def plan_candidates(
@@ -319,13 +385,10 @@ class TimeDependentAStar:
         request: PlanningRequest,
         cost_model: CostModel,
     ) -> _EdgeTraversal:
-        distance_km = self.grid.distance_km(start, end)
-        points = self.grid.edge_sample_points(
-            start,
-            end,
-            minimum_samples=request.edge_sample_count,
+        distance_km, _, points = self._edge_geometry(
+            start, end, minimum_samples=request.edge_sample_count
         )
-        calm_speed = self.vessel_model.effective_speed(1.0)
+        calm_speed = self._calm_speed
         travel_hours = distance_km / calm_speed.speed_km_per_hour
         samples: tuple[SampledRisk, ...] = ()
         speed = calm_speed
@@ -359,7 +422,7 @@ class TimeDependentAStar:
         risk_score = _trapezoidal_average(sample.risk_score for sample in samples)
         maximum_risk = max(sample.risk_score for sample in samples)
         confidence = min(sample.confidence for sample in samples)
-        heading = self.grid.heading_degrees(start, end)
+        heading = self._edge_geometry(start, end)[1]
         cost = cost_model.evaluate(
             EdgeCostInput(
                 distance_km=distance_km,
@@ -503,7 +566,31 @@ class TimeDependentAStar:
     ) -> float:
         if not request.use_heuristic:
             return 0.0
-        return cost_model.lower_bound(self.grid.distance_km(node, goal))
+        distance = self._heur_dist.get(node)
+        if distance is None:
+            distance = self.grid.distance_km(node, goal)
+            self._heur_dist[node] = distance
+        return cost_model.lower_bound(distance)
+
+    def _edge_geometry(
+        self,
+        start: Node,
+        end: Node,
+        *,
+        minimum_samples: int = 3,
+    ) -> tuple[float, float, tuple[GeoPoint, ...]]:
+        cached = self._edge_cache.get((start, end))
+        if cached is None:
+            distance = self.grid.distance_km(start, end)
+            heading = self.grid.heading_degrees(start, end)
+            points = self.grid.edge_sample_points(
+                start,
+                end,
+                minimum_samples=minimum_samples,
+            )
+            cached = (distance, heading, points)
+            self._edge_cache[(start, end)] = cached
+        return cached
 
     def _sample_node(self, node: Node, sampled_at: datetime) -> SampledRisk:
         point = self.grid.point(node)
@@ -559,4 +646,10 @@ def _metrics(counters: _Counters, started: float) -> SearchMetrics:
         rejected_coverage_edges=counters.coverage,
         queue_peak=counters.queue_peak,
         compute_ms=compute_ms,
+        unique_states=counters.unique,
+        heap_pushes=counters.heap_pushes,
+        heap_pops=counters.heap_pops,
+        stale_pops=counters.stale_pop,
+        reopened_states=counters.reopened,
+        max_time_index=counters.max_bucket,
     )

@@ -7,6 +7,9 @@
 
 # 工作包 C 交接说明
 
+> Status: CURRENT — RC1（2026-08-16）。v3 四层 + 6h 重规划已跑通（orchestrator r6/r7）；
+> 性能基线、心跳与 benchmark 见 `scripts/bench_initial_planning.py` 与执行记录。
+
 ## 1. 项目目标与边界
 
 C 把 B 的时空风险窗口转换为候选航线、ETA、风险/成本指标和重规划结果。挑战杯目标是让路线

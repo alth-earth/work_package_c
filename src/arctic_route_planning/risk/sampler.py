@@ -7,6 +7,7 @@ extrapolates beyond the supplied window.
 
 from __future__ import annotations
 
+import bisect
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -114,6 +115,16 @@ class RiskSampler:
                 "risk window identity does not match the requested planning context"
             )
         self._validate_window()
+        self._valid_times = [frame.valid_time for frame in self._frames]
+        self._latitudes = np.asarray(
+            self._frames[0].payload.coords["latitude"].values, dtype=float
+        )
+        self._longitudes = np.asarray(
+            self._frames[0].payload.coords["longitude"].values, dtype=float
+        )
+        self._arrays: tuple[dict[str, np.ndarray | None], ...] = tuple(
+            self._frame_arrays(frame) for frame in self._frames
+        )
 
     @property
     def frames(self) -> tuple[RiskFrame, ...]:
@@ -162,7 +173,7 @@ class RiskSampler:
         lower, upper = self._bracket(sampled_at)
         lower_values = self._sample_frame(lower, longitude, latitude)
 
-        if lower is upper:
+        if lower == upper:
             return SampledRisk(
                 sampled_at=sampled_at,
                 longitude=float(longitude),
@@ -172,16 +183,18 @@ class RiskSampler:
                 hard_mask=lower_values.hard_mask,
                 confidence=lower_values.confidence,
                 environment_speed_factor=lower_values.environment_speed_factor,
-                source_risk_ids=(lower.risk_id,),
+                source_risk_ids=(self._frames[lower].risk_id,),
             )
 
-        gap = upper.valid_time - lower.valid_time
+        gap = self._frames[upper].valid_time - self._frames[lower].valid_time
         if self._max_frame_gap is not None and gap > self._max_frame_gap:
             raise RiskCoverageError(
                 f"bracketing RiskFrames are {gap} apart, exceeding {self._max_frame_gap}"
             )
         upper_values = self._sample_frame(upper, longitude, latitude)
-        fraction = (sampled_at - lower.valid_time).total_seconds() / gap.total_seconds()
+        fraction = (
+            sampled_at - self._frames[lower].valid_time
+        ).total_seconds() / gap.total_seconds()
         risk_score = _lerp(lower_values.risk_score, upper_values.risk_score, fraction)
         return SampledRisk(
             sampled_at=sampled_at,
@@ -195,7 +208,7 @@ class RiskSampler:
                 lower_values.environment_speed_factor,
                 upper_values.environment_speed_factor,
             ),
-            source_risk_ids=(lower.risk_id, upper.risk_id),
+            source_risk_ids=(self._frames[lower].risk_id, self._frames[upper].risk_id),
         )
 
     def _validate_window(self) -> None:
@@ -244,35 +257,70 @@ class RiskSampler:
         if not _strictly_monotonic(latitudes) or not _strictly_monotonic(longitudes):
             raise IncompatibleRiskFramesError("grid coordinates must be strictly monotonic")
 
-    def _bracket(self, sampled_at: datetime) -> tuple[RiskFrame, RiskFrame]:
+    def _frame_arrays(self, frame: RiskFrame) -> dict[str, np.ndarray | None]:
+        payload = frame.payload
+        extracted: dict[str, np.ndarray | None] = {
+            "risk_score": np.asarray(
+                payload["risk_score"].transpose("latitude", "longitude").values,
+                dtype=float,
+            ),
+            "hard_mask": np.asarray(
+                payload["hard_mask"].transpose("latitude", "longitude").values,
+                dtype=bool,
+            ),
+            "confidence": np.asarray(
+                payload["confidence"].transpose("latitude", "longitude").values,
+                dtype=float,
+            ),
+            "environment_speed_factor": None,
+        }
+        if "environment_speed_factor" in payload.data_vars:
+            extracted["environment_speed_factor"] = np.asarray(
+                payload["environment_speed_factor"]
+                .transpose("latitude", "longitude")
+                .values,
+                dtype=float,
+            )
+        for name, array in extracted.items():
+            if array is not None and array.shape != (
+                self._latitudes.size,
+                self._longitudes.size,
+            ):
+                raise IncompatibleRiskFramesError(
+                    f"RiskFrame payload {name} grid does not match coordinate grid"
+                )
+        return extracted
+
+    def _bracket(self, sampled_at: datetime) -> tuple[int, int]:
         if sampled_at < self.start_time or sampled_at > self.end_time:
             raise RiskCoverageError(
                 f"{sampled_at.isoformat()} is outside risk coverage "
                 f"[{self.start_time.isoformat()}, {self.end_time.isoformat()}]"
             )
-        for index, frame in enumerate(self._frames):
-            if sampled_at == frame.valid_time:
-                return frame, frame
-            if sampled_at < frame.valid_time:
-                return self._frames[index - 1], frame
-        return self._frames[-1], self._frames[-1]
+        index = bisect.bisect_left(self._valid_times, sampled_at)
+        if index < len(self._valid_times) and self._valid_times[index] == sampled_at:
+            return index, index
+        return index - 1, index
 
-    @staticmethod
-    def _sample_frame(frame: RiskFrame, longitude: float, latitude: float) -> _FrameSample:
-        payload = frame.payload
-        latitudes = np.asarray(payload.coords["latitude"].values, dtype=float)
-        longitudes = np.asarray(payload.coords["longitude"].values, dtype=float)
-        lat_weights = _axis_weights(latitudes, float(latitude), axis="latitude")
-        lon_weights = _axis_weights(longitudes, float(longitude), axis="longitude")
+    def _sample_frame(self, frame_index: int, longitude: float, latitude: float) -> _FrameSample:
+        arrays = self._arrays[frame_index]
+        lat_weights = _axis_weights(self._latitudes, float(latitude), axis="latitude")
+        lon_weights = _axis_weights(self._longitudes, float(longitude), axis="longitude")
         contributors = tuple(
             (lat_index, lon_index, lat_weight * lon_weight)
             for lat_index, lat_weight in lat_weights
             for lon_index, lon_weight in lon_weights
             if lat_weight * lon_weight > 0.0
         )
-        confidence_values = _values(payload, "confidence", contributors)
-        hard_values = _values(payload, "hard_mask", contributors, finite=False)
-        risk_values = _values(payload, "risk_score", contributors, finite=False)
+        confidence_values = _array_values(
+            arrays["confidence"], contributors, variable="confidence", finite=True
+        )
+        hard_values = _array_values(
+            arrays["hard_mask"], contributors, variable="hard_mask", finite=False
+        )
+        risk_values = _array_values(
+            arrays["risk_score"], contributors, variable="risk_score", finite=False
+        )
 
         confidence = min(value for value, _ in confidence_values)
         hard_mask = any(bool(value) for value, _ in hard_values)
@@ -284,7 +332,7 @@ class RiskSampler:
             risk_score = 1.0
         else:
             risk_score = sum(value * weight for value, weight in risk_values)
-        speed_factor = _speed_factor(payload, contributors)
+        speed_factor = _speed_factor(arrays, contributors)
         return _FrameSample(
             risk_score=float(risk_score),
             confidence=float(confidence),
@@ -334,14 +382,15 @@ def _axis_weights(
     return ((lower_index, 1.0 - fraction), (upper_index, fraction))
 
 
-def _values(
-    payload: Any,
-    variable: str,
+def _array_values(
+    data: np.ndarray | None,
     contributors: Iterable[tuple[int, int, float]],
     *,
+    variable: str,
     finite: bool = True,
 ) -> tuple[tuple[float, float], ...]:
-    data = np.asarray(payload[variable].transpose("latitude", "longitude").values)
+    if data is None:
+        raise RiskSamplingError(f"{variable} contains a missing/non-finite sample")
     result: list[tuple[float, float]] = []
     for lat_index, lon_index, weight in contributors:
         value = data[lat_index, lon_index]
@@ -352,7 +401,7 @@ def _values(
 
 
 def _speed_factor(
-    payload: Any,
+    arrays: dict[str, np.ndarray | None],
     contributors: tuple[tuple[int, int, float], ...],
 ) -> float:
     """Read the optional canonical B-provided environmental effect.
@@ -362,9 +411,12 @@ def _speed_factor(
     version instead of being interpreted implicitly by the planner core.
     """
 
-    if "environment_speed_factor" not in payload.data_vars:
+    data = arrays.get("environment_speed_factor")
+    if data is None:
         return 1.0
-    values = _values(payload, "environment_speed_factor", contributors)
+    values = _array_values(
+        data, contributors, variable="environment_speed_factor", finite=True
+    )
     factor = min(value for value, _ in values)
     if not np.isfinite(factor) or factor <= 0.0 or factor > 1.0:
         raise RiskSamplingError("environment speed factors must be finite in (0, 1]")
