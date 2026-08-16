@@ -20,6 +20,8 @@
 - 按用户确认退役 C 对旧 B `交付包.zip` 固定 `/mnt/c/...` 路径的外部制品回归及 pytest 标记；
   保留不读取该 ZIP 的显式 development-mode 门禁。当前 `UV_OFFLINE=1 make check` 为
   `138 passed`。
+- 确认 v3 四层 × 三目标（12 路线整组）+ 重规划为挑战杯演示主线，v2 三目标为强制后备
+  （2026-08-15）；README、DECISIONS、ACCEPTANCE 与 handoff 的主线口径同步更新。
 
 ### 后续工作
 
