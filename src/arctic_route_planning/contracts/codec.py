@@ -56,7 +56,8 @@ _TOP_LEVEL_FIELDS = frozenset(
 _PAYLOAD_FIELDS = frozenset({"coordinates", "variables", "attributes"})
 _COORDINATE_FIELDS = frozenset({"latitude", "longitude"})
 _REQUIRED_VARIABLES = frozenset({"risk_score", "risk_level", "hard_mask", "confidence"})
-_OPTIONAL_VARIABLES = frozenset({"environment_speed_factor"})
+_OPTIONAL_VARIABLES = frozenset({"environment_speed_factor", "hard_reason"})
+_HARD_REASONS = frozenset({"NONE", "LAND", "DATA_UNAVAILABLE", "OTHER"})
 _SOURCE_FIELDS = frozenset(
     {
         "source_id",
@@ -99,6 +100,11 @@ def _risk_frame_to_document_unchecked(frame: RiskFrame) -> dict[str, Any]:
         variables["environment_speed_factor"] = _array_rows(
             payload["environment_speed_factor"].values,
             kind="number",
+        )
+    if "hard_reason" in payload:
+        variables["hard_reason"] = _array_rows(
+            payload["hard_reason"].values,
+            kind="string",
         )
     sources = sorted(
         (_source_to_document(source) for source in frame.source_summary),
@@ -196,6 +202,16 @@ def risk_frame_from_document(document: Mapping[str, Any]) -> RiskFrame:
                 shape=shape,
                 allow_null=False,
                 dtype=np.float64,
+            ),
+        )
+    if "hard_reason" in variables:
+        data_vars["hard_reason"] = (
+            ("latitude", "longitude"),
+            _two_dimensional_strings(
+                variables["hard_reason"],
+                field="hard_reason",
+                shape=shape,
+                allowed=_HARD_REASONS,
             ),
         )
     sources_raw = _sequence(data["source_summary"], field="source_summary")
@@ -372,6 +388,10 @@ def _array_rows(values: Any, *, kind: str) -> list[list[Any]]:
                 output.append(int(raw))
             elif kind == "boolean":
                 output.append(bool(raw))
+            elif kind == "string":
+                if not isinstance(raw, str) or not raw:
+                    raise ContractError("payload 字符串变量只能包含非空字符串")
+                output.append(str(raw))
             else:
                 value = float(raw)
                 if not math.isfinite(value):
@@ -457,6 +477,31 @@ def _two_dimensional_booleans(
             raise ContractError(f"{field} 只能包含 bool")
         parsed.append(list(row))
     result = np.asarray(parsed, dtype=np.bool_)
+    if result.shape != shape:
+        raise ContractError(f"{field} 形状必须为 {shape}，实际为 {result.shape}")
+    return result
+
+
+def _two_dimensional_strings(
+    value: Any,
+    *,
+    field: str,
+    shape: tuple[int, int],
+    allowed: frozenset[str],
+) -> np.ndarray:
+    rows = _sequence(value, field=field)
+    parsed: list[list[str]] = []
+    for row_index, raw_row in enumerate(rows):
+        row = _sequence(raw_row, field=f"{field}[{row_index}]")
+        parsed_row: list[str] = []
+        for item in row:
+            if not isinstance(item, str) or item not in allowed:
+                raise ContractError(
+                    f"{field} 只能包含 {sorted(allowed)} 中的字符串"
+                )
+            parsed_row.append(item)
+        parsed.append(parsed_row)
+    result = np.asarray(parsed, dtype=np.str_)
     if result.shape != shape:
         raise ContractError(f"{field} 形状必须为 {shape}，实际为 {result.shape}")
     return result

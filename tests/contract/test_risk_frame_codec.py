@@ -147,3 +147,64 @@ def test_risk_level_is_frozen_from_finite_score_and_unknown_is_level_five() -> N
     payload["risk_level"] = (("latitude", "longitude"), levels)
     with pytest.raises(ContractError, match="未知风险必须为 5"):
         replace(unknown, payload=payload)
+
+
+def _frame_with_hard_reason():
+    frame = _frame_with_unknown_risk()
+    payload = frame.payload.copy(deep=True)
+    hard = np.asarray(payload["hard_mask"].values)
+    reason = np.where(hard, "LAND", "NONE").astype("U32")
+    reason[0, 0] = "DATA_UNAVAILABLE"
+    payload["hard_reason"] = (("latitude", "longitude"), reason)
+    return replace(frame, payload=payload)
+
+
+def test_codec_round_trip_with_optional_hard_reason() -> None:
+    frame = _frame_with_hard_reason()
+
+    document = risk_frame_to_document(frame)
+    assert document["payload"]["variables"]["hard_reason"][0][0] == "DATA_UNAVAILABLE"
+    hard = np.asarray(frame.payload["hard_mask"].values)
+    non_hard = tuple(np.argwhere(~hard)[0])
+    assert document["payload"]["variables"]["hard_reason"][non_hard[0]][non_hard[1]] == "NONE"
+    schema = json.loads(
+        (PROJECT_ROOT / "schemas/risk-frame-v2.schema.json").read_text(encoding="utf-8")
+    )
+    Draft202012Validator(schema, format_checker=FormatChecker()).validate(document)
+
+    restored = risk_frame_from_document(document)
+    np.testing.assert_array_equal(
+        restored.payload["hard_reason"].values,
+        frame.payload["hard_reason"].values,
+    )
+    assert canonical_risk_frame_bytes(restored) == canonical_risk_frame_bytes(frame)
+
+
+def test_codec_rejects_inconsistent_or_unknown_hard_reason() -> None:
+    frame = _frame_with_hard_reason()
+    hard = np.asarray(frame.payload["hard_mask"].values)
+    non_hard = tuple(np.argwhere(~hard)[0])
+
+    document = risk_frame_to_document(frame)
+    document["payload"]["variables"]["hard_reason"][non_hard[0]][non_hard[1]] = "LAND"
+    with pytest.raises(ContractError, match="hard_mask"):
+        risk_frame_from_document(document)
+
+    document = risk_frame_to_document(frame)
+    document["payload"]["variables"]["hard_reason"][0][0] = "NONE"
+    with pytest.raises(ContractError, match="hard_reason"):
+        risk_frame_from_document(document)
+
+    document = risk_frame_to_document(frame)
+    document["payload"]["variables"]["hard_reason"][0][0] = "INVENTED"
+    with pytest.raises(ContractError, match="只能包含"):
+        risk_frame_from_document(document)
+
+
+def test_legacy_frame_without_hard_reason_still_round_trips() -> None:
+    frame = _frame()
+    assert "hard_reason" not in frame.payload.data_vars
+    document = risk_frame_to_document(frame)
+    assert "hard_reason" not in document["payload"]["variables"]
+    restored = risk_frame_from_document(document)
+    assert canonical_risk_frame_bytes(restored) == canonical_risk_frame_bytes(frame)

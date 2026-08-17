@@ -19,7 +19,7 @@ CONFIG_ROOT = Path(__file__).parents[2] / "configs"
         (
             "murmansk_dikson_july_2026_retrospective_v1",
             "offshore_murmansk_to_offshore_dikson",
-            (80.40, 73.55),
+            (80.00, 73.80),
         ),
         (
             "tromso_isfjorden_july_2026_retrospective_v1",

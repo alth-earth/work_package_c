@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import resource
 import sys
 from collections.abc import Callable, Iterable, Mapping
@@ -10,7 +11,6 @@ from datetime import UTC, datetime, timedelta
 from heapq import heappop, heappush
 from itertools import count
 from math import isfinite
-import os
 from time import perf_counter
 
 from arctic_route_planning.cost import (
@@ -272,11 +272,21 @@ class TimeDependentAStar:
                 elapsed = next_progress - started
                 rate = counters.expanded / elapsed if elapsed > 0 else 0.0
                 rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
-                print(
-                    f"[astar] obj={request.objective.value} horizon_h={request.maximum_elapsed.total_seconds()/3600:.0f} "
-                    f"elapsed={elapsed:.1f}s expanded={counters.expanded} generated={counters.generated} "
+                horizon_h = request.maximum_elapsed.total_seconds() / 3600.0
+                expanded_line = (
+                    f"elapsed={elapsed:.1f}s expanded={counters.expanded} "
+                    f"generated={counters.generated} "
+                )
+                set_line = (
                     f"unique={len(labels)} open={len(queue)} stale={counters.stale_pop} "
-                    f"reopened={counters.reopened} rate={rate:.0f}/s max_bucket={counters.max_bucket} "
+                )
+                reopen_line = (
+                    f"reopened={counters.reopened} rate={rate:.0f}/s "
+                    f"max_bucket={counters.max_bucket} "
+                )
+                print(
+                    f"[astar] obj={request.objective.value} horizon_h={horizon_h:.0f} "
+                    f"{expanded_line}{set_line}{reopen_line}"
                     f"f={counters.last_f:.3f} g={counters.last_g:.3f} "
                     f"h={counters.last_f - counters.last_g:.3f} rss={rss_mb:.0f}MB",
                     file=sys.stderr,

@@ -105,6 +105,11 @@
       "minItems": 2,
       "items": {"type": "number", "exclusiveMinimum": 0, "maximum": 1}
     },
+    "reasonRow": {
+      "type": "array",
+      "minItems": 2,
+      "items": {"enum": ["NONE", "LAND", "DATA_UNAVAILABLE", "OTHER"]}
+    },
     "payload": {
       "type": "object",
       "additionalProperties": false,
@@ -134,7 +139,8 @@
             "risk_level": {"type": "array", "minItems": 2, "items": {"$ref": "#/$defs/levelRow"}},
             "hard_mask": {"type": "array", "minItems": 2, "items": {"$ref": "#/$defs/booleanRow"}},
             "confidence": {"type": "array", "minItems": 2, "items": {"$ref": "#/$defs/unitIntervalRow"}},
-            "environment_speed_factor": {"type": "array", "minItems": 2, "items": {"$ref": "#/$defs/speedFactorRow"}}
+            "environment_speed_factor": {"type": "array", "minItems": 2, "items": {"$ref": "#/$defs/speedFactorRow"}},
+            "hard_reason": {"type": "array", "minItems": 2, "items": {"$ref": "#/$defs/reasonRow"}}
           }
         },
         "attributes": {

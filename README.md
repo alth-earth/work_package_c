@@ -17,6 +17,7 @@ C 消费 B 的逐小时风险窗，按 ETA 采样风险，运行时间依赖规�
 | 版本/工程 | 0.4.0；2026-08-14 为 138 passed |
 | 挑战杯主线 | v3 四层 × 三目标（12 路线整组）+ 重规划；v2 三目标为强制后备 |
 | RC1 实源状态 | PASS（2026-08-16）：mur/dikson v3 四层 + 6h 重规划经 orchestrator r6/r7 跑通；单目标 144h ≈96s |
+| RC2 BC 扩展 | `bc.risk-frame.v2` 可选 `hard_reason`（NONE/LAND/DATA_UNAVAILABLE/OTHER），旧帧向后兼容（RC2 分支） |
 | 稳定演示 | 读取冻结本地数据，按 simulation time/generation 运行 |
 | 历史回放 | 保持发布时间门禁，不使用未来信息 |
 | 科学状态 | `demo_unvalidated`；保留接口，不阻塞工程演示 |

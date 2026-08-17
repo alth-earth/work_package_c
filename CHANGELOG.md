@@ -15,6 +15,16 @@
 
 ## Unreleased
 
+### 2026-08-17（RC2 development）
+
+- `bc.risk-frame.v2` 新增可选 `payload.variables.hard_reason`（NONE / LAND /
+  DATA_UNAVAILABLE / OTHER）：codec 往返、Python 语义校验与 JSON Schema 同步支持；
+  旧帧不含该变量仍可往返（向后兼容）。校验不变量：非 hard 单元格必须 NONE、
+  hard 单元格必须给出非 NONE 原因、取值必须来自白名单。
+- 新增 codec 测试（round-trip、不一致原因拒绝、旧帧兼容）；C 141 项测试通过。
+- Ruff 清理 `time_dependent_astar.py`（心跳 f-string 分行重构，无语义变化）；
+  `ruff check` 全绿。
+
 ### 2026-08-16（RC1）
 
 - `RiskSampler` 重构为构造期预计算每帧 numpy 数组 + bisect 时间 bracket + 直接数组索引

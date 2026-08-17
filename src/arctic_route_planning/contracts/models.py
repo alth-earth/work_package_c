@@ -346,7 +346,7 @@ def _validated_payload(payload: xr.Dataset) -> xr.Dataset:
     missing = [name for name in required if name not in payload.data_vars]
     if missing:
         raise ContractError(f"RiskFrame.payload 缺少变量: {', '.join(missing)}")
-    supported = {*required, "environment_speed_factor"}
+    supported = {*required, "environment_speed_factor", "hard_reason"}
     extra = sorted(set(payload.data_vars) - supported)
     if extra:
         raise ContractError(f"RiskFrame.payload 含 v2 未声明变量: {', '.join(extra)}")
@@ -409,6 +409,21 @@ def _validated_payload(payload: xr.Dataset) -> xr.Dataset:
             (factor_values <= 0) | (factor_values > 1)
         ):
             raise ContractError("environment_speed_factor 必须位于 (0, 1]")
+    if "hard_reason" in payload:
+        reason = payload["hard_reason"]
+        if reason.dims != expected_dims or reason.shape != expected_shape:
+            raise ContractError("hard_reason 必须是 latitude×longitude 二维网格")
+        reason_values = np.asarray(reason.values)
+        if reason_values.dtype.kind not in {"U", "S"}:
+            raise ContractError("hard_reason 必须是字符串网格")
+        allowed = {"NONE", "LAND", "DATA_UNAVAILABLE", "OTHER"}
+        unknown = sorted(set(reason_values.ravel()) - allowed)
+        if unknown:
+            raise ContractError(f"hard_reason 含未声明取值: {unknown}")
+        if np.any(~hard & (reason_values != "NONE")):
+            raise ContractError("hard_reason 非 NONE 的单元格必须 hard_mask=true")
+        if np.any(hard & (reason_values == "NONE")):
+            raise ContractError("hard_mask=true 的单元格必须给出非 NONE 的 hard_reason")
     frozen = payload.copy(deep=True)
     for variable in (*frozen.data_vars, *frozen.coords):
         values = frozen[variable].data
