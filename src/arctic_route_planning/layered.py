@@ -154,11 +154,19 @@ class FourLayerPlanningService:
         bundles = [full_bundle]
         for layer, cutoff, focus_start, focus_end in layer_specs:
             anchor = _anchor_at_or_before(full_recommended, request.start_time + cutoff)
-            layer_elapsed = min(
-                request.maximum_elapsed,
-                cutoff,
-                full_end - request.start_time,
-            )
+            if anchor == request.goal:
+                # The layer goal is the destination.  Each objective must be
+                # allowed its own arrival time up to the configured layer
+                # ceiling; capping by the recommended plan's ETA would make
+                # slower (e.g. low-risk) objectives unplannable even though
+                # causal risk coverage is available.
+                layer_elapsed = min(request.maximum_elapsed, cutoff)
+            else:
+                layer_elapsed = min(
+                    request.maximum_elapsed,
+                    cutoff,
+                    full_end - request.start_time,
+                )
             results = self._plan_layer(
                 request,
                 goal=anchor,

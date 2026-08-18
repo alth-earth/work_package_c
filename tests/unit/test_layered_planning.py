@@ -96,6 +96,24 @@ class BlockingFirstLayerPlanner(LayerFixturePlanner):
         return super().plan_candidates(request, objectives)
 
 
+class ShortVoyagePlanner(LayerFixturePlanner):
+    """Recommended full-voyage ETA (60h) below the 72h main-corridor ceiling."""
+
+    def plan_candidates(self, request, objectives):
+        self.goals.append(request.goal)
+        self.maximum_elapsed.append(request.maximum_elapsed)
+        goal_column = request.goal[1]
+        hours = (
+            (0, 3, 12, 30, 50, 60)
+            if goal_column == 5
+            else (0, 3, 12, 30, 50)[: goal_column + 1]
+        )
+        return {
+            objective: _result(request.departure_time, hours, objective)
+            for objective in objectives
+        }
+
+
 def _case(*, planner=None, request_id: str = "request-v3"):
     configuration = load_configuration(
         CONFIG_ROOT,
@@ -191,6 +209,35 @@ def test_four_layer_service_builds_twelve_routes_and_round_trips() -> None:
     _validate_schema(
         "four-layer-route-plan-set-v3.geojson.schema.json",
         four_layer_route_plan_set_to_geojson(outcome.plan_set),
+    )
+
+
+def test_destination_anchor_layer_allows_objectives_beyond_recommended_eta() -> None:
+    """When the main-corridor anchor is the destination and the recommended
+    ETA is below 72h, the layer ceiling must be the configured 72h cap, not
+    the recommended plan's ETA."""
+
+    planner = ShortVoyagePlanner()
+    _, _, _store, service, request = _case(planner=planner)
+
+    outcome = service.execute(request)
+
+    assert outcome.published
+    assert planner.maximum_elapsed == [
+        timedelta(hours=96),
+        timedelta(hours=72),
+        timedelta(hours=24),
+        timedelta(hours=6),
+    ]
+    main_corridor = outcome.plan_set.layers[1]
+    assert all(
+        plan.destination_reached and plan.layer_goal_reached
+        for plan in main_corridor.plans.values()
+    )
+    assert all(
+        not plan.destination_reached
+        for bundle in outcome.plan_set.layers[2:]
+        for plan in bundle.plans.values()
     )
 
 
