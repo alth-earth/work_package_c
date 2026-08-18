@@ -15,6 +15,17 @@
 
 ## Unreleased
 
+### 2026-08-18（Strategy B Semantic Hardening）
+
+- v3 four-layer main_corridor 合同边缘修复：当 layer anchor == destination
+  （recommended full ETA < 层配置上限）时，layer 搜索 ceiling 改为
+  `min(request horizon, layer ceiling)`，不再被 recommended ETA 截断；
+  这允许 fastest/low_risk 在 causal risk 覆盖存在时合法晚于 recommended
+  到达。中间 anchor 层保持原语义。
+- 新增 `test_destination_anchor_layer_allows_objectives_beyond_recommended_eta`；
+  97 项 unit/integration 测试通过；RC1 golden 与 RC2 144h frozen regression
+  保持 PASS（frozen 业务结果不变）。
+
 ### 2026-08-17（RC2 development）
 
 - `bc.risk-frame.v2` 新增可选 `payload.variables.hard_reason`（NONE / LAND /
