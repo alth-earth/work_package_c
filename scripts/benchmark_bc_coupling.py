@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import gc
+import hashlib
 import json
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from arctic_route_planning.config import load_configuration
 from arctic_route_planning.contracts.codec import risk_frame_from_document
 from arctic_route_planning.coupling_benchmark import benchmark_planning_on_risk_frames
 from arctic_route_planning.endpoints import map_corridor_endpoints
+from arctic_route_planning.risk import SampleCacheMode
 
 
 def _profile(value: str) -> tuple[str, Path]:
@@ -35,6 +37,12 @@ def main() -> int:
     )
     parser.add_argument("--max-snap-km", type=float, default=30.0)
     parser.add_argument("--max-expansions", type=int, default=250_000)
+    parser.add_argument(
+        "--sample-cache-mode",
+        choices=tuple(mode.value for mode in SampleCacheMode),
+        default=SampleCacheMode.OFF.value,
+    )
+    parser.add_argument("--sample-cache-capacity", type=int, default=50_000)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 
@@ -61,8 +69,17 @@ def main() -> int:
             planner_config=configuration.planner,
             vessel_config=configuration.vessel_model,
             max_expansions=args.max_expansions,
+            sample_cache_mode=args.sample_cache_mode,
+            sample_cache_capacity=args.sample_cache_capacity,
         )
         summary["name"] = name
+        summary["source_document_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+        summary["source_risk_ids_sha256"] = hashlib.sha256(
+            json.dumps(
+                [frame.risk_id for frame in frames],
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
         summary["endpoint_mapping"] = endpoint.to_document()
         results.append(summary)
         del frames, summary

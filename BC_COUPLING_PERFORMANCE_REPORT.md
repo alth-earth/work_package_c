@@ -11,6 +11,21 @@ Last Verified: 2026-08-22
 
 # B-C Coupling Performance Report
 
+## Round3 optimization evidence（2026-08-22 02:34 +08:00）
+
+The same medium RiskFrame document was used to compare C exact sample-cache
+off versus a default-off 50,000-entry bounded LRU. Three independent runs per
+mode produced one complete semantic route digest. Median planning time improved
+from 76.281 s to 65.012 s (14.77%) while sampled RSS increased from 122,416 KiB
+to 161,988 KiB. Shadow profiling found 242,992 exact repeats among 705,469
+requests (34.444%).
+
+This is `EXPERIMENTAL / REAL_B_FRAME_PASS`, not a production cache claim. The
+input SHA-256, endpoint mapping, objective and planner configuration were fixed;
+production ingress and contracts were unchanged. Full methods, equality scope
+and limitations are in
+[`C_RISK_SAMPLE_CACHE_EXPERIMENT.md`](C_RISK_SAMPLE_CACHE_EXPERIMENT.md).
+
 ## Verdict（2026-08-22 01:11 +08:00）
 
 The real C `recommended` time-dependent A* completed on both the 112-node and

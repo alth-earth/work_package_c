@@ -23,7 +23,8 @@ Current state:
 
 - edge geometry cache statistics: `IMPLEMENTED / UNIT_PASS`;
 - B→C baseline/medium benchmark fixture: `IMPLEMENTED / EXPERIMENTAL_PASS`;
-- bounded risk-sample cache: `PLANNED`;
+- exact sample observability: `IMPLEMENTED / REAL_B_FRAME_EXPERIMENT_PASS`;
+- bounded risk-sample cache: `IMPLEMENTED / EXPERIMENTAL_DEFAULT_OFF`;
 - shared multi-objective search: `PLANNED, OUT OF SCOPE`;
 - incremental replanning: `PLANNED, OUT OF SCOPE`.
 
@@ -41,20 +42,22 @@ Implemented counters expose `{hits, misses, entries}` for the existing private
 edge-geometry cache and include them in profiling/BC benchmark outputs. They do
 not change keys, eviction, route selection, costs, or public contracts.
 
-Next add counters around exact sample requests, without retaining values:
+The Round3 experiment now records exact sample requests without changing the
+canonical sampler result:
 
 ```text
-(RiskSampler instance/window identity, sampled_at, latitude index, longitude index)
+(RiskSampler window fingerprint, risk layer, sampled_at UTC,
+ longitude IEEE-754 bits, latitude IEEE-754 bits)
 ```
 
-Record total requests, unique keys, repeated keys and per-search peak unique
-keys. Do not round coordinates or time; approximate equivalence could change
-the selected valid frame and is outside this proposal.
+The real medium search recorded 705,469 requests, 462,477 exact unique keys and
+242,992 repeats (34.444%). Coordinates and time are not rounded. Detailed
+evidence is in [`C_RISK_SAMPLE_CACHE_EXPERIMENT.md`](C_RISK_SAMPLE_CACHE_EXPERIMENT.md).
 
 ## Phase 1 shadow cache experiment（2026-08-22 01:11 +08:00）
 
-If exact repeats are material, run a shadow-only dictionary that records whether
-a lookup would hit while still calling the existing sampler. Acceptance requires:
+Shadow mode was run and always delegated to the canonical sampler. Its complete
+route digest matched cache-off and bounded-LRU results. Acceptance remains:
 
 1. identical route nodes and route digest;
 2. identical distance, ETA, average/max/integrated risk and source RiskFrame IDs;
@@ -64,10 +67,12 @@ a lookup would hit while still calling the existing sampler. Acceptance requires
 
 ## Phase 2 bounded opt-in cache（2026-08-22 01:11 +08:00）
 
-Only after Phase 1 evidence, evaluate a per-planner bounded LRU with an explicit
-entry limit and default disabled. Eviction affects performance only; it must not
-affect results. Cache lifetime must not cross a `RiskSampler`, committed window,
-generation, or replay seek boundary.
+The 50,000-entry per-sampler LRU is now implemented only in the experimental BC
+benchmark and remains default disabled. Three independent medium-grid runs
+reduced median planning time from 76.281 s to 65.012 s (14.77%) with about
+38.6 MiB additional sampled RSS. Eviction affects performance only; complete
+route semantics remained identical. Cache lifetime cannot cross a sampler or
+risk window.
 
 Do not cache whole `_EdgeTraversal` results: they also depend on departure time,
 heading, objective cost inputs, vessel state and sampled risk sequence. The
@@ -75,9 +80,10 @@ smaller exact sample boundary is easier to validate and bound.
 
 ## Acceptance and rollback（2026-08-22 01:11 +08:00）
 
-- unit tests cover hit/miss, eviction, sampler isolation and time-key identity;
+- unit tests cover hit/miss, eviction, sampler isolation, failed-sample behavior
+  and exact time/coordinate identity;
 - golden route tests cover three objectives and hard/unavailable failures;
-- baseline/medium benchmark is repeated with fixed resources and reports median
+- the medium benchmark has three independent runs per mode and reports median
   plus spread;
 - production remains default-off until focused formal ingress regression passes;
 - rollback removes the opt-in configuration and cache object without artifact

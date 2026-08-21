@@ -7,6 +7,7 @@ import json
 import threading
 import time
 from collections.abc import Sequence
+from dataclasses import asdict
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -16,7 +17,7 @@ from arctic_route_planning.cost import VesselPerformanceModel
 from arctic_route_planning.domain.models import ObjectiveMode, PlannerConfig, VesselModelConfig
 from arctic_route_planning.grid import Node, RegularGrid
 from arctic_route_planning.planners import PlanningRequest, TimeDependentAStar
-from arctic_route_planning.risk import RiskSampler
+from arctic_route_planning.risk import ExperimentalRiskSampler, SampleCacheMode
 
 
 class PeakRssSampler:
@@ -65,12 +66,19 @@ def benchmark_planning_on_risk_frames(
     vessel_config: VesselModelConfig,
     objective: ObjectiveMode = ObjectiveMode.RECOMMENDED,
     max_expansions: int = 250_000,
+    sample_cache_mode: SampleCacheMode | str = SampleCacheMode.OFF,
+    sample_cache_capacity: int = 50_000,
 ) -> dict[str, Any]:
     """Measure one real C search without modifying B or C business semantics."""
 
     if len(frames) < 2:
         raise ValueError("BC coupling benchmark requires at least two RiskFrames")
-    sampler = RiskSampler(frames, max_frame_gap=HOURLY_RISK_INTERVAL)
+    sampler = ExperimentalRiskSampler(
+        frames,
+        max_frame_gap=HOURLY_RISK_INTERVAL,
+        mode=sample_cache_mode,
+        capacity=sample_cache_capacity,
+    )
     grid = RegularGrid.from_risk_frame(
         frames[0],
         allow_diagonal=planner_config.connectivity == 8,
@@ -97,11 +105,26 @@ def benchmark_planning_on_risk_frames(
         result = planner.plan(request)
     elapsed = time.perf_counter() - started
     route_payload = {
-        "nodes": result.nodes,
-        "distance_km": round(result.distance_km, 12),
-        "travel_hours": round(result.travel_hours, 12),
-        "average_risk": round(result.average_risk, 12),
-        "maximum_risk": round(result.maximum_risk, 12),
+        "objective": result.objective.value,
+        "steps": [
+            {
+                **asdict(step),
+                "eta": step.eta.isoformat(),
+            }
+            for step in result.steps
+        ],
+        "total_cost_hours": result.total_cost_hours,
+        "distance_km": result.distance_km,
+        "travel_hours": result.travel_hours,
+        "average_risk": result.average_risk,
+        "maximum_risk": result.maximum_risk,
+        "minimum_confidence": result.minimum_confidence,
+        "source_risk_ids": result.source_risk_ids,
+        "search_metrics": {
+            key: value
+            for key, value in asdict(result.metrics).items()
+            if key != "compute_ms"
+        },
     }
     route_digest = hashlib.sha256(
         json.dumps(route_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -124,7 +147,9 @@ def benchmark_planning_on_risk_frames(
         "average_risk": result.average_risk,
         "maximum_risk": result.maximum_risk,
         "route_digest": route_digest,
+        "route_digest_scope": "complete_planning_result_except_compute_ms",
         "edge_geometry_cache": planner.edge_geometry_cache_stats,
+        "risk_sample_cache": sampler.experiment_stats,
         "source_schema_versions": sorted({frame.schema_version for frame in frames}),
         "source_provenance": sorted({frame.provenance.value for frame in frames}),
     }
