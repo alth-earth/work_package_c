@@ -200,7 +200,9 @@ class TimeDependentAStar:
             self._weights.update(
                 {ObjectiveMode(mode): weights for mode, weights in cost_weights.items()}
             )
-        self._edge_cache: dict[tuple[Node, Node], tuple[float, float, tuple[GeoPoint, ...]]] = {}
+        self._edge_cache: dict[
+            tuple[Node, Node, int], tuple[float, float, tuple[GeoPoint, ...]]
+        ] = {}
         self._heur_dist: dict[Node, float] = {}
         self._validate_grid_alignment()
 
@@ -589,7 +591,8 @@ class TimeDependentAStar:
         *,
         minimum_samples: int = 3,
     ) -> tuple[float, float, tuple[GeoPoint, ...]]:
-        cached = self._edge_cache.get((start, end))
+        cache_key = (start, end, minimum_samples)
+        cached = self._edge_cache.get(cache_key)
         if cached is None:
             distance = self.grid.distance_km(start, end)
             heading = self.grid.heading_degrees(start, end)
@@ -599,7 +602,7 @@ class TimeDependentAStar:
                 minimum_samples=minimum_samples,
             )
             cached = (distance, heading, points)
-            self._edge_cache[(start, end)] = cached
+            self._edge_cache[cache_key] = cached
         return cached
 
     def _sample_node(self, node: Node, sampled_at: datetime) -> SampledRisk:

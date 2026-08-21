@@ -15,6 +15,15 @@ Last Verified: 2026-08-21
 与当前架构请先阅读 [README.md](README.md)；长期设计取舍见
 [决策记录](docs/DECISIONS.md)。
 
+## Unreleased — Research component profiling（2026-08-22 00:08）
+
+- add an isolated synthetic profiler around the real three-objective planner;
+- report overlapping risk-sampling, edge-traversal, heuristic and objective-cost
+  call/time boundaries with deterministic route digests;
+- include `minimum_samples` in the private edge-geometry cache key so requests
+  with different edge sampling densities cannot share stale geometry;
+- do not alter A* search, route, ETA, publication or public contract semantics.
+
 ## 记录规则
 
 - 版本按时间倒序记录；`Unreleased` 表示已规划但尚未纳入当前版本的工作。

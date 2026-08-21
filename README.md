@@ -24,6 +24,10 @@ C 的阶段角色为 Risk-aware Navigation Decision。四层 × 三目标 = 12 �
 RC1 artifact 验证；当前执行仍是 12 次独立 A*。Shared multi-objective search、增量
 search 和 replay Viewer candidate publication 尚未实现。
 
+The isolated component profiler and first synthetic measurements are documented
+in [`C_PERFORMANCE_PROFILE.md`](C_PERFORMANCE_PROFILE.md). No production search
+or cache behavior changed.
+
 C 消费 B 的逐小时风险窗，按 ETA 采样风险，运行时间依赖规划，并输出三目标路线、可选 v3
 四层整组和重规划结果。
 

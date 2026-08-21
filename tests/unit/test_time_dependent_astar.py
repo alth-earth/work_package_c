@@ -177,3 +177,15 @@ def test_plan_candidates_runs_all_three_objectives() -> None:
 
     assert set(candidates) == set(ObjectiveMode)
     assert all(result.objective is mode for mode, result in candidates.items())
+
+
+def test_edge_geometry_cache_keeps_sample_count_in_identity() -> None:
+    zero = np.zeros((3, 4), dtype=np.float32)
+    planner = _planner(_risk_window((zero, zero, zero)))
+
+    three_point_geometry = planner._edge_geometry((1, 0), (1, 1), minimum_samples=3)
+    five_point_geometry = planner._edge_geometry((1, 0), (1, 1), minimum_samples=5)
+
+    assert len(three_point_geometry[2]) == 3
+    assert len(five_point_geometry[2]) == 5
+    assert len(planner._edge_cache) == 2

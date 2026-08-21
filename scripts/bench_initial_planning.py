@@ -9,8 +9,8 @@ It uses the exact same components as the formal private planner:
 
 Usage:
     python scripts/bench_initial_planning.py \
-        --risk-store-root ../work_package_a/data/output/golden/mur-v3-smoke-20260816-r5/risk-store \
-        --run-context ../work_package_a/data/output/bundles/murmansk_dikson_august_2026_demo_v1.run-context.json \
+        --risk-store-root <A-output>/risk-store \
+        --run-context <A-output>/run-context.json \
         --b-config ../work_package_b/configs/models/demo_unvalidated_smoke_grid_v4.json \
         --c-config-root configs --contracts-config-root ../arctic_route_contracts/configs \
         --scenario-id murmansk_dikson_august_2026_demo_v1 \
@@ -30,8 +30,9 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import numpy as np
-
 from arctic_route_contracts import load_run_context
+from arctic_route_risk import PersistentRiskStore
+
 from arctic_route_planning.config import load_configuration
 from arctic_route_planning.contracts import HOURLY_RISK_INTERVAL, RiskWindowQuery
 from arctic_route_planning.contracts.codec import risk_frame_from_document, risk_frame_to_document
@@ -43,10 +44,10 @@ from arctic_route_planning.planners import (
     NoRouteError,
     PlanningCancelled,
     PlanningHorizonExceeded,
+    PlanningRequest,
     TimeDependentAStar,
 )
 from arctic_route_planning.risk import RiskSampler
-from arctic_route_risk import PersistentRiskStore
 
 
 def _partial_stats(planner: TimeDependentAStar) -> dict[str, object]:
@@ -74,7 +75,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--contracts-config-root", type=Path, required=True)
     parser.add_argument("--scenario-id", default="murmansk_dikson_august_2026_demo_v1")
     parser.add_argument("--horizons", default="96,120,144")
-    parser.add_argument("--objective", default="fastest", choices=("fastest", "low_risk", "recommended"))
+    parser.add_argument(
+        "--objective",
+        default="fastest",
+        choices=("fastest", "low_risk", "recommended"),
+    )
     parser.add_argument("--max-expansions", type=int, default=250_000)
     parser.add_argument("--progress-interval", type=float, default=2.0)
     parser.add_argument("--max-wait-seconds", type=float, default=600.0)
@@ -145,10 +150,11 @@ def main(argv: list[str] | None = None) -> int:
         theoretical = int(navigable * (H * buckets_per_hour) * headings)
         cancelled = {"flag": False}
 
-        def cancel_check() -> bool:
-            return cancelled["flag"]
+        def cancel_check(cancelled_state: dict[str, bool] = cancelled) -> bool:
+            return cancelled_state["flag"]
 
-        from arctic_route_planning.planners import PlanningRequest
+        def request_cancel(cancelled_state: dict[str, bool] = cancelled) -> None:
+            cancelled_state["flag"] = True
 
         preq = PlanningRequest(
             start=endpoint.start.node,
@@ -163,12 +169,15 @@ def main(argv: list[str] | None = None) -> int:
             use_heuristic=True,
             progress_interval_seconds=args.progress_interval,
         )
-        timer = threading.Timer(args.max_wait_seconds, lambda: cancelled.__setitem__("flag", True))
+        timer = threading.Timer(args.max_wait_seconds, request_cancel)
         timer.daemon = True
         timer.start()
         t0 = time.perf_counter()
-        status = "OK"
-        prof = cProfile.Profile() if (args.profile is not None and H == args.profile) else None
+        prof = (
+            cProfile.Profile()
+            if args.profile is not None and args.profile == H
+            else None
+        )
         if prof is not None:
             prof.enable()
         try:
@@ -225,7 +234,9 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(row, ensure_ascii=False), flush=True)
 
     if args.out_json:
-        args.out_json.write_text(json.dumps(results, ensure_ascii=False, indent=1), encoding="utf-8")
+        args.out_json.write_text(
+            json.dumps(results, ensure_ascii=False, indent=1), encoding="utf-8"
+        )
     return 0
 
 
