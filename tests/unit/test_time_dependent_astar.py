@@ -189,3 +189,8 @@ def test_edge_geometry_cache_keeps_sample_count_in_identity() -> None:
     assert len(three_point_geometry[2]) == 3
     assert len(five_point_geometry[2]) == 5
     assert len(planner._edge_cache) == 2
+    assert planner.edge_geometry_cache_stats == {"hits": 0, "misses": 2, "entries": 2}
+
+    planner._edge_geometry((1, 0), (1, 1), minimum_samples=3)
+
+    assert planner.edge_geometry_cache_stats == {"hits": 1, "misses": 2, "entries": 2}

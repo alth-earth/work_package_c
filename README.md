@@ -6,7 +6,7 @@ Content Status:
 Document Role: CANONICAL
 Scope: work package C entrypoint and public boundary
 Branch: research-validation-system
-Last Verified: 2026-08-21
+Last Verified: 2026-08-22
 ---
 
 > [!NOTE]
@@ -27,6 +27,12 @@ search 和 replay Viewer candidate publication 尚未实现。
 The isolated component profiler and first synthetic measurements are documented
 in [`C_PERFORMANCE_PROFILE.md`](C_PERFORMANCE_PROFILE.md). No production search
 or cache behavior changed.
+
+The real B-frame/C-search comparison is documented in
+[`BC_COUPLING_PERFORMANCE_REPORT.md`](BC_COUPLING_PERFORMANCE_REPORT.md), and the
+bounded next-step gate in [`C_OPTIMIZATION_PROPOSAL.md`](C_OPTIMIZATION_PROPOSAL.md).
+The planner now exposes observational edge-geometry cache hit/miss counters;
+cache keys, eviction, A* behavior, routes and public contracts are unchanged.
 
 C 消费 B 的逐小时风险窗，按 ETA 采样风险，运行时间依赖规划，并输出三目标路线、可选 v3
 四层整组和重规划结果。
@@ -106,5 +112,5 @@ Python 公共入口 `RiskSourcePlanningIngress`。正式调用方必须：
 - [稳定决策](docs/DECISIONS.md)
 - [B→C 合同](docs/BC_CONTRACT.md)
 - [C→D 合同](docs/CD_CONTRACT.md)
-- [系统权威](../ARCTIC_ROUTE_SYSTEM.md)
-- [十日计划](../ABC_10_DAY_SPRINT.md)
+- [系统权威](../arctic_route_governance/current/architecture/ARCTIC_ROUTE_SYSTEM.md)
+- [当前路线图](../arctic_route_governance/current/CURRENT_ROADMAP.md)

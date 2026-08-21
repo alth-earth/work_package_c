@@ -203,6 +203,8 @@ class TimeDependentAStar:
         self._edge_cache: dict[
             tuple[Node, Node, int], tuple[float, float, tuple[GeoPoint, ...]]
         ] = {}
+        self._edge_cache_hits = 0
+        self._edge_cache_misses = 0
         self._heur_dist: dict[Node, float] = {}
         self._validate_grid_alignment()
 
@@ -217,6 +219,16 @@ class TimeDependentAStar:
         """Expose BC knowledge cutoffs for service-level leakage checks."""
 
         return self.risk_sampler.as_of_times
+
+    @property
+    def edge_geometry_cache_stats(self) -> dict[str, int]:
+        """Return observational counters without changing cache behavior."""
+
+        return {
+            "hits": self._edge_cache_hits,
+            "misses": self._edge_cache_misses,
+            "entries": len(self._edge_cache),
+        }
 
     def plan(self, request: PlanningRequest) -> PlanningResult:
         started = perf_counter()
@@ -594,6 +606,7 @@ class TimeDependentAStar:
         cache_key = (start, end, minimum_samples)
         cached = self._edge_cache.get(cache_key)
         if cached is None:
+            self._edge_cache_misses += 1
             distance = self.grid.distance_km(start, end)
             heading = self.grid.heading_degrees(start, end)
             points = self.grid.edge_sample_points(
@@ -603,6 +616,8 @@ class TimeDependentAStar:
             )
             cached = (distance, heading, points)
             self._edge_cache[cache_key] = cached
+        else:
+            self._edge_cache_hits += 1
         return cached
 
     def _sample_node(self, node: Node, sampled_at: datetime) -> SampledRisk:

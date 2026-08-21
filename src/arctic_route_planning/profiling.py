@@ -102,6 +102,7 @@ def profile_synthetic_three_objective_planning(
         "total_profiled_seconds": round(stats.total_tt, 9),
         "categories": categories,
         "results": result_summaries,
+        "edge_geometry_cache": planner.edge_geometry_cache_stats,
         "timings_are_overlapping": True,
     }
 

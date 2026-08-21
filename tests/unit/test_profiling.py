@@ -37,4 +37,6 @@ def test_synthetic_profile_reports_component_boundaries() -> None:
     assert result["categories"]["edge_traversal"]["total_calls"] > 0
     assert result["categories"]["heuristic"]["total_calls"] > 0
     assert result["categories"]["objective_calculation"]["total_calls"] > 0
+    assert result["edge_geometry_cache"]["hits"] > 0
+    assert result["edge_geometry_cache"]["misses"] > 0
     assert result["timings_are_overlapping"] is True

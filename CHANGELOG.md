@@ -6,7 +6,7 @@ Content Status:
 Document Role: SUPPORTING
 Scope: work package C change history
 Branch: research-validation-system
-Last Verified: 2026-08-21
+Last Verified: 2026-08-22
 ---
 
 # 工作包 C 变更记录
@@ -14,6 +14,17 @@ Last Verified: 2026-08-21
 本文件记录工作包 C 的可见功能、跨包合同、兼容性和验证状态变化。项目用途、运行方法
 与当前架构请先阅读 [README.md](README.md)；长期设计取舍见
 [决策记录](docs/DECISIONS.md)。
+
+## Unreleased — B-C coupling evidence（2026-08-22 01:11 +08:00）
+
+- add a sequential benchmark that decodes experimental formal
+  `bc.risk-frame.v2` documents and runs the existing endpoint mapper,
+  `RiskSampler`, regular grid, vessel model and recommended A* search;
+- expose observational edge-geometry cache hits/misses/entries in planner and
+  profiler outputs without changing cache or search behavior;
+- add unit coverage for the benchmark and counters;
+- record baseline/medium scaling and a bounded, default-off optimization
+  proposal; no fine search, A* redesign or public contract change.
 
 ## Unreleased — Research component profiling（2026-08-22 00:08）
 
