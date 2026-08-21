@@ -1,3 +1,14 @@
+---
+Overall Status: ACTIVE
+Content Status:
+  - COMPLETED
+  - PLANNED
+Document Role: CANONICAL
+Scope: C to D route artifact contract
+Branch: research-validation-system
+Last Verified: 2026-08-21
+---
+
 > [!NOTE]
 > **文档治理声明**
 >

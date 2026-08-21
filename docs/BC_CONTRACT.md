@@ -1,3 +1,13 @@
+---
+Overall Status: ACTIVE
+Content Status:
+  - COMPLETED
+Document Role: CANONICAL
+Scope: B to C RiskFrame contract
+Branch: research-validation-system
+Last Verified: 2026-08-21
+---
+
 # B → C：RiskFrame v2
 
 Python 真源为 `arctic_route_planning.contracts.RiskFrame`，跨语言结构见

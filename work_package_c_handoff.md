@@ -1,3 +1,14 @@
+---
+Overall Status: ACTIVE
+Content Status:
+  - COMPLETED
+  - PLANNED
+Document Role: SUPPORTING
+Scope: work package C handoff
+Branch: research-validation-system
+Last Verified: 2026-08-21
+---
+
 > [!NOTE]
 > **文档治理声明**
 > - 文件角色：工作包 C 当前唯一详细交接入口，供人和 AI 判断边界、现状、演示目标与接手顺序。
