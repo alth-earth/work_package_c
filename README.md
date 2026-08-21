@@ -1,3 +1,14 @@
+---
+Overall Status: ACTIVE
+Content Status:
+  - COMPLETED
+  - PLANNED
+Document Role: CANONICAL
+Scope: work package C entrypoint and public boundary
+Branch: research-validation-system
+Last Verified: 2026-08-21
+---
+
 > [!NOTE]
 > **文档治理声明**
 > - 文件角色：工作包 C 当前首读入口与最小运行指南。
@@ -6,6 +17,12 @@
 > - 改造原因：同步挑战杯工程演示验收、双运行模式和非阻塞科学接口。
 
 # 北极航线工作包 C
+
+## Research Validation 定位（2026-08-21 23:18）
+
+C 的阶段角色为 Risk-aware Navigation Decision。四层 × 三目标 = 12 路线已实现并由
+RC1 artifact 验证；当前执行仍是 12 次独立 A*。Shared multi-objective search、增量
+search 和 replay Viewer candidate publication 尚未实现。
 
 C 消费 B 的逐小时风险窗，按 ETA 采样风险，运行时间依赖规划，并输出三目标路线、可选 v3
 四层整组和重规划结果。

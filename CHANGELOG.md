@@ -1,3 +1,14 @@
+---
+Overall Status: ACTIVE
+Content Status:
+  - COMPLETED
+  - IN_PROGRESS
+Document Role: SUPPORTING
+Scope: work package C change history
+Branch: research-validation-system
+Last Verified: 2026-08-21
+---
+
 # 工作包 C 变更记录
 
 本文件记录工作包 C 的可见功能、跨包合同、兼容性和验证状态变化。项目用途、运行方法
