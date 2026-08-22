@@ -1,21 +1,18 @@
-# Work Package C agent guide
+# 工作包 C 开发代理指南
 
-Read `README.md` first, then `docs/DECISIONS.md`, `docs/BC_CONTRACT.md`, and
-`docs/CD_CONTRACT.md` before changing contracts or planning behavior.
+请先阅读 `README.md`，然后在修改契约或规划行为之前阅读 `docs/DECISIONS.md`、`docs/BC_CONTRACT.md` 和 `docs/CD_CONTRACT.md`。
 
-## Invariants
+## 不变量
 
-- Do not import Work Package A or B implementation modules. Integrate only through versioned contracts/adapters.
-- Do not edit Work Package B from this project.
-- B supplies declared environmental effects; C computes final vessel speed. Never infer speed loss from risk score or confidence.
-- Never treat missing risk as zero, extrapolate beyond a risk window, mix contexts, or silently snap endpoints.
-- Keep scenario/vessel configuration path-injected so it can move to shared `demo_scenarios/contracts` later.
-- Demo vessel values are unvalidated and must never be described as calibrated or safe for navigation.
-- Preserve generation/request/revision publication fencing and immutable contract models.
-- Use Mamba for native runtime libraries and uv for Python dependencies/lockfile.
+- 不得导入工作包 A 或 B 的实现模块。仅通过带版本的契约/适配器进行集成。
+- 不得在本项目中编辑工作包 B。
+- B 提供已声明环境效应；C 计算最终船舶速度。绝不可从风险分数或置信度推断速度损失。
+- 绝不可将缺失风险视为零、在风险窗口外插值、混用上下文或静默吸附端点。
+- 保持场景/船舶配置以路径注入，以便后续迁移到共享的 `demo_scenarios/contracts`。
+- 演示船舶数值未经校验，绝不可描述为已标定或适合航行使用。
+- 保留 generation/request/revision 发布隔离与不可变契约模型。
+- 原生运行时库使用 Mamba，Python 依赖与锁文件使用 uv。
 
-## Required verification
+## 必要的验证
 
-Run `make check` after code changes. Add a focused regression test for every contract, ETA-sampling,
-planner, replanning, or publication bug. Legacy behavior must use repository-controlled fixtures or
-explicit user-supplied paths; do not hard-code retired external delivery archives.
+代码修改后请运行 `make check`。针对每个契约、ETA 采样、规划器、重规划或发布缺陷，新增一个聚焦的回归测试。遗留行为必须使用仓库受控的 fixtures 或用户明确提供的路径；不要硬编码已退役的外部交付归档。
