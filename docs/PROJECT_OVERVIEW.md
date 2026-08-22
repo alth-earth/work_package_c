@@ -22,7 +22,7 @@ A：环境事实与可回放数据
 B：时间处理、预测和风险融合
           ↓ committed bc.risk-frame.v2 window
 C：端点、ETA 风险采样、航速/成本、规划、重规划和发布
-          ↓ RoutePlan.v2 或 FourLayerRoutePlanSet.v3
+          ↓ cd.route-plan.v2 或 cd.four-layer-route-plan-set.v3
 D：只读消费、展示和交互
 ```
 
@@ -59,7 +59,8 @@ D：只读消费、展示和交互
 | v3 | 四层 × 三目标的 `cd.four-layer-route-plan-set.v3` | 当前四层能力 |
 | legacy | 显式 v1 审计/迁移结果 | 永久 `legacy_unverified`，不得进入正式 latest |
 
-v3 的四层是全航程、主通道、滚动和可执行视野。它们共享同一输入窗口、lease、运行身份
+v3 集合内的每条路线使用 `cd.route-plan.v3`；它不是顶层 planning contract。v3 的四层是
+全航程、主通道、滚动和可执行视野。它们共享同一输入窗口、lease、运行身份
 和全航程锚点；任一层失败不得留下部分整组。
 
 ## 关键时间概念

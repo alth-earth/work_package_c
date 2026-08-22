@@ -6,7 +6,7 @@ Content Status:
 Document Role: SUPPORTING
 Scope: work package C change history
 Branch: research-validation-system
-Last Verified: 2026-08-22
+Last Verified: 2026-08-23
 ---
 
 # 工作包 C 变更记录
@@ -41,7 +41,8 @@ Last Verified: 2026-08-22
 - “新增/变更/修复”只描述已经落入代码、配置、Schema、测试或文档的内容。
 - “后续工作”不是完成声明，也不构成正式接口承诺。
 - BC/CD 合同版本与 Python 包版本是不同概念。例如包版本 `0.4.0` 继续消费
-  `bc.risk-frame.v2`，并提供 `cd.route-plan.v3` 整组输出。
+  `bc.risk-frame.v2`，并提供顶层 `cd.four-layer-route-plan-set.v3` 整组输出；
+  `cd.route-plan.v3` 是该整组内的单路线 schema。
 - 当前系统仅用于科研演示；未经标定的船舶、风险和规划参数不得用于真实航行决策。
 
 ## Unreleased
