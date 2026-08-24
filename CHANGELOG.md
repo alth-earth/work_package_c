@@ -15,6 +15,16 @@ Last Verified: 2026-08-23
 与当前架构请先阅读 [README.md](README.md)；长期设计取舍见
 [决策记录](docs/DECISIONS.md)。
 
+## Unreleased — Version clutter cleanup（2026-08-24）
+
+依据 `arctic_route_governance/reports/audits/C_D_VERSION_CLUTTER_AUDIT_AND_CLEANUP_PLAN_20260824.md` 执行版本/合同/旧文件清理，**不触及代码逻辑与 C→D 合约**：
+
+- **文档归档收敛**：14 个 pre-governance / 2026-08-15 归档文件（`*.archive-20260814-pre-governance.md`、`*_归档_20260815.md`）从根目录与 `docs/` 移入 `docs/archive/`；5 份历史性能报告（C_OPTIMIZATION_PROPOSAL / C_PERFORMANCE_PROFILE / C_RISK_SAMPLE_CACHE_EXPERIMENT / BC_COUPLING_PERFORMANCE_REPORT / bench_cprofile_96.0h.pstats）移入 `docs/archive/performance/`。
+- **链接更新**：11 个当前文档（README、handoff、STATUS_AND_TODO、ACCEPTANCE、DECISIONS、ARCHITECTURE_TRACE、CD_CONTRACT、ARCHITECTURE_AND_DECISIONS、PROJECT_OVERVIEW、DEVELOPMENT_GUIDE、SHARED_CONTEXT_MIGRATION）中的归档文件引用全部更新为 `docs/archive/...` 路径，按治理标准"目标：规范链接失效数 = 0"。
+- **死 Schema 删除**：`schemas/route-plan-v1.schema.json` 无任何代码/测试引用，直接删除（`risk-frame-v1.schema.json` 仍被 legacy 适配器使用，保留）。
+- **历史产物清理**：删除 `output/legacy-smoke/`。
+- **保留项**：v2 路线 schema（selection-rationale 基准 + v3 投影后备）、v3 四层 schema、selection-rationale schema、legacy CLI 与适配器（仍服役）。
+
 ## Unreleased — Core algorithm audit fixes（2026-08-24）
 
 依据 `docs/CORE_ALGORITHM_AUDIT.md` 14 问题清单完成内部质量修复，**不触及 C→D 合约**（schema 文件、序列化格式、digest 语义、selection-rationale sidecar 均不变）：

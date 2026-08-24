@@ -2,7 +2,7 @@
 > **文档治理声明**
 > - 文件角色：工作包 C 当前挑战杯工程演示验收真源。
 > - 改造时间：2026-08-15（Asia/Shanghai）。
-> - 原文件去向：[ACCEPTANCE_归档_20260815.md](ACCEPTANCE_归档_20260815.md)。
+> - 原文件去向：[ACCEPTANCE_归档_20260815.md](archive/ACCEPTANCE_归档_20260815.md)。
 > - 改造原因：把工程演示验收与未来科学接口分开，避免科学门槛阻塞比赛闭环。
 
 # 工作包 C 验收清单
@@ -24,7 +24,7 @@ Ruff、pytest、lock/sync 和 CLI 必须通过。当前快照为 138 passed。
 - 稳定演示读取冻结本地数据，但不跳过版本/代次围栏；
 - `valid_time` 覆盖路线实际 ETA，不把一张风险图用于全航程。
 
-补充（源自：ACCEPTANCE_归档_20260815.md）：
+补充（源自：[ACCEPTANCE_归档_20260815.md](archive/ACCEPTANCE_归档_20260815.md)）：
 
 - `ScenarioDefinition`、`CorridorDefinition`、`VesselProfile` 和 `RunContext.v2` 来自
   `arctic_route_contracts`，不使用 C 的 legacy 场景/船型夹具；
@@ -39,7 +39,7 @@ Ruff、pytest、lock/sync 和 CLI 必须通过。当前快照为 138 passed。
 - canonical commit 与 execution lease 在执行期间稳定；
 - 演示降级输入必须明确标 `demo_unvalidated`，不得伪装 scientific/calibrated。
 
-补充（源自：ACCEPTANCE_归档_20260815.md）：
+补充（源自：[ACCEPTANCE_归档_20260815.md](archive/ACCEPTANCE_归档_20260815.md)）：
 
 - 只接受 `bc.risk-frame.v2`、`provenance=formal` 的 canonical RiskFrame；
 - 每个正式来源项都有 `data_id`、UTC `issue_time/valid_time` 和小写 SHA-256 checksum；
@@ -58,7 +58,7 @@ Ruff、pytest、lock/sync 和 CLI 必须通过。当前快照为 138 passed。
 - 地图上无明显经纬翻转、跨陆直线、极端锯齿或无解释绕行；
 - 风险变化后路线变化方向能用风险图和指标解释。
 
-补充（源自：ACCEPTANCE_归档_20260815.md）：
+补充（源自：[ACCEPTANCE_归档_20260815.md](archive/ACCEPTANCE_归档_20260815.md)）：
 
 - 正式调用方使用 `map_corridor_endpoints(...)`，不自行四舍五入经纬度；
 - 节点位于起点/终点 allowed region 内，未被首帧 hard mask 阻断，且属于同一可通航连通分量；
@@ -72,7 +72,7 @@ Ruff、pytest、lock/sync 和 CLI 必须通过。当前快照为 138 passed。
 - CD latest 原子替换，不留下部分路线集；
 - D 读取发布制品，不直接调用内部 planner。
 
-补充（源自：ACCEPTANCE_归档_20260815.md）：
+补充（源自：[ACCEPTANCE_归档_20260815.md](archive/ACCEPTANCE_归档_20260815.md)）：
 
 - 发布令牌同时绑定 run/scenario/generation/request/revision 和三类 digest；
 - 同 run 新 generation 或更新 revision 能取消旧任务；不同 run 相互隔离；
@@ -93,7 +93,7 @@ Ruff、pytest、lock/sync 和 CLI 必须通过。当前快照为 138 passed。
 四层各三目标、共 12 条路线必须整组成功后才发布。若性能不足，v2 三目标 + 重规划仍可满足
 挑战杯后备路径，不能发布不完整 v3。v2 仅作为强制后备，不作为首选验收结论。
 
-补充（源自：ACCEPTANCE_归档_20260815.md）：
+补充（源自：[ACCEPTANCE_归档_20260815.md](archive/ACCEPTANCE_归档_20260815.md)）：
 
 - 四层固定为 `full_voyage`、`main_corridor_24_72h`、`rolling_0_24h`、
   `executable_0_6h`；每层恰好三目标；
@@ -116,7 +116,7 @@ Ruff、pytest、lock/sync 和 CLI 必须通过。当前快照为 138 passed。
 或数据原因无法整组发布，按后备规则以 v2 三目标 + 重规划验收，并如实标注。该结论不授予
 真实导航或科学准确性。
 
-## J. 禁止的验收替代（源自：ACCEPTANCE_归档_20260815.md）
+## J. 禁止的验收替代（源自：[ACCEPTANCE_归档_20260815.md](archive/ACCEPTANCE_归档_20260815.md)）
 
 - 不得用 `make demo` 代替正式 orchestrator/ingress 验收；
 - 不得用 `synthetic`、`legacy_unverified` 或 test source snapshot 冒充实源；

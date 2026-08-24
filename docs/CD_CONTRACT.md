@@ -14,7 +14,7 @@ Last Verified: 2026-08-21
 >
 > - 文件角色：当前 C→D 输出合同说明；Python 模型和 JSON Schema 仍是机器可执行真源。
 > - 改造时间：2026-08-14（Asia/Shanghai）。
-> - 原文件去向：`CD_CONTRACT.archive-20260814-pre-governance.md`。
+> - 原文件去向：`docs/archive/CD_CONTRACT.archive-20260814-pre-governance.md`。
 > - 改造原因：保留 v3/v2 稳定技术语义，移除冲刺日历职责。
 
 # C → D：RoutePlan v3 与 v2 兼容

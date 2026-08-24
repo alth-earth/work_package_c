@@ -13,7 +13,7 @@ Last Verified: 2026-08-22
 > **文档治理声明**
 > - 文件角色：工作包 C 当前首读入口与最小运行指南。
 > - 改造时间：2026-08-15（Asia/Shanghai）。
-> - 原文件去向：[README_归档_20260815.md](README_归档_20260815.md)。
+> - 原文件去向：[README_归档_20260815.md](docs/archive/README_归档_20260815.md)。
 > - 改造原因：同步挑战杯工程演示验收、双运行模式和非阻塞科学接口。
 
 > **路径约定（2026-08-24）**：本文件中 `${ARCTIC_ROUTE_ROOT}` 为工作区根占位符，
@@ -30,12 +30,12 @@ RC1 artifact 验证；当前执行仍是 12 次独立 A*。Shared multi-objectiv
 search 和 replay Viewer candidate publication 尚未实现。
 
 The isolated component profiler and first synthetic measurements are documented
-in [`C_PERFORMANCE_PROFILE.md`](C_PERFORMANCE_PROFILE.md). No production search
+in [`C_PERFORMANCE_PROFILE.md`](docs/archive/performance/C_PERFORMANCE_PROFILE.md). No production search
 or cache behavior changed.
 
 The real B-frame/C-search comparison is documented in
-[`BC_COUPLING_PERFORMANCE_REPORT.md`](BC_COUPLING_PERFORMANCE_REPORT.md), and the
-bounded next-step gate in [`C_OPTIMIZATION_PROPOSAL.md`](C_OPTIMIZATION_PROPOSAL.md).
+[`BC_COUPLING_PERFORMANCE_REPORT.md`](docs/archive/performance/BC_COUPLING_PERFORMANCE_REPORT.md), and the
+bounded next-step gate in [`C_OPTIMIZATION_PROPOSAL.md`](docs/archive/performance/C_OPTIMIZATION_PROPOSAL.md).
 The planner now exposes observational edge-geometry cache hit/miss counters;
 cache keys, eviction, A* behavior, routes and public contracts are unchanged.
 
@@ -55,7 +55,7 @@ C 消费 B 的逐小时风险窗，按 ETA 采样风险，运行时间依赖规�
 | 科学状态 | `demo_unvalidated`；保留接口，不阻塞工程演示 |
 | 使用边界 | 禁止真实导航和安全决策 |
 
-补充口径（源自：README_归档_20260815.md）：
+补充口径（源自：[README_归档_20260815.md](docs/archive/README_归档_20260815.md)）：
 
 - B→C：正式入口只接受完整、逐小时、canonical、原子提交的 `RiskFrame v2` 窗口；
 - C→D：新运行可显式选择 v2 三目标或 v3 四层整组；同一运行禁止双写；
@@ -98,7 +98,7 @@ make demo
 
 `make demo` 是 synthetic 工程 smoke；比赛主线还需冻结 A/B 输入和 D 可视化。
 
-正式运行入口（源自：README_归档_20260815.md）：系统级正式运行由
+正式运行入口（源自：[README_归档_20260815.md](docs/archive/README_归档_20260815.md)）：系统级正式运行由
 [`arctic_route_orchestrator`](../arctic_route_orchestrator/) 组装 A、B 和 C；C 也提供
 Python 公共入口 `RiskSourcePlanningIngress`。正式调用方必须：
 

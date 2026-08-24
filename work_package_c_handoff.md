@@ -13,7 +13,7 @@ Last Verified: 2026-08-21
 > **文档治理声明**
 > - 文件角色：工作包 C 当前唯一详细交接入口，供人和 AI 判断边界、现状、演示目标与接手顺序。
 > - 改造时间：2026-08-15（Asia/Shanghai）。
-> - 原文件去向：[work_package_c_handoff_归档_20260815.md](work_package_c_handoff_归档_20260815.md)。
+> - 原文件去向：[work_package_c_handoff_归档_20260815.md](docs/archive/work_package_c_handoff_归档_20260815.md)。
 > - 改造原因：落实挑战杯工程演示优先、双运行模式、散货船参数和非阻塞科学接口。
 
 # 工作包 C 交接说明
@@ -66,7 +66,7 @@ C 负责：按 ETA 采样风险、组合演示船型得到最终速度、时间�
 | 原子 latest 与 codec | `publishing/` |
 | legacy 隔离 | `adapters/legacy_b.py` |
 
-关键实现明细（源自：work_package_c_handoff_归档_20260815.md）：
+关键实现明细（源自：[work_package_c_handoff_归档_20260815.md](docs/archive/work_package_c_handoff_归档_20260815.md)）：
 
 | 功能 | 关键路径 | 主要验证 |
 |---|---|---|
@@ -97,7 +97,7 @@ C 只消费按 `valid_time` 排序的 BC 风险窗口；CD 以原子 latest 发�
 D 不持有 C 计算锁。旧 generation/request/revision 不能覆盖当前结果。
 
 与架构蓝本一致之处：A/B/C/D 分责、预测驱动动态规划、滚动更新、版本化中间结果和多目标
-路线仍是主干。工程化收敛（源自：work_package_c_handoff_归档_20260815.md）：
+路线仍是主干。工程化收敛（源自：[work_package_c_handoff_归档_20260815.md](docs/archive/work_package_c_handoff_归档_20260815.md)）：
 
 - 共享上下文集中到 `arctic_route_contracts`，不靠同名文件或私有模块隐式对齐；
 - BC 正式边界是逐小时、canonical、原子 committed window 和 execution lease，不是松散静态
@@ -171,7 +171,7 @@ UV_OFFLINE=1 make check
 
 风险保持记录，但只有 P0 项进入当前挑战杯主线。
 
-补充风险清单（源自：work_package_c_handoff_归档_20260815.md）：
+补充风险清单（源自：[work_package_c_handoff_归档_20260815.md](docs/archive/work_package_c_handoff_归档_20260815.md)）：
 
 1. **证据等级混淆**：synthetic 通过、formal provenance 和 calibrated 三者不能互相替代；
 2. **时域不足**：C 不等待也不外推；B 窗口必须覆盖搜索实际 ETA，缺一小时也会拒绝；
@@ -183,7 +183,7 @@ UV_OFFLINE=1 make check
 8. **端点沉默吸附**：调用方必须保存映射距离/理由并遵守阈值，不得绕过 orchestrator 映射；
 9. **文档漂移**：旧综合指南含 74 tests、B 未工程化、v1 正式等历史说法，不可回填现状。
 
-## 10.1 数据、模型与输出位置（源自：work_package_c_handoff_归档_20260815.md）
+## 10.1 数据、模型与输出位置（源自：[work_package_c_handoff_归档_20260815.md](docs/archive/work_package_c_handoff_归档_20260815.md)）
 
 | 内容 | 位置/责任 | 说明 |
 |---|---|---|

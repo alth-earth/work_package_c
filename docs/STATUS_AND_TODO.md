@@ -2,7 +2,7 @@
 > **文档治理声明**
 > - 文件角色：工作包 C 当前进度、挑战杯待办和延期项真源。
 > - 改造时间：2026-08-15（Asia/Shanghai）。
-> - 原文件去向：[STATUS_AND_TODO_归档_20260815.md](STATUS_AND_TODO_归档_20260815.md)。
+> - 原文件去向：[STATUS_AND_TODO_归档_20260815.md](archive/STATUS_AND_TODO_归档_20260815.md)。
 > - 改造原因：科学校准不再作为工程演示门槛，并取消跨专业签字依赖。
 
 # 工作包 C 进度与待办
@@ -12,7 +12,7 @@
 | 字段 | 当前值 |
 |---|---|
 | 包版本 | 0.4.0 |
-| 审计基线提交（源自：STATUS_AND_TODO_归档_20260815.md） | `703b1da071754585e3c1bfceeeadf6647c795072` |
+| 审计基线提交（源自：[STATUS_AND_TODO_归档_20260815.md](archive/STATUS_AND_TODO_归档_20260815.md)） | `703b1da071754585e3c1bfceeeadf6647c795072` |
 | 工程复验 | 2026-08-14：`138 passed`，Ruff/lock/sync/CLI 通过 |
 | 工程主线 | v2/v3、重规划、围栏和原子发布已实现 |
 | 挑战杯状态 | **Demo RC1 已建立（2026-08-16）**：mur/dikson v3 四层 + 6h 重规划 PASS，D 消费 PASS，r7 复现 PASS |
@@ -21,7 +21,7 @@
 用户已确认旧 `交付包.zip` 是已退役的 B 历史制品；C 已移除其硬编码路径和外部制品测试，
 保留不依赖该 ZIP 的 legacy 显式开发模式门禁。
 
-## 已完成（源自：STATUS_AND_TODO_归档_20260815.md）
+## 已完成（源自：[STATUS_AND_TODO_归档_20260815.md](archive/STATUS_AND_TODO_归档_20260815.md)）
 
 | 范围 | 证据 |
 |---|---|
@@ -70,7 +70,7 @@
 真实长窗、科学校准、D 长期合同、v3 性能、bathymetry/法规、等待和新算法继续记录，不在本轮
 自动展开。
 
-## 依赖闸门与执行顺序（源自：STATUS_AND_TODO_归档_20260815.md）
+## 依赖闸门与执行顺序（源自：[STATUS_AND_TODO_归档_20260815.md](archive/STATUS_AND_TODO_归档_20260815.md)）
 
 ```text
 当前 A bundle + RunContext
@@ -87,7 +87,7 @@ D 消费验收
 任一上游闸门不满足时，保留 formal fixture/synthetic 工程证据并把实源状态标为阻塞；不能
 降低校验或把 synthetic 输出改名为 formal。
 
-## 完成判据补充（源自：STATUS_AND_TODO_归档_20260815.md）
+## 完成判据补充（源自：[STATUS_AND_TODO_归档_20260815.md](archive/STATUS_AND_TODO_归档_20260815.md)）
 
 - 工程基线：以 [`ACCEPTANCE.md`](ACCEPTANCE.md) 的闸门为准；
 - 系统闭环：A/B/C/D handoff 对同一运行身份、合同版本和证据制品表述一致；
