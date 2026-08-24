@@ -27,7 +27,7 @@ Last Verified: 2026-08-23
 
 ## Unreleased — Core algorithm audit fixes（2026-08-24）
 
-依据 `docs/CORE_ALGORITHM_AUDIT.md` 14 问题清单完成内部质量修复，**不触及 C→D 合约**（schema 文件、序列化格式、digest 语义、selection-rationale sidecar 均不变）：
+依据 `docs/CORE_ALGORITHM_IMPROVEMENT_PLAN.md` 14 问题清单完成内部质量修复，**不触及 C→D 合约**（schema 文件、序列化格式、digest 语义、selection-rationale sidecar 均不变）：
 
 - **P0 性能**：`_Counters` 改可变（去 `frozen`），A\* 热循环消除每迭代 15+ 次 `dataclasses.replace` 重建，循环结束仍快照为不可变 `SearchMetrics`。
 - **P1 观测剥离**：`planners/time_dependent_astar.py` 移除顶层 `import os`/`import resource`；env 解析 `C_ASTAR_PROGRESS_SECONDS` 移至 `service.progress_interval_from_env()` 经 `PlanningRequest.progress_interval_seconds` 注入；28 行进度打印提取为 `_emit_progress`，RSS 采样 lazy import（非 Unix 输出 `rss=na`）。
