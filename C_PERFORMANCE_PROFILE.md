@@ -30,7 +30,7 @@ Command:
 
 ```bash
 uv run python scripts/profile_planner_components.py \
-  --output /root/my_project/.runtime/test-logs/c-component-profile-20260822.json
+  --output ${ARCTIC_ROUTE_ROOT}/.runtime/test-logs/c-component-profile-20260822.json
 ```
 
 | Component boundary | Calls | Self time | Inclusive time | Inclusive / total |

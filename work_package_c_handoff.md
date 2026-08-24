@@ -156,7 +156,7 @@ P2 不阻塞挑战杯完成。
 明显错误、风险变化能驱动合理路线变化、重规划和 D 展示稳定、参数和局限清楚。
 
 ```bash
-cd /root/my_project/work_package_c
+cd ${ARCTIC_ROUTE_ROOT}/work_package_c
 UV_OFFLINE=1 make check
 ```
 

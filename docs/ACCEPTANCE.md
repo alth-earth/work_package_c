@@ -10,7 +10,7 @@
 ## A. 工程门禁
 
 ```bash
-cd /root/my_project/work_package_c
+cd ${ARCTIC_ROUTE_ROOT}/work_package_c
 UV_OFFLINE=1 make check
 git diff --check
 ```

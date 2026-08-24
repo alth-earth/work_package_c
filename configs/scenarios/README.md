@@ -6,8 +6,8 @@
 正式场景、航区和时域唯一来自：
 
 ```text
-/root/my_project/arctic_route_contracts/configs/scenarios/
-/root/my_project/arctic_route_contracts/configs/corridors/
+${ARCTIC_ROUTE_ROOT}/arctic_route_contracts/configs/scenarios/
+${ARCTIC_ROUTE_ROOT}/arctic_route_contracts/configs/corridors/
 ```
 
 新 C 运行必须读取 `RunContext.v2`。若旧适配器需要本目录，它必须持续标为

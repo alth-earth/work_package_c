@@ -111,14 +111,14 @@ before setting an acceptance SLA.
 ## Reproduction（2026-08-22 01:11 +08:00）
 
 ```bash
-cd /root/my_project/work_package_c
+cd ${ARCTIC_ROUTE_ROOT}/work_package_c
 uv run python scripts/benchmark_bc_coupling.py \
-  --profile baseline=/root/my_project/.runtime/experiments/b-formal-grid-round2/baseline/risk-frames.json \
-  --profile medium=/root/my_project/.runtime/experiments/b-formal-grid-round2/medium/risk-frames.json \
+  --profile baseline=${ARCTIC_ROUTE_ROOT}/.runtime/experiments/b-formal-grid-round2/baseline/risk-frames.json \
+  --profile medium=${ARCTIC_ROUTE_ROOT}/.runtime/experiments/b-formal-grid-round2/medium/risk-frames.json \
   --c-config-root configs \
-  --contracts-config-root /root/my_project/arctic_route_contracts/configs \
+  --contracts-config-root ${ARCTIC_ROUTE_ROOT}/arctic_route_contracts/configs \
   --scenario-id tromso_isfjorden_august_2026_demo_v1 \
   --max-snap-km 30 \
   --max-expansions 250000 \
-  --output /root/my_project/.runtime/experiments/bc-coupling-round2.json
+  --output ${ARCTIC_ROUTE_ROOT}/.runtime/experiments/bc-coupling-round2.json
 ```

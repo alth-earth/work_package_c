@@ -16,6 +16,11 @@ Last Verified: 2026-08-22
 > - 原文件去向：[README_归档_20260815.md](README_归档_20260815.md)。
 > - 改造原因：同步挑战杯工程演示验收、双运行模式和非阻塞科学接口。
 
+> **路径约定（2026-08-24）**：本文件中 `${ARCTIC_ROUTE_ROOT}` 为工作区根占位符，
+> 指向包含各工作包目录（`arctic_route_contracts/`、`work_package_a/` 等）的公共根。
+> 解析优先级：环境变量 > 当前所在目录 > `$HOME`。完整定义见
+> `arctic_route_governance/README.md` 的"路径约定"章节。
+
 # 北极航线工作包 C
 
 ## Research Validation 定位（2026-08-21 23:18）
@@ -86,7 +91,7 @@ C endpoint mapping → ETA sampling → time-dependent A*
 ## 快速检查
 
 ```bash
-cd /root/my_project/work_package_c
+cd ${ARCTIC_ROUTE_ROOT}/work_package_c
 UV_OFFLINE=1 make check
 make demo
 ```

@@ -26,7 +26,7 @@
 项目要求 Mamba 提供 Python/native 环境，uv 管理 Python 依赖和锁文件：
 
 ```bash
-cd /root/my_project/work_package_c
+cd ${ARCTIC_ROUTE_ROOT}/work_package_c
 make env-create
 make lock
 make sync
