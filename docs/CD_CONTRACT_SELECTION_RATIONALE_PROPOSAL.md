@@ -13,7 +13,7 @@ Last Verified: 2026-08-24
 > 为工作包 C 向 C→D 输出新增可选 `selection-rationale` sidecar 建立跨包合约变更提案。
 > `DRAFT` 状态不授权生产使用；需走语义/生产者/消费者/集成四方审批门控后方可推进。
 >
-> **批准（2026-08-24）**：C、D 两包均由项目负责人同一负责，四方审批已一次性通过（见下方 Approval record），
+> **批准（2026-08-24）**：四方审批已一次性通过（见下方 Approval record），
 > 状态由 DRAFT 升级为 APPROVED；跨包消费测试与文档同步同步落地。
 
 # Contract Change Proposal: CD Selection Rationale v1

@@ -15,6 +15,25 @@ Last Verified: 2026-08-23
 与当前架构请先阅读 [README.md](README.md)；长期设计取舍见
 [决策记录](docs/DECISIONS.md)。
 
+## Unreleased — P0 temporal semantics validation（2026-08-24 22:27 +08:00）
+
+- 新增 fail-closed `damped_fixed_point_v1` ETA 精化器：最多 12 次、1 秒/`1e-6` 容差、
+  0.5 阻尼、周期/超迭代/终值不一致检测，并按最终 ETA 重采样。
+- 新增未公开导出、未接 ingress/service 的 `TemporalLabelAStar` 实验候选：标签身份为
+  `(node, heading, exact UTC arrival_time)`，禁止跨时间支配，使用 goal incumbent/OPEN 下界终止，
+  并对 expansions/labels/queue/edge evaluations 设置显式硬上限。
+- 新增 test-only、零启发式 exact-time Dijkstra oracle；其实现不导入生产规划器。静态三方差分、
+  非 FIFO、同桶多 ETA、exact-state replacement、ETA failure 与资源上限均有聚焦回归。
+- 新增 `scripts/validate_temporal_semantics.py`：在 5×7×7 synthetic 静态 fixture 上串行运行
+  当前 `TimeDependentAStar` control 与实验性 `TemporalLabelAStar` candidate；默认重复 10 次，
+  通过 `--repetitions` 参数化，并将 manifest/cases 写入调用方指定目录。
+- 验证入口记录 Git SHA、`uv.lock` SHA256、Python/platform、ETA/搜索策略、离散搜索结果和耗时；
+  不导入 test-only oracle、不接正式 ingress、不覆盖已有 `manifest.json`/`cases.jsonl`，也不写冻结构件。
+- 新增 `tests/unit/test_validate_temporal_semantics.py`，覆盖 2 次重复运行的结构、确定性（忽略耗时）
+  及构件覆盖保护。
+- 10 次 P0 static 运行 semantic digest 全部一致，但 candidate median wall time 约比 control 慢
+  48.1%；当前状态仅为正确性 `UNIT_PASS`，不宣称性能优势，不改变正式规划器或跨包合同。
+
 ## Unreleased — Version clutter cleanup（2026-08-24）
 
 依据 `arctic_route_governance/reports/audits/C_D_VERSION_CLUTTER_AUDIT_AND_CLEANUP_PLAN_20260824.md` 执行版本/合同/旧文件清理，**不触及代码逻辑与 C→D 合约**：

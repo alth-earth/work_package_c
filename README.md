@@ -117,5 +117,7 @@ Python 公共入口 `RiskSourcePlanningIngress`。正式调用方必须：
 - [稳定决策](docs/DECISIONS.md)
 - [B→C 合同](docs/BC_CONTRACT.md)
 - [C→D 合同](docs/CD_CONTRACT.md)
+- [核心算法现状、改进方案与实施计划（首要参考）](docs/CORE_ALGORITHM_IMPROVEMENT_PLAN.md)
+- [P0 时间语义可重复验证入口](scripts/validate_temporal_semantics.py)
 - [系统权威](../arctic_route_governance/current/architecture/ARCTIC_ROUTE_SYSTEM.md)
 - [当前路线图](../arctic_route_governance/current/CURRENT_ROADMAP.md)
