@@ -18,7 +18,6 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from heapq import heappop, heappush
-from itertools import count
 from math import isfinite
 from time import perf_counter
 from typing import Any
@@ -26,19 +25,16 @@ from typing import Any
 from arctic_route_planning.cost import (
     CostModel,
     EdgeCostInput,
-    UnnavigableSpeedError,
     VesselPerformanceModel,
 )
 from arctic_route_planning.domain.models import CostWeights, ObjectiveMode, PlannerConfig
 from arctic_route_planning.grid import Node, RegularGrid, heading_change_degrees
 from arctic_route_planning.risk import (
-    RiskCoverageError,
     RiskSampler,
-    RiskSamplingError,
     SampledRisk,
 )
 
-from .errors import EndpointBlockedError, NoRouteError, PlanningHorizonExceeded
+from .errors import NoRouteError
 from .eta_refinement import (
     EtaEvaluation,
     EtaRefinementError,
@@ -248,6 +244,21 @@ class _MutableDiagnostics:
         )
 
 
+@dataclass(slots=True)
+class _TemporalExecutionContext:
+    """Mutable state owned by one temporal search session.
+
+    The candidate planner object is intentionally reusable.  Search-local
+    diagnostics, heuristic memoization, calm-water speed and an injected edge
+    evaluator therefore live here rather than on ``TemporalLabelAStar``.
+    """
+
+    diagnostics: _MutableDiagnostics
+    heuristic_distances: dict[Node, float]
+    calm_speed: Any
+    edge_evaluator: EdgeEvaluator | None
+
+
 class _RejectedEdge(Exception):
     def __init__(self, reason: str) -> None:
         self.reason = reason
@@ -293,161 +304,60 @@ class TemporalLabelAStar(TimeDependentAStar):
         return self.plan(request)
 
     def plan(self, request: PlanningRequest) -> TemporalCandidateResult:
-        started = perf_counter()
-        diagnostics = _MutableDiagnostics()
-        self._temporal_diagnostics = diagnostics
-        self._heur_dist = {}
-        self._calm_speed = self.vessel_model.effective_speed(1.0)
-        self._check_cancelled(request)
-        self._validate_request_nodes(request)
-        start_sample = self._sample_node(request.start, request.departure_time)
-        if start_sample.hard_mask:
-            raise EndpointBlockedError(f"start node {request.start} is hard-blocked")
+        # Keep the compatibility wrapper deliberately thin.  The search state
+        # is owned by ``TemporalSession`` so one planner can safely create
+        # independent sessions for multiple objectives.
+        from .temporal_session import advance_session, create_session
 
-        if request.start == request.goal:
-            result = self._zero_length_result(request, start_sample, started, diagnostics)
-            return TemporalCandidateResult(result, diagnostics.freeze())
+        session = create_session(self, request)
+        result = advance_session(session)
+        if result is None:  # pragma: no cover - a full advance is unbounded
+            raise RuntimeError("unbounded temporal session did not reach a terminal state")
+        return result
 
-        cost_model = self._cost_model(request.objective)
-        start_state: TemporalState = (request.start, None, request.departure_time)
-        labels: dict[TemporalState, float] = {start_state: 0.0}
-        predecessors: dict[TemporalState, tuple[TemporalState, _EdgeTraversal]] = {}
-        serial = count()
-        queue: list[tuple[float, float, int, int, int, int, int, int, datetime, TemporalState]] = []
-        self._ensure_queue_capacity(queue)
-        self._push_queue(
-            queue,
-            self._priority(request.start, request.goal, request, cost_model, 0.0),
-            0.0,
-            start_state,
-            serial,
-        )
-        diagnostics.heap_pushes = 1
-        diagnostics.queue_peak = 1
-        diagnostics.label_peak = 1
-        incumbent_state: TemporalState | None = None
-        incumbent_cost = float("inf")
+    def create_session(self, request: PlanningRequest, identity: Any = None) -> Any:
+        """Create an internal resumable search session."""
 
-        while queue:
-            self._check_cancelled(request)
-            self._discard_stale(queue, labels, diagnostics)
-            if not queue:
-                break
-            if incumbent_state is not None:
-                active_f = queue[0][0]
-                if incumbent_cost <= active_f + _TERMINATION_EPSILON:
-                    result = self._build_result(
-                        request,
-                        incumbent_state,
-                        start_sample,
-                        labels,
-                        predecessors,
-                        diagnostics,
-                        started,
-                    )
-                    return TemporalCandidateResult(result, diagnostics.freeze())
+        from .temporal_session import create_session
 
-            popped = heappop(queue)
-            diagnostics.heap_pops += 1
-            _, queued_cost, _, _, _, _, _, _, _, state = popped
-            current_cost = labels.get(state)
-            if current_cost is None or queued_cost != current_cost:
-                diagnostics.stale_pops += 1
-                continue
-            diagnostics.expanded_labels += 1
-            if diagnostics.expanded_labels > self.limits.max_expansions:
-                raise self._limit("expansions", self.limits.max_expansions)
-            diagnostics.unique_labels = len(labels)
-            diagnostics.label_peak = max(diagnostics.label_peak, len(labels))
+        return create_session(self, request, identity=identity)
 
-            node, incoming_code, arrival_time = state
-            if node == request.goal:
-                if current_cost < incumbent_cost - _COST_EPSILON:
-                    incumbent_cost = current_cost
-                    incumbent_state = state
-                continue
+    def create_session_bundle(
+        self,
+        request: PlanningRequest,
+        objectives: Iterable[ObjectiveMode | str] = tuple(ObjectiveMode),
+    ) -> Any:
+        """Create isolated internal sessions for the requested objectives."""
 
-            previous_heading = self._previous_heading(node, incoming_code)
-            for neighbor in self.grid.neighbors(node):
-                self._check_cancelled(request)
-                diagnostics.edge_evaluations += 1
-                if diagnostics.edge_evaluations > self.limits.max_edge_evaluations:
-                    raise self._limit("edge evaluations", self.limits.max_edge_evaluations)
-                try:
-                    traversal = self._evaluate_edge(
-                        node,
-                        neighbor,
-                        arrival_time,
-                        previous_heading,
-                        request,
-                        cost_model,
-                    )
-                except RiskCoverageError:
-                    diagnostics.reject("coverage")
-                    continue
-                except RiskSamplingError:
-                    diagnostics.reject("sampling")
-                    continue
-                except UnnavigableSpeedError:
-                    diagnostics.reject("speed")
-                    continue
-                except EtaRefinementError as error:
-                    diagnostics.eta_failures += 1
-                    diagnostics.reject(_eta_rejection_reason(error))
-                    continue
-                except _RejectedEdge as rejection:
-                    diagnostics.reject(rejection.reason)
-                    continue
-                if traversal.arrival_time <= arrival_time:
-                    diagnostics.reject("non_increasing_arrival")
-                    continue
-                elapsed = traversal.arrival_time - request.departure_time
-                if request.maximum_elapsed is not None and elapsed > request.maximum_elapsed:
-                    diagnostics.reject("coverage")
-                    continue
-                heading_code = (neighbor[0] - node[0], neighbor[1] - node[1])
-                next_state: TemporalState = (neighbor, heading_code, traversal.arrival_time)
-                tentative_cost = current_cost + traversal.cost.total_equivalent_hours
-                previous = labels.get(next_state)
-                if previous is not None and tentative_cost >= previous - _COST_EPSILON:
-                    continue
-                if previous is None:
-                    if len(labels) >= self.limits.max_labels:
-                        raise self._limit("labels", self.limits.max_labels)
-                else:
-                    diagnostics.exact_state_replacements += 1
-                labels[next_state] = tentative_cost
-                predecessors[next_state] = (state, traversal)
-                priority = self._priority(
-                    neighbor,
-                    request.goal,
-                    request,
-                    cost_model,
-                    tentative_cost,
-                )
-                self._ensure_queue_capacity(queue)
-                self._push_queue(queue, priority, tentative_cost, next_state, serial)
-                diagnostics.generated_labels += 1
-                diagnostics.heap_pushes += 1
-                diagnostics.queue_peak = max(diagnostics.queue_peak, len(queue))
-                diagnostics.label_peak = max(diagnostics.label_peak, len(labels))
+        from .temporal_session import create_session_bundle
 
-        if incumbent_state is not None:
-            result = self._build_result(
-                request,
-                incumbent_state,
-                start_sample,
-                labels,
-                predecessors,
-                diagnostics,
-                started,
-            )
-            return TemporalCandidateResult(result, diagnostics.freeze())
-        if diagnostics.rejected_coverage_edges:
-            raise PlanningHorizonExceeded(
-                "no complete exact-arrival route fits inside the available risk window"
-            )
-        raise NoRouteError("no exact-arrival route satisfies hard, risk, and vessel constraints")
+        return create_session_bundle(self, request, objectives)
+
+    def advance_session(self, session: Any, expansion_slice: int | None = None) -> Any:
+        """Advance one of this planner's internal sessions."""
+
+        from .temporal_session import advance_session
+
+        return advance_session(session, expansion_slice=expansion_slice)
+
+    def checkpoint_session(self, session: Any) -> Any:
+        """Return an immutable in-process checkpoint for ``session``."""
+
+        from .temporal_session import checkpoint_session
+
+        return checkpoint_session(session)
+
+    def restore_session(
+        self,
+        checkpoint: Any,
+        request: PlanningRequest | None = None,
+        identity: Any = None,
+    ) -> Any:
+        """Restore a session after validating its complete identity fence."""
+
+        from .temporal_session import restore_session
+
+        return restore_session(self, checkpoint, request=request, identity=identity)
 
     def _evaluate_edge(
         self,
@@ -457,9 +367,13 @@ class TemporalLabelAStar(TimeDependentAStar):
         previous_heading: float | None,
         request: PlanningRequest,
         cost_model: CostModel,
+        *,
+        context: _TemporalExecutionContext | None = None,
     ) -> _EdgeTraversal:
-        if self._injected_edge_evaluator is not None:
-            return self._injected_edge_evaluator(
+        if context is None:
+            context = self._new_execution_context()
+        if context.edge_evaluator is not None:
+            return context.edge_evaluator(
                 start,
                 end,
                 departure_time,
@@ -473,7 +387,7 @@ class TemporalLabelAStar(TimeDependentAStar):
             end,
             minimum_samples=request.edge_sample_count,
         )
-        calm_speed = self._calm_speed
+        calm_speed = context.calm_speed
         initial_hours = distance_km / calm_speed.speed_km_per_hour
 
         def samples_at(value: float | datetime) -> tuple[SampledRisk, ...]:
@@ -520,7 +434,7 @@ class TemporalLabelAStar(TimeDependentAStar):
         # fixed point. Re-sample at the value this planner will actually use so
         # final sampling time, arrival time, and cost.travel_hours agree.
         samples = samples_at(accepted_hours)
-        diagnostics = self._temporal_diagnostics
+        diagnostics = context.diagnostics
         diagnostics.eta_resamples += refined.terminal_resamples + 1
         speed = speed_for_samples(samples)
         terminal_hours = distance_km / speed.speed_km_per_hour
@@ -596,8 +510,45 @@ class TemporalLabelAStar(TimeDependentAStar):
         request: PlanningRequest,
         cost_model: CostModel,
         cost: float,
+        *,
+        context: _TemporalExecutionContext | None = None,
     ) -> float:
-        return cost + self._heuristic(node, goal, cost_model, request)
+        return cost + self._heuristic_for_context(
+            node,
+            goal,
+            cost_model,
+            request,
+            context=context,
+        )
+
+    def _heuristic_for_context(
+        self,
+        node: Node,
+        goal: Node,
+        cost_model: CostModel,
+        request: PlanningRequest,
+        *,
+        context: _TemporalExecutionContext | None = None,
+    ) -> float:
+        if not request.use_heuristic:
+            return 0.0
+        if context is None:
+            context = self._new_execution_context()
+        distance = context.heuristic_distances.get(node)
+        if distance is None:
+            distance = self.grid.distance_km(node, goal)
+            context.heuristic_distances[node] = distance
+        return cost_model.lower_bound(distance)
+
+    def _new_execution_context(self) -> _TemporalExecutionContext:
+        """Create the private mutable context captured by one session."""
+
+        return _TemporalExecutionContext(
+            diagnostics=_MutableDiagnostics(),
+            heuristic_distances={},
+            calm_speed=self.vessel_model.effective_speed(1.0),
+            edge_evaluator=self._injected_edge_evaluator,
+        )
 
     def _previous_heading(self, node: Node, heading_code: HeadingCode) -> float | None:
         if heading_code is None:
@@ -616,6 +567,8 @@ class TemporalLabelAStar(TimeDependentAStar):
         predecessors: Mapping[TemporalState, tuple[TemporalState, _EdgeTraversal]],
         diagnostics: _MutableDiagnostics,
         started: float,
+        *,
+        compute_ms: float | None = None,
     ) -> PlanningResult:
         traversals: list[_EdgeTraversal] = []
         state = goal_state
@@ -679,7 +632,7 @@ class TemporalLabelAStar(TimeDependentAStar):
                 default=start_sample.confidence,
             ),
             source_risk_ids=source_ids,
-            metrics=self._metrics(diagnostics, started),
+            metrics=self._metrics(diagnostics, started, compute_ms=compute_ms),
         )
 
     def _zero_length_result(
@@ -688,6 +641,8 @@ class TemporalLabelAStar(TimeDependentAStar):
         sample: SampledRisk,
         started: float,
         diagnostics: _MutableDiagnostics,
+        *,
+        compute_ms: float | None = None,
     ) -> PlanningResult:
         point = self.grid.point(request.start)
         step = RouteStep(
@@ -717,12 +672,18 @@ class TemporalLabelAStar(TimeDependentAStar):
             maximum_risk=sample.risk_score,
             minimum_confidence=sample.confidence,
             source_risk_ids=sample.source_risk_ids,
-            metrics=self._metrics(diagnostics, started),
+            metrics=self._metrics(diagnostics, started, compute_ms=compute_ms),
         )
 
     @staticmethod
-    def _metrics(diagnostics: _MutableDiagnostics, started: float) -> SearchMetrics:
-        compute_ms = (perf_counter() - started) * 1_000.0
+    def _metrics(
+        diagnostics: _MutableDiagnostics,
+        started: float,
+        *,
+        compute_ms: float | None = None,
+    ) -> SearchMetrics:
+        if compute_ms is None:
+            compute_ms = (perf_counter() - started) * 1_000.0
         if not isfinite(compute_ms):
             raise RuntimeError("non-finite planning duration")
         return SearchMetrics(

@@ -6,7 +6,7 @@ Content Status:
 Document Role: SUPPORTING
 Scope: work package C change history
 Branch: research-validation-system
-Last Verified: 2026-08-23
+Last Verified: 2026-08-24
 ---
 
 # 工作包 C 变更记录
@@ -14,6 +14,22 @@ Last Verified: 2026-08-23
 本文件记录工作包 C 的可见功能、跨包合同、兼容性和验证状态变化。项目用途、运行方法
 与当前架构请先阅读 [README.md](README.md)；长期设计取舍见
 [决策记录](docs/DECISIONS.md)。
+
+## Unreleased — P1 resumable temporal sessions（2026-08-24 23:33 +08:00）
+
+- 新增未公开导出的内部 `TemporalSession`：每个 objective 独立保存 exact-arrival labels、OPEN、
+  前驱、incumbent、启发式缓存和累计诊断；状态限定为 `READY`、`PAUSED` 与四类终态。
+- 新增完整 session identity fence，绑定当前 sampler 内容、可选 committed-window 内容寻址身份、
+  generation/input revision、风险/planner/model/config、请求、网格、ETA policy、搜索限制和
+  edge evaluator；恢复会重新计算当前 planner/request 身份，拒绝过期或伪造 identity。
+- checkpoint 使用不可变 tuple/frozen value，保留 stale heap entry 和微秒级 ETA，清除进程本地
+  cancel callback，并校验 state digest；所有终态不可恢复，四类资源上限跨暂停/恢复累计。
+- `TemporalLabelAStar.plan()` 改为 session 兼容包装，并提供内部 per-objective bundle；正式
+  `TimeDependentAStar`、ingress/service、B/C 与 C/D 合同和 frozen artifact 均未接入或改变。
+- `scripts/validate_temporal_semantics.py` 新增显式 `--session-slice-expansions` P1 模式，对 control、
+  one-shot candidate 和逐片 checkpoint/restore candidate 做串行语义比较；默认 P0 行为保持不变。
+- 聚焦 P0/P1 回归 63 项通过，完整 `UV_OFFLINE=1 make check` 为 238 项通过。P1 仍仅为
+  `UNIT_PASS`，不宣称性能优势、正式集成或冻结基线。
 
 ## Unreleased — P0 temporal semantics validation（2026-08-24 22:27 +08:00）
 
@@ -31,8 +47,8 @@ Last Verified: 2026-08-23
   不导入 test-only oracle、不接正式 ingress、不覆盖已有 `manifest.json`/`cases.jsonl`，也不写冻结构件。
 - 新增 `tests/unit/test_validate_temporal_semantics.py`，覆盖 2 次重复运行的结构、确定性（忽略耗时）
   及构件覆盖保护。
-- 10 次 P0 static 运行 semantic digest 全部一致，但 candidate median wall time 约比 control 慢
-  48.1%；当前状态仅为正确性 `UNIT_PASS`，不宣称性能优势，不改变正式规划器或跨包合同。
+- 干净基线的 10 次 P0 static 运行 semantic digest 全部一致，但 candidate median wall time 约比
+  control 慢 50.0%；当前状态仅为正确性 `UNIT_PASS`，不宣称性能优势，不改变正式规划器或跨包合同。
 
 ## Unreleased — Version clutter cleanup（2026-08-24）
 

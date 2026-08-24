@@ -17,7 +17,8 @@ import platform
 import subprocess
 import sys
 import time
-from dataclasses import asdict
+from collections.abc import Mapping
+from dataclasses import asdict, fields, is_dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -42,6 +43,7 @@ from arctic_route_planning.planners.temporal_label_astar import (
 from arctic_route_planning.risk import RiskSampler
 
 SCHEMA_VERSION = "c.p0-temporal-semantics.v1"
+P1_SCHEMA_VERSION = "c.p1-temporal-session.v1"
 FIXTURE_ID = "synthetic-static-5x7x7-v1"
 OBJECTIVE = ObjectiveMode.RECOMMENDED
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
@@ -96,6 +98,12 @@ def _implementation_sha256(project_root: Path) -> dict[str, str]:
         "tests/reference_temporal_oracle.py",
     )
     return {relative: _sha256(project_root / relative) for relative in relative_paths}
+
+
+def _implementation_sha256_p1(project_root: Path) -> dict[str, str]:
+    paths = set(_implementation_sha256(project_root))
+    paths.add("src/arctic_route_planning/planners/temporal_session.py")
+    return {relative: _sha256(project_root / relative) for relative in sorted(paths)}
 
 
 def _make_frames() -> tuple[RiskFrame, ...]:
@@ -329,13 +337,372 @@ def _run_one(strategy: str) -> dict[str, Any]:
     }
 
 
+_NON_SEMANTIC_KEYS = frozenset(
+    {
+        "elapsed_ms",
+        "planner_compute_ms",
+        "compute_ms",
+        "started",
+        "started_at",
+        "finished_at",
+        "wall_time_ms",
+    }
+)
+
+
+def _canonical_value(value: Any, *, key: str | None = None) -> Any:
+    """Convert an internal session/checkpoint object to stable JSON data.
+
+    Checkpoints are intentionally private Python objects, not a published
+    schema.  This serializer is only a diagnostic digest helper and excludes
+    wall-clock bookkeeping so repeated semantic runs remain comparable.
+    """
+
+    if key in _NON_SEMANTIC_KEYS:
+        return None
+    if value is None or isinstance(value, (str, int, bool)):
+        return value
+    if isinstance(value, float):
+        return _round(value)
+    if isinstance(value, datetime):
+        return value.astimezone(UTC).isoformat()
+    if isinstance(value, (timedelta, Path)):
+        return str(value)
+    if hasattr(value, "value") and isinstance(value.value, (str, int, bool)):
+        return value.value
+    if is_dataclass(value):
+        return {
+            item.name: _canonical_value(getattr(value, item.name), key=item.name)
+            for item in fields(value)
+            if item.name not in _NON_SEMANTIC_KEYS
+        }
+    if isinstance(value, Mapping):
+        return {
+            str(item_key): _canonical_value(item_value, key=str(item_key))
+            for item_key, item_value in sorted(value.items(), key=lambda item: str(item[0]))
+            if str(item_key) not in _NON_SEMANTIC_KEYS
+        }
+    if isinstance(value, (tuple, list, frozenset, set)):
+        values = [_canonical_value(item) for item in value]
+        if isinstance(value, (frozenset, set)):
+            return sorted(values, key=lambda item: json.dumps(item, sort_keys=True))
+        return values
+    if hasattr(value, "__dict__"):
+        return _canonical_value(vars(value))
+    return {"type": f"{type(value).__module__}.{type(value).__qualname__}"}
+
+
+def _stable_digest(value: Any) -> str:
+    encoded = json.dumps(
+        _canonical_value(value),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _session_state(session: Any) -> str:
+    state = getattr(session, "state", None)
+    value = getattr(state, "value", state)
+    return str(value) if value is not None else "UNKNOWN"
+
+
+def _session_identity(session: Any) -> dict[str, Any]:
+    identity = getattr(session, "identity", None)
+    if identity is None:
+        return {"available": False}
+    snapshot = _canonical_value(identity)
+    result = {
+        "available": True,
+        "snapshot": snapshot,
+        "digest": _stable_digest(snapshot),
+    }
+    for name in ("session_id", "identity_digest", "digest"):
+        value = getattr(identity, name, None)
+        if value is not None:
+            result[name] = str(value)
+    return result
+
+
+def _run_session_candidate(expansion_slice: int) -> dict[str, Any]:
+    """Run the candidate through repeated pause/checkpoint/restore cycles."""
+
+    grid, sampler, vessel, planner_config = _build_components()
+    request = _request()
+    planner = TemporalLabelAStar(
+        grid,
+        sampler,
+        vessel,
+        planner_config=planner_config,
+        limits=_candidate_limits(),
+        eta_policy=_candidate_policy(),
+    )
+    started = time.perf_counter()
+    pause_count = 0
+    slices: list[int] = []
+    checkpoints: list[dict[str, Any]] = []
+    try:
+        session = planner.create_session(request)
+        identity = _session_identity(session)
+        result = None
+        while result is None:
+            result = planner.advance_session(session, expansion_slice=expansion_slice)
+            slices.append(expansion_slice)
+            if result is not None:
+                break
+            pause_count += 1
+            checkpoint = planner.checkpoint_session(session)
+            checkpoint_value = _canonical_value(checkpoint)
+            checkpoints.append(
+                {
+                    "pause_index": pause_count,
+                    "state": _session_state(session),
+                    "digest": _stable_digest(checkpoint_value),
+                }
+            )
+            session = planner.restore_session(checkpoint, request=request)
+            if pause_count > 100_000:
+                raise RuntimeError("session validation exceeded pause safety bound")
+        snapshot = _route_snapshot(result)
+        return {
+            "status": "SUCCESS",
+            "route_digest": _route_digest(snapshot),
+            "route": snapshot,
+            "metrics": _discrete_metrics(result),
+            "diagnostics": _diagnostics(result),
+            "session": {
+                "terminal_state": _session_state(session),
+                "pause_count": pause_count,
+                "expansion_slice": expansion_slice,
+                "expansion_slices": slices,
+                "identity": identity,
+                "checkpoint_count": len(checkpoints),
+                "checkpoints": checkpoints,
+                "checkpoint_digest": _stable_digest(checkpoints),
+                "cumulative_metrics": _discrete_metrics(result),
+            },
+            "planner_compute_ms": _round(result.planning_result.metrics.compute_ms),
+            "elapsed_ms": _round((time.perf_counter() - started) * 1_000.0),
+        }
+    except Exception as exc:
+        return {
+            "status": "ERROR",
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+            "session": {
+                "pause_count": pause_count,
+                "expansion_slice": expansion_slice,
+                "expansion_slices": slices,
+                "checkpoints": checkpoints,
+            },
+            "elapsed_ms": _round((time.perf_counter() - started) * 1_000.0),
+        }
+
+
 def _semantic_match(control: dict[str, Any], candidate: dict[str, Any]) -> bool:
     if control.get("status") != "SUCCESS" or candidate.get("status") != "SUCCESS":
         return False
     return bool(control.get("route_digest") == candidate.get("route_digest"))
 
 
-def run_validation(*, output_dir: Path, repetitions: int = 10) -> dict[str, Any]:
+def _run_p1_validation(
+    *,
+    output_dir: Path,
+    repetitions: int,
+    expansion_slice: int,
+) -> dict[str, Any]:
+    if expansion_slice < 1:
+        raise ValueError("session expansion slice must be positive")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = output_dir / "manifest.json"
+    cases_path = output_dir / "cases.jsonl"
+    existing = [
+        path.name
+        for path in (manifest_path, cases_path)
+        if path.exists() or path.is_symlink()
+    ]
+    if existing:
+        raise FileExistsError(
+            "refusing to overwrite existing P1 validation artifacts: "
+            + ", ".join(existing)
+        )
+    project_root = Path(__file__).resolve().parents[1]
+    lock_path = project_root / "uv.lock"
+    git_sha = _git_sha(project_root)
+    worktree_dirty = _git_worktree_dirty(project_root)
+    cases: list[dict[str, Any]] = []
+
+    for index in range(1, repetitions + 1):
+        control = _run_one("control")
+        candidate = _run_one("candidate")
+        session_candidate = _run_session_candidate(expansion_slice)
+        route_digests = [
+            control.get("route_digest"),
+            candidate.get("route_digest"),
+            session_candidate.get("route_digest"),
+        ]
+        all_success = all(
+            result.get("status") == "SUCCESS"
+            for result in (control, candidate, session_candidate)
+        )
+        candidate_session_metrics_equal = (
+            candidate.get("metrics") == session_candidate.get("metrics")
+        )
+        candidate_session_diagnostics_equal = (
+            candidate.get("diagnostics") == session_candidate.get("diagnostics")
+        )
+        semantic_match = (
+            all_success
+            and len(set(route_digests)) == 1
+            and candidate_session_metrics_equal
+            and candidate_session_diagnostics_equal
+        )
+        cases.append(
+            {
+                "schema_version": P1_SCHEMA_VERSION,
+                "case_id": f"{FIXTURE_ID}-p1-run-{index:03d}",
+                "run_index": index,
+                "fixture_id": FIXTURE_ID,
+                "control": control,
+                "candidate": candidate,
+                "session_candidate": session_candidate,
+                "comparison": {
+                    "semantic_match": semantic_match,
+                    "control_candidate_route_digest_equal": (
+                        control.get("route_digest") == candidate.get("route_digest")
+                    ),
+                    "candidate_session_route_digest_equal": (
+                        candidate.get("route_digest")
+                        == session_candidate.get("route_digest")
+                    ),
+                    "control_session_route_digest_equal": (
+                        control.get("route_digest")
+                        == session_candidate.get("route_digest")
+                    ),
+                    "candidate_session_metrics_equal": (
+                        candidate_session_metrics_equal
+                    ),
+                    "candidate_session_diagnostics_equal": (
+                        candidate_session_diagnostics_equal
+                    ),
+                },
+            }
+        )
+
+    failed = [
+        case["case_id"]
+        for case in cases
+        if not case["comparison"]["semantic_match"]
+    ]
+    manifest = {
+        "schema_version": P1_SCHEMA_VERSION,
+        "status": "EXPERIMENTAL",
+        "experiment_id": (
+            f"c-p1-temporal-session-v1-{git_sha[:8]}"
+            + ("-dirty" if worktree_dirty else "")
+        ),
+        "fixture_id": FIXTURE_ID,
+        "production_defaults_changed": False,
+        "formal_ingress_used": False,
+        "frozen_artifact_written": False,
+        "repetitions": repetitions,
+        "serial_execution": True,
+        "environment": {
+            "git_sha": git_sha,
+            "git_worktree_dirty": worktree_dirty,
+            "uv_lock_sha256": _sha256(lock_path),
+            "implementation_sha256": _implementation_sha256_p1(project_root),
+            "python": sys.version,
+            "python_version": platform.python_version(),
+            "platform": platform.platform(),
+            "machine": platform.machine(),
+            "processor": platform.processor(),
+            "python_executable": sys.executable,
+        },
+        "fixture": {
+            "rows": ROWS,
+            "columns": COLS,
+            "frame_count": FRAME_COUNT,
+            "start": [ROWS // 2, 0],
+            "goal": [ROWS // 2, COLS - 1],
+            "departure_time": T0.isoformat(),
+            "maximum_elapsed_hours": MAX_ELAPSED.total_seconds() / 3600.0,
+            "risk_semantics": "constant_zero",
+            "environment_speed_factor": 1.0,
+            "provenance": ProvenanceKind.SYNTHETIC.value,
+        },
+        "policy": {
+            "objective": OBJECTIVE.value,
+            "connectivity": 4,
+            "edge_sample_count": 3,
+            "time_bucket_minutes": 60,
+            "eta_refinement": asdict(_candidate_policy()),
+            "search_limits": asdict(_candidate_limits()),
+            "session_slice_expansions": expansion_slice,
+            "semantic_digest_excludes": [
+                "elapsed_ms",
+                "planner_compute_ms",
+                "compute_ms",
+            ],
+        },
+        "strategies": {
+            "control": {
+                "planner": "TimeDependentAStar",
+                "state_semantics": "node,time_bucket,heading",
+                "role": "formal_control",
+            },
+            "candidate": {
+                "planner": "TemporalLabelAStar",
+                "state_semantics": "node,heading,exact_arrival_time",
+                "role": "experimental_shadow_one_shot",
+            },
+            "session_candidate": {
+                "planner": "TemporalLabelAStar",
+                "state_semantics": "node,heading,exact_arrival_time",
+                "role": "experimental_shadow_sliced_restored",
+            },
+        },
+        "discrete_result_fields": [
+            "route_digest",
+            "route",
+            "metrics",
+            "diagnostics",
+            "session.identity",
+            "session.checkpoints",
+            "comparison.semantic_match",
+        ],
+        "validation": {
+            "case_count": len(cases),
+            "all_cases_success": not failed,
+            "failed_cases": failed,
+            "verdict": "PASS" if not failed else "FAIL",
+        },
+    }
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    with cases_path.open("w", encoding="utf-8") as handle:
+        for case in cases:
+            handle.write(json.dumps(case, ensure_ascii=False, sort_keys=True) + "\n")
+    return manifest
+
+
+def run_validation(
+    *,
+    output_dir: Path,
+    repetitions: int = 10,
+    session_slice_expansions: int | None = None,
+) -> dict[str, Any]:
+    if session_slice_expansions is not None:
+        if repetitions < 1:
+            raise ValueError("repetitions must be positive")
+        return _run_p1_validation(
+            output_dir=output_dir,
+            repetitions=repetitions,
+            expansion_slice=session_slice_expansions,
+        )
     if repetitions < 1:
         raise ValueError("repetitions must be positive")
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -474,8 +841,18 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--repetitions", "--runs", type=int, default=10)
+    parser.add_argument(
+        "--session-slice-expansions",
+        type=int,
+        default=None,
+        help="enable explicit P1 pause/checkpoint/restore validation with this slice",
+    )
     args = parser.parse_args(argv)
-    manifest = run_validation(output_dir=args.output_dir, repetitions=args.repetitions)
+    manifest = run_validation(
+        output_dir=args.output_dir,
+        repetitions=args.repetitions,
+        session_slice_expansions=args.session_slice_expansions,
+    )
     print(json.dumps(manifest["validation"], ensure_ascii=False, sort_keys=True))
     return 0 if manifest["validation"]["verdict"] == "PASS" else 1
 

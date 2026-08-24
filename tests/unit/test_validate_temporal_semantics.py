@@ -143,3 +143,106 @@ def test_p0_validation_refuses_to_overwrite_existing_artifacts(tmp_path: Path) -
 
     with pytest.raises(FileExistsError, match=r"manifest\.json"):
         run_validation(output_dir=output_dir, repetitions=1)
+
+
+def _assert_p1_schema(manifest: dict[str, Any], cases: list[dict[str, Any]]) -> None:
+    assert manifest["schema_version"] == "c.p1-temporal-session.v1"
+    assert manifest["status"] == "EXPERIMENTAL"
+    assert manifest["production_defaults_changed"] is False
+    assert manifest["formal_ingress_used"] is False
+    assert manifest["frozen_artifact_written"] is False
+    assert manifest["repetitions"] == 2
+    assert manifest["serial_execution"] is True
+    assert manifest["policy"]["session_slice_expansions"] == 1
+    assert manifest["strategies"]["session_candidate"]["role"] == (
+        "experimental_shadow_sliced_restored"
+    )
+    assert manifest["validation"] == {
+        "all_cases_success": True,
+        "case_count": 2,
+        "failed_cases": [],
+        "verdict": "PASS",
+    }
+    assert len(cases) == 2
+    for index, case in enumerate(cases, start=1):
+        assert case["schema_version"] == manifest["schema_version"]
+        assert case["run_index"] == index
+        assert case["comparison"] == {
+            "semantic_match": True,
+            "control_candidate_route_digest_equal": True,
+            "candidate_session_route_digest_equal": True,
+            "control_session_route_digest_equal": True,
+            "candidate_session_metrics_equal": True,
+            "candidate_session_diagnostics_equal": True,
+        }
+        session_result = case["session_candidate"]
+        assert session_result["status"] == "SUCCESS"
+        assert session_result["session"]["terminal_state"] == "GOAL_CERTIFIED"
+        assert session_result["session"]["pause_count"] > 0
+        assert session_result["session"]["checkpoint_count"] == (
+            session_result["session"]["pause_count"]
+        )
+        assert _HEX64.fullmatch(session_result["session"]["checkpoint_digest"])
+        assert _HEX64.fullmatch(session_result["session"]["identity"]["digest"])
+        assert session_result["session"]["cumulative_metrics"] == session_result["metrics"]
+        assert _HEX64.fullmatch(session_result["route_digest"])
+
+
+def test_p1_session_mode_is_explicit_and_deterministic(tmp_path: Path) -> None:
+    first_dir = tmp_path / "p1-first"
+    second_dir = tmp_path / "p1-second"
+
+    assert (
+        run_script(
+            [
+                "--output-dir",
+                str(first_dir),
+                "--repetitions",
+                "2",
+                "--session-slice-expansions",
+                "1",
+            ]
+        )
+        == 0
+    )
+    assert (
+        run_script(
+            [
+                "--output-dir",
+                str(second_dir),
+                "--repetitions",
+                "2",
+                "--session-slice-expansions",
+                "1",
+            ]
+        )
+        == 0
+    )
+    first_manifest, first_cases = _load_run(first_dir)
+    second_manifest, second_cases = _load_run(second_dir)
+    _assert_p1_schema(first_manifest, first_cases)
+    _assert_p1_schema(second_manifest, second_cases)
+    assert _without_timings(first_manifest) == _without_timings(second_manifest)
+    assert _without_timings(first_cases) == _without_timings(second_cases)
+
+
+def test_p1_rejects_non_positive_session_slice(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="session expansion slice must be positive"):
+        run_validation(
+            output_dir=tmp_path / "invalid",
+            repetitions=1,
+            session_slice_expansions=0,
+        )
+
+
+def test_p1_refuses_to_overwrite_existing_artifacts(tmp_path: Path) -> None:
+    output_dir = tmp_path / "existing-p1"
+    output_dir.mkdir()
+    (output_dir / "manifest.json").write_text("{}\n", encoding="utf-8")
+
+    with pytest.raises(FileExistsError, match=r"manifest\.json"):
+        run_validation(
+            output_dir=output_dir,
+            repetitions=1,
+            session_slice_expansions=1,
+        )
