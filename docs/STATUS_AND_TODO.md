@@ -35,6 +35,7 @@
 | 重规划、竞态围栏和原子 latest | `replanning/`、`publishing/` |
 | JSON/GeoJSON 往返和 Schema 验证 | `contracts/codec.py`、`publishing/`、`tests/contract/test_schemas.py` |
 | 旧 B/v1 显式隔离 | `adapters/legacy_b.py`；只允许 `legacy_unverified` |
+| 任务2 gap：推荐选择理由（SelectionRationale + `selection-rationale.v1` Schema + v2/v3 可选 `selection_rationale` 字段 + CLI 输出 `selection-rationale.json`；跨包提案 APPROVED，CD_CONTRACT.md 同步）—— `publishing/`、`service.py`、`layered.py`、`cli.py`、提案与测试 | ✅ 完成（代码+测试+提案+文档+D 消费对接） | 无（D 消费对接与跨包回归已落地） |
 
 ## P0：挑战杯闭环
 

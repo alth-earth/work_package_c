@@ -15,6 +15,31 @@ Last Verified: 2026-08-23
 与当前架构请先阅读 [README.md](README.md)；长期设计取舍见
 [决策记录](docs/DECISIONS.md)。
 
+## Unreleased — Core algorithm audit fixes（2026-08-24）
+
+依据 `docs/CORE_ALGORITHM_AUDIT.md` 14 问题清单完成内部质量修复，**不触及 C→D 合约**（schema 文件、序列化格式、digest 语义、selection-rationale sidecar 均不变）：
+
+- **P0 性能**：`_Counters` 改可变（去 `frozen`），A\* 热循环消除每迭代 15+ 次 `dataclasses.replace` 重建，循环结束仍快照为不可变 `SearchMetrics`。
+- **P1 观测剥离**：`planners/time_dependent_astar.py` 移除顶层 `import os`/`import resource`；env 解析 `C_ASTAR_PROGRESS_SECONDS` 移至 `service.progress_interval_from_env()` 经 `PlanningRequest.progress_interval_seconds` 注入；28 行进度打印提取为 `_emit_progress`，RSS 采样 lazy import（非 Unix 输出 `rss=na`）。
+- **P1 SSOT 收敛**：新增 `ROUTE_PLAN_V3_SCHEMA_VERSION` / `FOUR_LAYER_ROUTE_PLAN_SET_V3_SCHEMA_VERSION` 常量（`contracts/layered.py`），替换 7 处裸串；`service.py`/`layered.py` 的 v2 裸串收敛为已有 `ROUTE_PLAN_SCHEMA_VERSION`；层时间窗 72/24/6h 提取为 `MAIN_CORRIDOR_HOURS` 等命名常量（不加 `PlannerConfig` 字段以保护 digest）。
+- **P2 异常统一与类型收紧**：`PlanningCancelled` 唯一定义于 `errors.py`，`planners/errors.py` 与 `replanning/coordinator.py` 改 re-export（两条导入路径零破坏）；`ingress.py` 两处 `assert isinstance` 改 `TypeError`；三处 `RuntimeError("maximum_elapsed was not resolved")` 改 `ContractError`；`layered.py` `planner_config: object` 收紧为 `PlannerConfig`；`1e-12` 与 `range(2)` 提取为 `_COST_EPSILON`/`_EDGE_REFINEMENT_ROUNDS` 常量。
+- **P2 性能**：`grid/regular.py` `snap_to_navigable` 改 numpy 矢量化（meshgrid + 矢量 haversine + `np.lexsort`），tie-break `(distance, row, col)` 语义与原实现一致。
+- **P3 健壮性/清理**：`ingress._sessions` 改 `OrderedDict` LRU + `_MAX_SESSIONS = 64`；`replanning/policy.py` UTC 校验统一为 `timedelta(0)`；`risk/sampler.py` `risk_score=1.0` 加保守占位注释；`publishing/serialization.py` 两处 `from_dict` 的 `schema_version` 缺失由静默回退改严格 `KeyError→ValueError`。
+- 配套测试：`tests/unit/test_publishing.py` 加 2 个缺 `schema_version` 负例；`tests/unit/test_ingress_lru.py` 新增 LRU 驱逐与重用提升测试。
+
+## Unreleased — Selection rationale sidecar（2026-08-24）
+
+- 新增可选 `selection-rationale` sidecar（SelectionRationale 模型 + `selection-rationale.v1` Schema），
+  解释推荐路线相对最快基线的权衡（距离/ETA/风险 delta 与风险降低百分比）。
+  v2 `PlanningBatch` 与 v3 `FourLayerPlanningOutcome` 增加可选 `selection_rationale` 字段；
+  CLI 输出 `selection-rationale.json` 并在 `run-summary.json` 增加摘要段。
+- 跨包合约变更提案：`docs/CD_CONTRACT_SELECTION_RATIONALE_PROPOSAL.md`（DRAFT）；
+  CD_CONTRACT.md 同步 selection-rationale 语义（可选 sidecar，不进入路线 digest）。
+- 配套测试：`tests/contract/test_schemas.py`（schema 验证）、`tests/unit/test_publishing.py`、
+  `tests/integration/test_service.py`、`tests/unit/test_layered_planning.py`。
+- 跨包落地：提案升 APPROVED（C/D 负责方批准）；D 侧 `load_selection_rationale` 消费 +
+  真实 synthetic-demo 产物 fixture 跨包回归 PASS（D 全量 100 passed / 3 skipped）。
+
 ## Unreleased — B-C coupling evidence（2026-08-22 01:11 +08:00）
 
 - add a sequential benchmark that decodes experimental formal

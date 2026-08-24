@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/arctic-route/cd/selection-rationale-v1.schema.json",
+  "title": "CD Selection Rationale v1",
+  "description": "Optional sidecar explaining why C selected the recommended route over the fastest baseline.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "run_id", "scenario_id", "corridor_id", "vessel_profile_id",
+    "config_digest", "model_config_digest", "planner_config_digest", "provenance",
+    "generation_id", "planning_request_id", "input_revision",
+    "selected_plan_id", "baseline_plan_id", "selected_objective", "baseline_objective",
+    "tradeoffs", "summary_text"
+  ],
+  "properties": {
+    "schema_version": {"const": "selection-rationale.v1"},
+    "run_id": {"type": "string", "minLength": 1},
+    "scenario_id": {"type": "string", "minLength": 1},
+    "corridor_id": {"type": "string", "minLength": 1},
+    "vessel_profile_id": {"type": "string", "minLength": 1},
+    "config_digest": {"$ref": "#/$defs/sha256"},
+    "model_config_digest": {"$ref": "#/$defs/sha256"},
+    "planner_config_digest": {"$ref": "#/$defs/sha256"},
+    "provenance": {"enum": ["formal", "legacy_unverified", "synthetic"]},
+    "generation_id": {"type": "integer", "minimum": 0},
+    "planning_request_id": {"type": "string", "minLength": 1},
+    "input_revision": {"type": "integer", "minimum": 0},
+    "selected_plan_id": {"type": "string", "minLength": 1},
+    "baseline_plan_id": {"type": "string", "minLength": 1},
+    "selected_objective": {"enum": ["fastest", "low_risk", "recommended"]},
+    "baseline_objective": {"const": "fastest"},
+    "tradeoffs": {"$ref": "#/$defs/tradeoffs"},
+    "summary_text": {"type": "string", "minLength": 1}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "tradeoffs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "delta_distance_km", "delta_eta_hours", "delta_avg_risk", "delta_max_risk",
+        "delta_integrated_risk_hours", "avg_risk_reduction_pct", "max_risk_reduction_pct"
+      ],
+      "properties": {
+        "delta_distance_km": {"type": "number"},
+        "delta_eta_hours": {"type": "number"},
+        "delta_avg_risk": {"type": "number", "minimum": -1, "maximum": 1},
+        "delta_max_risk": {"type": "number", "minimum": -1, "maximum": 1},
+        "delta_integrated_risk_hours": {"type": "number"},
+        "avg_risk_reduction_pct": {"type": "number"},
+        "max_risk_reduction_pct": {"type": "number"}
+      }
+    }
+  }
+}

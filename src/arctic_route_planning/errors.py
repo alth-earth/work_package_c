@@ -25,6 +25,14 @@ class PlanningCancelledError(PlanningError):
     """A cooperative cancellation request stopped the planner."""
 
 
+class PlanningCancelled(PlanningCancelledError):
+    """Concrete cancellation signal raised by the planner and coordinator.
+
+    This is the single canonical definition: the planner and replanning
+    subpackages re-export it so historical import paths keep working.
+    """
+
+
 class NoRouteError(PlanningError):
     """No route satisfying the hard constraints was found."""
 

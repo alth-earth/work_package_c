@@ -17,10 +17,14 @@ from .models import (
     OBJECTIVE_MODES,
     PLAN_KINDS,
     ROUTE_PLAN_SCHEMA_VERSION,
+    SELECTION_RATIONALE_SCHEMA_VERSION,
     PublicationToken,
     RouteMetrics,
     RoutePlan,
+    SelectionRationale,
+    TradeoffDeltas,
     Waypoint,
+    build_selection_rationale,
     token_for_plan,
 )
 from .serialization import (
@@ -29,8 +33,11 @@ from .serialization import (
     route_plan_from_geojson,
     route_plan_to_dict,
     route_plan_to_geojson,
+    selection_rationale_from_dict,
+    selection_rationale_to_dict,
     write_route_plan_geojson,
     write_route_plan_json,
+    write_selection_rationale_json,
 )
 from .store import CDLatestStore, CDStoreSnapshot, PublicationRejected
 
@@ -38,6 +45,7 @@ __all__ = [
     "OBJECTIVE_MODES",
     "PLAN_KINDS",
     "ROUTE_PLAN_SCHEMA_VERSION",
+    "SELECTION_RATIONALE_SCHEMA_VERSION",
     "CDLatestStore",
     "CDStoreSnapshot",
     "LayeredRoutePlanLatestStore",
@@ -46,8 +54,11 @@ __all__ = [
     "PublicationToken",
     "RouteMetrics",
     "RoutePlan",
+    "SelectionRationale",
+    "TradeoffDeltas",
     "Waypoint",
     "atomic_write_json",
+    "build_selection_rationale",
     "four_layer_route_plan_set_from_dict",
     "four_layer_route_plan_set_from_geojson",
     "four_layer_route_plan_set_semantic_digest",
@@ -62,7 +73,10 @@ __all__ = [
     "route_plan_v3_semantic_digest",
     "route_plan_v3_to_dict",
     "route_plan_v3_to_geojson",
+    "selection_rationale_from_dict",
+    "selection_rationale_to_dict",
     "token_for_plan",
     "write_route_plan_geojson",
     "write_route_plan_json",
+    "write_selection_rationale_json",
 ]

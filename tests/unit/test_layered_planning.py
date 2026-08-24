@@ -21,8 +21,10 @@ from arctic_route_planning.layered import (
 )
 from arctic_route_planning.planners import PlanningResult, RouteStep, SearchMetrics
 from arctic_route_planning.publishing import (
+    SELECTION_RATIONALE_SCHEMA_VERSION,
     LayeredRoutePlanLatestStore,
     PublicationRejected,
+    SelectionRationale,
     four_layer_route_plan_set_from_dict,
     four_layer_route_plan_set_from_geojson,
     four_layer_route_plan_set_to_dict,
@@ -210,6 +212,36 @@ def test_four_layer_service_builds_twelve_routes_and_round_trips() -> None:
         "four-layer-route-plan-set-v3.geojson.schema.json",
         four_layer_route_plan_set_to_geojson(outcome.plan_set),
     )
+
+
+def test_four_layer_service_attaches_selection_rationale_using_full_voyage_layer() -> None:
+    _configuration, _planner, _store, service, request = _case()
+
+    outcome = service.execute(request)
+
+    assert isinstance(outcome.selection_rationale, SelectionRationale)
+    rationale = outcome.selection_rationale
+    assert rationale.schema_version == SELECTION_RATIONALE_SCHEMA_VERSION
+    full_bundle = outcome.plan_set.bundle_for(PlanLayer.FULL_VOYAGE)
+    assert (
+        rationale.selected_plan_id
+        == full_bundle.recommended.plan_id
+    )
+    assert (
+        rationale.baseline_plan_id
+        == full_bundle.plans[ObjectiveMode.FASTEST].plan_id
+    )
+    assert rationale.selected_objective is ObjectiveMode.RECOMMENDED
+    assert rationale.baseline_objective is ObjectiveMode.FASTEST
+    full_recommended_metrics = full_bundle.recommended.metrics
+    full_fastest_metrics = full_bundle.plans[ObjectiveMode.FASTEST].metrics
+    assert rationale.tradeoffs.delta_eta_hours == pytest.approx(
+        full_recommended_metrics.eta_hours - full_fastest_metrics.eta_hours
+    )
+    assert rationale.tradeoffs.delta_avg_risk == pytest.approx(
+        full_recommended_metrics.avg_risk - full_fastest_metrics.avg_risk
+    )
+    assert rationale.summary_text
 
 
 def test_destination_anchor_layer_allows_objectives_beyond_recommended_eta() -> None:

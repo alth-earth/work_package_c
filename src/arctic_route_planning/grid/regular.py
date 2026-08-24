@@ -172,19 +172,31 @@ class RegularGrid:
         if max_adjustment_km < 0:
             raise ValueError("max_adjustment_km must be non-negative")
         mask = self._validated_mask(hard_mask)
-        permitted = set(required_component) if required_component is not None else None
-        candidates: list[tuple[float, Node]] = []
-        for row in range(self.shape[0]):
-            for column in range(self.shape[1]):
-                node = (row, column)
-                if bool(mask[node]) or (permitted is not None and node not in permitted):
-                    continue
-                distance = haversine_km(point, self.point(node))
-                if distance <= max_adjustment_km:
-                    candidates.append((distance, node))
-        if not candidates:
+        # Broadcast to full grid coordinate arrays for vectorized haversine.
+        lat_grid, lon_grid = np.meshgrid(self.latitudes, self.longitudes, indexing="ij")
+        distances = _haversine_km_vec(
+            point.latitude,
+            point.longitude,
+            lat_grid,
+            lon_grid,
+        )
+        # Permitted (row, col) set becomes a boolean mask the same shape.
+        permitted = np.ones(self.shape, dtype=bool)
+        if required_component is not None:
+            permitted = np.zeros(self.shape, dtype=bool)
+            for row, col in required_component:
+                permitted[row, col] = True
+        eligible = (~mask) & permitted & (distances <= max_adjustment_km)
+        if not eligible.any():
             raise ValueError("no navigable node exists within max_adjustment_km")
-        distance, node = min(candidates, key=lambda item: (item[0], item[1]))
+        # Tie-break matches the original ``min(key=(distance, (row, col)))``:
+        # primary distance, then row (latitude index), then column.
+        row_idx, col_idx = np.where(eligible)
+        eligible_distances = distances[eligible]
+        order = np.lexsort((col_idx, row_idx, eligible_distances))
+        chosen = order[0]
+        node = (int(row_idx[chosen]), int(col_idx[chosen]))
+        distance = float(eligible_distances[chosen])
         return SnapResult(node=node, point=self.point(node), adjustment_km=distance)
 
     def _validated_mask(self, hard_mask: np.ndarray) -> np.ndarray:
@@ -205,6 +217,24 @@ def haversine_km(start: GeoPoint, end: GeoPoint) -> float:
     delta_lon = radians(end.longitude - start.longitude)
     haversine = sin(delta_lat / 2) ** 2 + cos(lat1) * cos(lat2) * sin(delta_lon / 2) ** 2
     return 2 * EARTH_RADIUS_KM * asin(min(1.0, sqrt(haversine)))
+
+
+def _haversine_km_vec(
+    lat0: float,
+    lon0: float,
+    lat_grid: np.ndarray,
+    lon_grid: np.ndarray,
+) -> np.ndarray:
+    """Vectorized great-circle distance from one point to every grid node."""
+
+    lat1 = radians(lat0)
+    lats = np.radians(lat_grid)
+    delta_lat = lats - lat1
+    delta_lon = np.radians(lon_grid - lon0)
+    haversine = np.sin(delta_lat / 2) ** 2 + np.cos(lat1) * np.cos(lats) * np.sin(
+        delta_lon / 2
+    ) ** 2
+    return 2.0 * EARTH_RADIUS_KM * np.arcsin(np.minimum(1.0, np.sqrt(haversine)))
 
 
 def initial_bearing_degrees(start: GeoPoint, end: GeoPoint) -> float:

@@ -32,8 +32,10 @@ from arctic_route_planning.grid import RegularGrid
 from arctic_route_planning.planners import TimeDependentAStar
 from arctic_route_planning.publishing import (
     atomic_write_json,
+    selection_rationale_to_dict,
     write_route_plan_geojson,
     write_route_plan_json,
+    write_selection_rationale_json,
 )
 from arctic_route_planning.risk import RiskSampler
 from arctic_route_planning.service import PlanningBatch, PlanningService, ServicePlanningRequest
@@ -398,6 +400,22 @@ def _write_outputs(
         write_route_plan_geojson(output_dir / f"{objective.value}.geojson", plan)
     write_route_plan_json(output_dir / "latest.json", batch.selected)
     write_route_plan_geojson(output_dir / "latest.geojson", batch.selected)
+    selection_rationale_summary: dict[str, Any] | None = None
+    rationale_files: dict[str, str] = {}
+    if batch.selection_rationale is not None:
+        write_selection_rationale_json(
+            output_dir / "selection-rationale.json", batch.selection_rationale
+        )
+        rationale_files["selection_rationale"] = "selection-rationale.json"
+        rationale_doc = selection_rationale_to_dict(batch.selection_rationale)
+        selection_rationale_summary = {
+            "selected_objective": rationale_doc["selected_objective"],
+            "baseline_objective": rationale_doc["baseline_objective"],
+            "selected_plan_id": rationale_doc["selected_plan_id"],
+            "baseline_plan_id": rationale_doc["baseline_plan_id"],
+            "tradeoffs": rationale_doc["tradeoffs"],
+            "summary_text": rationale_doc["summary_text"],
+        }
     summary = {
         "schema_version": "planning-run-summary.v1",
         "source_kind": source_kind,
@@ -416,6 +434,7 @@ def _write_outputs(
         "published": batch.published,
         "selected_plan_id": batch.selected.plan_id,
         "selected_objective": batch.selected.objective_mode.value,
+        "selection_rationale": selection_rationale_summary,
         "endpoint_mapping": endpoint_report,
         "speed_responsibility": "B supplies environmental factors; C computes final vessel speed",
         "warnings": list(development_warnings),
@@ -435,6 +454,7 @@ def _write_outputs(
             "latest_json": "latest.json",
             "latest_geojson": "latest.geojson",
             "endpoint_mapping": "endpoint-mapping.json",
+            **rationale_files,
         },
     }
     atomic_write_json(output_dir / "run-summary.json", summary)

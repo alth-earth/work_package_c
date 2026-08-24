@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from threading import RLock
 
@@ -19,7 +20,7 @@ from arctic_route_planning.contracts import (
     validate_canonical_risk_id,
 )
 from arctic_route_planning.cost import VesselPerformanceModel
-from arctic_route_planning.errors import ContextMismatchError, RiskCoverageError
+from arctic_route_planning.errors import ContextMismatchError, ContractError, RiskCoverageError
 from arctic_route_planning.grid import RegularGrid
 from arctic_route_planning.layered import (
     FourLayerPlanningOutcome,
@@ -88,7 +89,8 @@ class PreparedRiskPlanning:
         """Invoke the unchanged planning service against the frozen preparation."""
 
         result = self._with_private_planner(observation=None, layered=False)
-        assert isinstance(result, PlanningBatch)
+        if not isinstance(result, PlanningBatch):
+            raise TypeError("planning service returned a non-batch result")
         return result
 
     def replan_if_needed(self, observation: ReplanObservation) -> ReplanningOutcome:
@@ -108,7 +110,8 @@ class PreparedRiskPlanning:
         """Evaluate and atomically replace one complete four-layer set."""
 
         result = self._execute_layered(observation=observation)
-        assert isinstance(result, FourLayerReplanningOutcome)
+        if not isinstance(result, FourLayerReplanningOutcome):
+            raise TypeError("four-layer replanning returned a non-outcome result")
         return result
 
     def _execute_layered(
@@ -213,6 +216,11 @@ class PreparedRiskPlanning:
         )
 
 
+# Upper bound on retained planning sessions; older runs are evicted LRU once
+# exceeded so long-running processes do not leak memory.
+_MAX_SESSIONS = 64
+
+
 class RiskSourcePlanningIngress:
     """Fail-closed formal adapter from a structural B store to C's planner.
 
@@ -241,7 +249,9 @@ class RiskSourcePlanningIngress:
         self.planner_config = configuration.planner
         self.planner_config_digest = planner_config_digest
         self.coordinator = coordinator or PlanningCoordinator()
-        self._sessions: dict[tuple[str, str], _PlanningSession] = {}
+        # Bounded LRU: long-running processes publish many runs; the oldest
+        # sessions are evicted once ``_MAX_SESSIONS`` is exceeded.
+        self._sessions: OrderedDict[tuple[str, str], _PlanningSession] = OrderedDict()
         self._coordinator_lock = RLock()
 
     def _session_for(
@@ -268,6 +278,10 @@ class RiskSourcePlanningIngress:
                     layered_store=LayeredRoutePlanLatestStore(),
                 )
                 self._sessions[key] = session
+                if len(self._sessions) > _MAX_SESSIONS:
+                    self._sessions.popitem(last=False)
+            else:
+                self._sessions.move_to_end(key)
             return session
 
     def prepare(self, request: ServicePlanningRequest) -> PreparedRiskPlanning:
@@ -289,7 +303,7 @@ class RiskSourcePlanningIngress:
             if actual != expected:
                 raise ContextMismatchError(f"请求 {name} 与入口冻结配置不一致")
         if request.maximum_elapsed is None:  # resolved by ServicePlanningRequest
-            raise RuntimeError("maximum_elapsed was not resolved")
+            raise ContractError("maximum_elapsed was not resolved")
         query = RiskWindowQuery(
             start=request.start_time,
             end=request.start_time + request.maximum_elapsed,
