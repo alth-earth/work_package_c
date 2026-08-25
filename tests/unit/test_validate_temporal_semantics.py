@@ -246,3 +246,111 @@ def test_p1_refuses_to_overwrite_existing_artifacts(tmp_path: Path) -> None:
             repetitions=1,
             session_slice_expansions=1,
         )
+
+
+def test_p21_control_trace_reuse_mode_writes_explicit_schema_and_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The full CLI mode includes the existing 9 x 13 x 13 profile.  This unit
+    # test keeps the runner contract check quick while the explicit M0 command
+    # remains responsible for both profiles.
+    monkeypatch.setattr(_SCRIPT, "_TRACE_PROFILES", (_SCRIPT._TRACE_PROFILES[0],))
+    output_dir = tmp_path / "p21"
+
+    assert (
+        run_script(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--repetitions",
+                "1",
+                "--control-trace-reuse",
+            ]
+        )
+        == 0
+    )
+    manifest, cases = _load_run(output_dir)
+    assert manifest["schema_version"] == "c.p2.1-control-trace-reuse.v1"
+    assert manifest["mode"] == "control_trace_reuse"
+    assert manifest["reuse_counts"] == [1, 4]
+    assert manifest["production_defaults_changed"] is False
+    assert manifest["formal_ingress_used"] is False
+    assert manifest["frozen_artifact_written"] is False
+    assert manifest["validation"]["verdict"] == "PASS"
+    assert manifest["policy"]["performance_gate"] == {
+        "candidate_total_median_improvement_floor_percent": 20.0,
+        "trace_source_overhead_median_ceiling_percent": 5.0,
+        "minimum_repetitions": 10,
+        "p95": "diagnostic_only_nearest_rank",
+        "rss": "NOT_MEASURED_IN_SHARED_PROCESS",
+    }
+    assert all(
+        item["performance_gate"] == "NOT_EVALUATED_INSUFFICIENT_REPETITIONS"
+        for item in manifest["summary_by_profile_reuse"]
+    )
+    assert manifest["strategies"]["candidate_source"]["planner"] == (
+        "TimeDependentAStar"
+    )
+    assert "control_trace_reuse.trace_plan" in manifest["strategies"][
+        "candidate_reuse"
+    ]["api"]
+    assert len(cases) == 2
+    for case in cases:
+        assert case["comparison"]["expectation_met"] is True
+        assert case["control"]["cold_call_count"] == case["reuse_count"] + 1
+        assert case["control"]["source_plus_target"]["status"] == "SUCCESS"
+        assert len(case["control"]["source_plus_target"]["target"]) == case[
+            "reuse_count"
+        ]
+        assert case["source_request"]["maximum_elapsed_seconds"] > case[
+            "target_request"
+        ]["maximum_elapsed_seconds"]
+        assert case["source_request"]["maximum_risk"] > case["target_request"][
+            "maximum_risk"
+        ]
+        candidate = case["candidate"]
+        assert candidate["trace"]["algorithm_version"] == "control-trace-v1"
+        assert _HEX64.fullmatch(candidate["trace"]["trace_digest"])
+        assert len(candidate["reuse"]) == case["reuse_count"]
+        assert all(item["zero_new_work"] for item in candidate["reuse"])
+
+
+def test_p21_modes_are_mutually_exclusive(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        run_validation(
+            output_dir=tmp_path / "invalid",
+            repetitions=1,
+            session_slice_expansions=1,
+            control_trace_reuse=True,
+        )
+
+
+def test_p21_summary_uses_true_median_and_conservative_p95() -> None:
+    assert _SCRIPT._summary_percentile([1.0, 2.0, 3.0, 4.0], 0.5) == 2.5
+    assert _SCRIPT._summary_percentile([float(value) for value in range(1, 11)], 0.95) == 10.0
+
+
+def test_p21_failed_trace_gate_is_recorded_as_fail(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(_SCRIPT, "_TRACE_PROFILES", (_SCRIPT._TRACE_PROFILES[0],))
+    monkeypatch.setattr(
+        _SCRIPT,
+        "_run_trace_candidate",
+        lambda _profile, _request, _target_request, reuse_count: {
+            "status": "ERROR",
+            "error_type": "SyntheticTraceFailure",
+            "error": "test tamper",
+            "reuse_count": reuse_count,
+            "reuse": [],
+            "trace": {},
+        },
+    )
+    manifest = _SCRIPT._run_p21_validation(
+        output_dir=tmp_path / "failed-p21",
+        repetitions=1,
+    )
+    assert manifest["validation"]["verdict"] == "FAIL"
+    assert manifest["validation"]["failed_cases"]

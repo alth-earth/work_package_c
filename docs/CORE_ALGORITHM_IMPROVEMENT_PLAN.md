@@ -8,7 +8,7 @@ Document Role: CANONICAL
 Scope: C 核心算法现状、证据、正确性边界、改进设计与实施计划
 Canonical For: 工作包 C 核心算法改进实现的首要参考
 Branch: research-validation-system
-Last Verified: 2026-08-24
+Last Verified: 2026-08-25
 Related Canonical Docs:
   - "README.md"
   - "ARCHITECTURE_AND_DECISIONS.md"
@@ -21,7 +21,7 @@ Related Canonical Docs:
 
 # 工作包 C 核心算法现状、改进方案与实施计划
 
-> 本文档将“工作包 C 核心算法实现审计报告”与后续改进方案合并为一个持续维护的计划文档。当前基线是带风险、速度和 ETA 耦合的时间依赖 A*；截至本次审计，C 已具备正式路线生产能力，但尚未证明相对于常规 A*、Dijkstra、D* Lite/LPA* 或其他独立基线具有稳定的速度、资源或全局最优优势。
+> 本文档将“工作包 C 核心算法实现审计报告”与后续改进方案合并为一个持续维护的计划文档。当前正式基线是带风险、速度和 ETA 耦合的时间依赖 A*；P2.1 研究分支已在同 goal 收紧重复查询上证明相对独立 cold control 的可重复耗时优势，但尚未形成完整 Winter、生产默认、跨问题稳定资源优势或全局最优证明。
 
 ## 1. 文档定位与更新规则（2026-08-24 20:52 +08:00）
 
@@ -82,7 +82,7 @@ RiskSourcePlanningIngress.execute
 | 正式 B→C 输入与 fail-closed | `AUTHORITATIVE_PASS` | committed-window lease、identity/digest 校验、覆盖和硬约束拒绝 |
 | Winter 四层三目标生产 | `AUTHORITATIVE_PASS` | 145 个正式小时帧、4 层 × 3 目标、12/12 route integrity、hard violation 0 |
 | C→D 路线合同 | `FROZEN_BASELINE` | route v2 / four-layer v3 schema、digest 和来源字段保持冻结 |
-| 单元/合同回归 | `UNIT_PASS` | P0 clean/synced 基线为 `215 passed`；当前 P1 研究工作树执行 `UV_OFFLINE=1 make check` 为 `238 passed`，Ruff 通过 |
+| 单元/合同回归 | `UNIT_PASS` | P0 clean/synced 基线为 `215 passed`；当前 P2.1 研究工作树执行 `UV_OFFLINE=1 make check` 为 `272 passed`，Ruff 通过 |
 | 当前 A* 的全局最优性 | `NOT_IMPLEMENTED`（未证明） | 时间桶合并、FIFO、ETA 迭代和连续时间误差均无通用证明 |
 | 相对于传统算法的稳定性能优势 | `NOT_IMPLEMENTED`（未证明） | 目前没有同输入、同边评估器、重复运行的独立 baseline 对比 |
 | bounded LRU 风险采样缓存 | `EXPERIMENTAL` | direct medium 实验约 14.77% median 改善，但增加约 38.6 MiB RSS，未通过正式 12 路线门禁 |
@@ -115,47 +115,46 @@ RiskSourcePlanningIngress.execute
 
 ## 6. 目标改进算法：LTCR-TDA*（2026-08-24 20:52 +08:00）
 
-**命名与定位：** 采用“分层目标证书复用的时间依赖 A*”（Layered Target-Certified Reuse Time-Dependent A*，简称 **LTCR-TDA***）。它不是给普通 A* 改名，而是围绕 C 当前最大可观测瓶颈设计的、可回退的搜索会话复用算法：在同一目标、同一输入身份下保留 OPEN、标签和前驱，对 full 与 anchor 两个查询分别取得最优性下界证书，证书成立才复用。
+**命名与定位：** 采用“分层目标证书复用的时间依赖 A*”（Layered Target-Certified Reuse Time-Dependent A*，简称 **LTCR-TDA***）。它不是给普通 A* 改名，而是围绕 C 当前最大可观测瓶颈设计的、可回退重复查询算法。P0/P1/P2 的 exact-arrival session 继续承担离散正确性和最优性下界研究；P2.1 则使用当前快速 control A* 生成**执行轨迹等价证书**，只证明收紧约束后的 control 会返回相同业务路线，不把 control 的时间桶搜索写成全局最优算法。
 
-**核心数据结构：**
+**P2.1 核心数据结构（2026-08-25 01:13 +08:00）：**
 
 ```text
-Session_m = (
-    OPEN,
-    temporal_labels,
-    CLOSED,
-    predecessor,
-    incumbent_for_full,
-    incumbent_for_anchor,
-    lower_bound_for_full,
-    lower_bound_for_anchor,
-    certificate_status,
-    input/config/model/generation digests,
+ControlTraceCertificate_m = (
+    ordered_insertion_digest,
+    insertion_count,
+    replacement_count,
+    maximum_inserted_elapsed,
+    maximum_inserted_path_edge_risk,
+    source_route_digest,
+    termination = FIRST_GOAL_POP,
+    input/config/model/generation/algorithm digests,
 )
 ```
 
-每个 `objective`（`fastest`、`low_risk`、`recommended`）独立维护一个 session；不跨目标共享标签，不跨 RiskFrame、generation、revision 或 planner digest 复用。
+每个 `objective`（`fastest`、`low_risk`、`recommended`）独立生成证书；有序摘要必须覆盖首次 goal 返回前每次成功写入或替换 label/OPEN 的历史事件，包括后来被覆盖的 transient label。证书不跨目标、goal、RiskFrame、generation、revision、planner 或 evaluator identity 复用。
 
 **计划流程：**
 
 ```text
-1. 用当前 A* control 产生 full route，并保留该 objective 的搜索会话。
-2. 从 full route 选择 main/rolling/executable 的 anchor 候选。
-3. 在同一 session 中继续搜索，分别计算 anchor 和 full 的 incumbent/lower bound。
-4. 仅当 anchor 证书成立，才重建并复用 full session 中对应 prefix。
-5. 证书缺失、输入身份变化、时间语义不满足或资源预算不足时，回退独立 A*。
-6. 将 control/candidate 的结果作为新 experiment identity 输出，不覆盖冻结基线。
+1. 用未改变搜索顺序的 control A* 产生 full route，同时只读记录 label/OPEN 成功写入轨迹。
+2. 当 main 的 anchor 仍是业务终点时，对相同 goal/objective 的收紧时域或风险查询验证轨迹证书。
+3. 只有 target 阈值覆盖首次 goal 前全部历史成功写入，且 source route 自身满足 target，才返回 `HIT_TRACE_EQUIVALENT`。
+4. exact identity 可返回 `HIT_EXACT`；不同 goal、放宽约束、身份变化、transient label 超界、取消或证书损坏一律不命中。
+5. miss 时从零运行当前 control；rolling/executable 或不同 anchor 本阶段继续 cold control。
+6. control/candidate 结果只写入新的 experiment identity 和诊断 sidecar，不覆盖正式 latest 或冻结基线。
 ```
 
-**证书条件：** 对固定 objective、RiskFrame、船模和规划参数，令 `U_A` 为当前到达 anchor 的最好可行成本，`LB_A` 为所有仍可能到达 anchor 的 OPEN 标签下界，则只在
+**P2.1 证书条件：** 对相同 start、goal、departure、objective、RiskFrame、船模、网格、时间桶、边采样、代价模型和算法版本，target 只能收紧 `maximum_elapsed` 和/或逐边 `maximum_risk`。令 `E_trace` 和 `R_trace` 分别为 source 在首次 goal 返回前所有历史成功 label 写入的最大 elapsed 与最大 path edge risk，则只在
 
 ```text
-U_A <= LB_A + epsilon
+target.maximum_elapsed >= E_trace
+target.maximum_risk    >= R_trace
 ```
 
-且同时满足同一 `start_time`、网格、时间桶、边采样、最大时域、generation、revision、config/model digest、hard mask/coverage/failure 语义和 anchor ETA 上限时，记录 `CERTIFIED_REUSABLE`。没有独立的 `U_A/LB_A` 证书，full route 到达 anchor 并不等于 prefix 最优。
+并且 source route 满足 target、source→target 确为可行域收紧时记录 `CONTROL_TRACE_EQUIVALENT`。若 target 删除了任何曾写入 OPEN 的 transient label，证书必须失败，即使最终 source route 本身仍满足 target。这个保守条件允许按搜索写入顺序归纳 labels、OPEN、predecessor 和首次 goal route 不变；它不证明该 route 对一般连续问题或 exact-arrival 图最优。
 
-**必要的正确性边界：** P0 已解决候选实现的精确到达时间标签、ETA 收敛检查、终值重采样和独立 oracle 对照，并通过其离散语义 `UNIT_PASS`。LTCR-TDA* 后续仍只能作为受限离散模型上的语义保持工程复用实验；在 P1 会话围栏、P2/P3 证书和正式 paired benchmark 完成前，不得写成对原连续问题的全局最优算法或稳定性能优势。
+**必要的正确性边界：** P0 已解决候选实现的精确到达时间标签、ETA 收敛检查、终值重采样和独立 oracle 对照，并通过其离散语义 `UNIT_PASS`。P2.1 不复用 control 的 OPEN 下界、不生成 `OPTIMAL` 状态，只生成 control execution trace equivalence。M0/M1 现只支持“已验证 workload 中相对独立 cold control 的耗时优势”；LTCR-TDA* 仍是受限离散模型上的语义保持工程实验，P3 不同 anchor 的 `U_A/LB_A` 证明保持 `PLANNED`。
 
 **预期优势与诚实边界：** 该算法有机会直接消除 full/main 的重复搜索，优势指标是相同语义下的 wall time、expanded/generated、边评估次数和峰值 RSS；预计收益是待验证假设，不是现有结论。证书失败时退回 baseline 是算法设计的一部分，不是异常掩盖。
 
@@ -167,7 +166,7 @@ U_A <= LB_A + epsilon
 
 | 方向 | 作用 | 与 C 的适配 | 决策 |
 |---|---|---|---|
-| LTCR-TDA* | 同一 objective 的 full/anchor 会话、下界证书和安全回退 | 直接针对已观测的 full/main 重复，C-only | **第一优先级** |
+| LTCR-TDA* / P2.1 control trace | 同一 goal/objective 的收紧约束轨迹等价证书和安全回退 | 避开 exact cold 爆炸，直接针对已观测的 full/main 重复，C-only | **当前第一优先级** |
 | SIPP-like safe-interval search | 将 hard-mask 时间区间显式放入状态，可表达等待 | 需先定义保守 safe interval，软风险不能误判为绝对安全 | P0 后小规模实验 |
 | ARA*/Anytime weighted A* | 先求可行解，再用 epsilon 收敛换取时间预算内的质量 | 可在 C 内独立实现，但必须报告相对 oracle 的代价差 | 备选基线/时间预算实验 |
 | Shared NAMOA*-like | 对时间、风险、距离/转向维护 Pareto 标签，减少三目标重复 | 标签可能爆炸，且 temporal dominance 尚未定义 | 第二阶段候选 |
@@ -185,13 +184,18 @@ U_A <= LB_A + epsilon
 |---|---|---|---|
 | P0 正确性语义 | `TemporalLabel`/时间展开 reference oracle；FIFO 与非 FIFO fixture；ETA 残差、最大迭代、周期检测和最终重采样 | 反例全部命中预期；control 与 oracle 在小图上路线/代价一致；不收敛显式失败 | `UNIT_PASS` |
 | P1 会话骨架 | 在 C 内实现 per-objective 可恢复 session、OPEN/前驱/标签快照和 input/config/model digest fence | 不跨目标/代际复用；取消、generation、revision、fail-closed 回归通过 | `UNIT_PASS` |
-| P2 exact same-goal reuse | 先实现同一目标查询的证书化继续搜索，保留 baseline 回退 | M0/M1 与 control 语义一致；证书可重算；失败自动回退 | `PLANNED` |
+| P2 same-goal monotonic reuse | 实现同一目标、同一输入下 exact hit 与收紧时域/风险约束的证书迁移，保留 baseline 回退 | M0/M1 与 control 语义一致；证书可重算；命中零搜索扩展；失败自动回退 | `UNIT_PASS`（M0 性能 FAIL） |
+| P2.1 control trace reuse | 为正式 control 增加默认关闭的历史写入轨迹证书；只在同 goal 收紧约束保持整段执行轨迹时复用 | transient-label 反例 fail-closed；M0 总耗时至少改善 20%；M1 两规模 median 至少改善 15% | `EXPERIMENTAL_PASS`（M0/M1） |
 | P3 full/anchor reuse | 为 anchor 计算 `U_A/LB_A`，证书成立才复用 prefix；将四层集成到影子分支 | M1 至少 5 次 paired run；无单层硬回归；无证书误用 | `PLANNED` |
-| P4 formal shadow | Winter 正式 ingress、4×3、12 路线，control/candidate 双轨 | M2 通过确定性、合同、资源和性能阈值；不覆盖冻结 artifact | `PLANNED` |
+| P4 formal shadow | Winter 正式 ingress、4×3、12 路线，control/candidate 双轨 | M2 通过确定性、合同、资源和性能阈值；不覆盖冻结 artifact | `IMPLEMENTED`（P4a；M2 FAIL） |
 | P5 默认启用评审 | 仅在重复正式证据支持时改变默认开关，并更新本文档/CHANGELOG | 通过审批、回滚演练和新 experiment identity；否则保持 baseline | `PLANNED` |
 | P6 多目标/自适应后续 | NAMOA*/MOPBD*/自适应网格等独立提案 | 必须先证明 P0/P3 的收益不足且合同必要性成立 | `DEFERRED` |
 
 **实施顺序硬规则：** 先 P0，再 P1/P2；P3 证书失败必须回退；P4 以前不得将候选算法命名为正式生产 planner；P6 不得倒灌到当前合同。
+
+**P2/P4a 实施规格冻结（2026-08-25 00:09 +08:00）：** P2 不停留在普通 exact-key 缓存，而是在同一 start、goal、departure、objective、RiskFrame、generation/revision、网格、船模、代价模型、ETA policy、边采样、搜索限制和 evaluator 身份下，允许把已认证的宽约束结果迁移到更窄的 `maximum_elapsed` 和/或 `maximum_risk` 查询。目标可行域必须是源可行域的子集，且源路线自身满足目标约束；反向放宽、不同目标、不同身份或路线不满足收紧约束时一律 cold candidate。证书必须从 session 当前 labels、incumbent 和过滤 stale 后的有效 OPEN 独立重算，固定记录 `U`、`LB`、epsilon、`OPEN_BOUND/OPEN_EMPTY` 终止原因、session/state digest 和路线语义 digest；命中必须为零新增 expansion 与 edge evaluation。无界全局缓存禁止，每个 objective 只保留一个受身份约束的证书；取消直接传播，不能用 control fallback 掩盖，其他候选失败可从零运行 scratch control 并显式记录 `FALLBACK_CONTROL`。
+
+本轮提前实施受限 P4a：为 `PreparedRiskPlanning` 增加显式、默认关闭、非发布的 Winter shadow 方法，并提供使用同一正式输入围栏的 orchestrator 独立 runner。两条 shadow 路径都在 committed-window execution lease 内复核 commit/content identity，control/candidate 使用独立 scratch coordinator/store，不写 production session、replanning baseline、正式 latest 或冻结 artifact；输出只进入新的 experiment identity 和诊断 sidecar。现有 `execute()`、`execute_four_layer()` 与正式 runner 的默认行为保持不变。该提前项只用于验证 P2 在当前 Winter full 144 h → main 72 h 重复工作负载上的适用性，不提前实施 P3 不同 anchor/prefix 复用，也不实施上一版 2.2.2。
 
 **P0 实施规格冻结（2026-08-24 22:12 +08:00）：** 本轮保留现有 `TimeDependentAStar` 为正式 control；新增候选不从公共包导出、不接入 ingress/service。候选标签身份固定为 `(node, heading, exact UTC arrival_time)`，不同到达时刻禁止相互支配；只有精确状态相同时才保留较低成本。候选资源上限为 50,000 expansions、100,000 labels、50,000 queue 和 400,000 edge evaluations，超限显式失败。
 
@@ -210,6 +214,20 @@ P1 会话状态固定为 `READY → PAUSED → GOAL_CERTIFIED | EXHAUSTED | CANC
 **P1 实施与证据（2026-08-24 23:33 +08:00）：** 已新增内部 `temporal_session.py`，并把 `TemporalLabelAStar.plan()` 收敛为 create/advance 到终态的兼容包装。session 独占 exact-arrival labels、OPEN、前驱、incumbent、诊断与启发式缓存；checkpoint 保留 stale queue entry、微秒级 ETA 和累计计数，清除 cancel callback，并以 state digest 拒绝篡改。恢复只接受 `READY/PAUSED`，重新计算当前 sampler、planner、request、model、policy 和 evaluator 身份；内部 sampler digest 与可选正式 committed-window digest 明确区分，正式 pair 必须满足 `commit_id = risk-window-sha256-<content_digest>`。显式伪造 identity、风险窗口内容变化、evaluator 变化、终态恢复、取消、四类资源上限重置和跨 objective 状态共享均有负例。
 
 当前 P0/P1 聚焦回归为 63 项通过，完整 `UV_OFFLINE=1 make check` 为 238 项通过。显式 P1 runner 在 5×7×7 synthetic fixture 上串行执行 10 次；每次 session 均经历 8 次 pause/checkpoint/restore，10/10 control、one-shot candidate 与 session candidate 路线 semantic digest 一致，one-shot/session 离散 metrics 与 diagnostics 一致。最终代码哈希对应的原始构件位于 `/root/my_project/.runtime/experiments/c-p1-temporal-session-v1-37627fd-dirty-r3/`，manifest `experiment_id` 为 `c-p1-temporal-session-v1-37627fdc-dirty`。该运行来自 Git `37627fdc2b37bbb3c8b06392e09b1b91a2d6ea2f` 上的未提交研究工作树，manifest 如实记录 `git_worktree_dirty=true`，因此只支持 P1 `UNIT_PASS`，不构成 clean、formal、authoritative、frozen 或性能优势证据。未修改 B/C、C/D schema/digest、正式默认 planner、ingress/service 或 frozen artifact。
+
+**P2/P4a 实施与证据（2026-08-25 00:42 +08:00）：** 已新增内部 `temporal_reuse.py`，实现 `TemporalGoalCertificate`、`TemporalCertifiedGoal`、`TemporalReuseOutcome`、`certify_session()`、`try_reuse()` 与显式 `reuse_or_plan()`。证书从 checkpoint 的 incumbent、labels 和过滤 stale 后的 OPEN 重算，并绑定 state、route 和 certificate digest；状态区分 exact/monotonic hit、incompatible miss、cold candidate 与实际 control fallback。当前正式请求只有逐边 `maximum_risk`，没有 cumulative-risk 合同，后者被明确拒绝而不偷换语义。候选仍不从公共 planners 包导出。
+
+完整 `UV_OFFLINE=1 make check` 为 258 项通过。实验 `/root/my_project/.runtime/experiments/c-p2-temporal-goal-reuse-20260825-r1/` 在未提交研究工作树 `5660365b` 上串行运行 10 次，10/10 control/candidate 业务语义、证书矩阵、exact/收紧时域/收紧风险/两者同时收紧、身份/放宽/路线不可行 miss、零新增 expansion/edge evaluation 和独立 control fallback 全部符合预期，因此 P2 正确性达到 `UNIT_PASS`。但 control cold median 为 `135.373 ms`，candidate cold median 为 `722.410 ms`；即使把一次命中视为零开销，candidate cold + hit 仍明显慢于两次 control cold，M0 的“不恶化超过 5%”门禁失败，不能声明 synthetic 性能优势。该 artifact 如实记录 `git_worktree_dirty=true`，不构成 clean/frozen 证据。
+
+受限 P4a 已在 `PreparedRiskPlanning.execute_four_layer_temporal_shadow()` 和 orchestrator `scripts/winter_p2_shadow.py` 中实现；control/candidate 使用独立 scratch coordinator/store，同一 lease 前后复核 committed query/content/commit，`production_published=false`，不写正式 latest 或 replanning baseline。Winter prepare-only 构件 `/root/my_project/.runtime/experiments/winter-c-p2-monotonic-shadow-20260825-prepare-r1/` 对 145 帧、31×11、节点 `[5,7]→[26,2]` 的正式输入通过。第一份非 prepare 构件 `...-r1/` 暴露 runner 未传 `request` 的 harness 缺陷，已修复并增加回归测试，不作为算法证据；修复后的 `/root/my_project/.runtime/experiments/winter-c-p2-monotonic-shadow-20260825-r2/` 在约 `674.463 s` 后由候选触发 `TemporalSearchLimitExceeded(queue=50000)`，峰值 RSS `229176 KiB`，未产生 candidate plan set、12-route integrity 或任何正式发布。因此 P4a 仅为工具 `IMPLEMENTED`，M2 明确 `FAIL`；不继续三次重型重复、不放宽冻结资源上限、不改变默认 planner。
+
+**P2.1 实施与证据（2026-08-25 02:32 +08:00）：** 已新增内部、未公开导出的 `control_trace_reuse.py`，并在 `TimeDependentAStar._plan_traced()` 中以显式 opt-in 方式记录首次 goal pop 前的成功 OPEN/label 写入。生产证书只保留有序二进制 rolling digest、写入/替换计数、全历史 elapsed/risk envelope、source route digest 和 identity/seal，额外内存为 O(1)；逐事件历史只在测试 observer 中启用。身份绑定起终点、出发时间、objective、RiskIdentity、外部 window/content/revision/generation、grid/model/config/evaluator、bucket/sample/heuristic/search limits；证书终止状态、取消、篡改、约束放宽、身份变化和 transient write 越界全部 fail-closed。默认 `plan()` 搜索顺序和正式公开接口保持不变。C ingress 与 orchestrator Winter runner 均增加显式 `control_trace` shadow 模式：只允许 full→main 同 goal 尝试 reuse，rolling/executable 和不同 goal cold control，sidecar 报告真实 hit/miss，仍不发布。
+
+最终 M0 构件为 `/root/my_project/.runtime/experiments/c-p21-control-trace-reuse-20260825-r4/`：两个 synthetic profile、`R=1/4`、每格 10 次，共 40/40 语义、trace hit 和零新增搜索通过。5×7×7 的 total median 改善为 `48.33%/77.36%`，trace-source overhead median 为 `4.29%/3.24%`；9×13×13 为 `48.08%/78.97%` 与 `2.52%/2.11%`，全部通过“总 median ≥20%、trace overhead ≤5%”专项门。共享进程 M0 的 RSS 只记录为 `NOT_MEASURED`，不伪造策略间资源比。
+
+最终 M1 构件为 `/root/my_project/.runtime/experiments/c-p21-bc-coupling-m1-20260825-r3.json`：复用已有本地 B formal-grid 实验文档，baseline 16×7 与 medium 31×11 均为 78 帧；每 profile 5 次、control/candidate 独立进程、奇偶轮交替、sample cache off。10/10 paired case 路线 semantic digest 相同、`HIT_TRACE_EQUIVALENT`、零新增 expansion/edge evaluation。baseline 的 total median/P95 改善为 `45.52%/45.51%`，medium 为 `49.32%/49.32%`；median peak RSS ratio 分别为 `1.000/0.992`，均通过 M1 的 median ≥15%、P95 不回归超过 5%、RSS ≤1.10 门禁。paired trace-source overhead median 分别约 `1.83%/-0.64%`（负值仅表示测量噪声下略快，不解释为算法收益）。该运行来自同步 HEAD `5660365b` 的 dirty research worktree，`formal_ingress_used=false`，因此是可重复的 `EXPERIMENTAL_PASS`，不是 clean/frozen/authoritative 或生产默认证据。
+
+M0 r1 暴露 JSON/SHA 热路径 overhead 15%–20%，随后改为固定网络字节序 rolling carrier并移除生产态逐状态镜像；r2/r3 是中间诊断。M1 r1 因 benchmark 不能序列化 `CostBreakdown` 而全量 harness FAIL，r2 又暴露 control-only RSS polling thread 的计时不对称；两者均保留但不作算法证据。r3 改为独立 worker `RUSAGE_SELF` 峰值后才成为最终 M1。完整 Winter M2、本轮 2.2.2、P3 不同 anchor 和默认启用均未执行。
 
 ## 9. 接口、合同与构件规则（2026-08-24 20:52 +08:00）
 
@@ -240,6 +258,7 @@ P1 会话状态固定为 `READY → PAUSED → GOAL_CERTIFIED | EXHAUSTED | CANC
 **建议晋级阈值（实施前冻结）：**
 
 - M0：无正确性回归；median 时间不恶化超过 5%；RSS 不超过 control 的 1.10 倍，10 次结果一致。
+- P2.1 M0 专项：`R=1` 与 `R=4` 重复收紧查询中，trace source 只运行一次；命中零新增 expansion/edge evaluation，单次 trace 开销不超过 5%，总 median 至少改善 20%。
 - M1：median wall time 至少改善 10%（正式晋级建议 15%）；P95 不恶化超过 5%；无硬失败；完整覆盖两个规模。
 - M2：4×3、12/12 route integrity、digest/资源/确定性全部通过；至少 3 次串行运行；median 相对 control 至少改善 15%，且任一 layer/objective 不超过 5% 回归；无 swap/OOM/partial publication。
 - 若候选改变路线而非保持语义，必须另设相对 reference oracle 的可行性、目标代价、风险和约束验收，不得套用 digest 完全相同门禁。
@@ -268,6 +287,6 @@ P1 会话状态固定为 `READY → PAUSED → GOAL_CERTIFIED | EXHAUSTED | CANC
 4. 所有性能结论必须来自同输入、同边评估器、重复运行的 paired benchmark；单次 Winter wall time 只能称为工程观察。
 5. 重大算法选择、跨包合同变化和默认开关变化，需要在本文档记录决定、证据、owner、commit 和回滚方式；跨包事项同时走正式提案。
 
-**开放问题：** 非 FIFO 情形是否进一步采用 label-correcting；ETA 迭代的保守误差模型；anchor 证书的浮点容差；M1/M2 的最终资源预算。P1 会话身份、状态机、恢复围栏和累计资源语义已冻结并达到 `UNIT_PASS`，独立 FIFO 证书分类器留待后续阶段，不属于本轮 P1。P0 exact-arrival label 上限已冻结并实现，任何放宽须先记录新实验身份。这些问题在方案冻结前不得用“全局最优”“稳定加速”或“生产级优势”表述代替。
+**开放问题：** 非 FIFO 情形是否进一步采用 label-correcting；ETA 迭代的保守误差模型；P3 anchor 证书的浮点容差；P2.1 在正式 Winter 4×3 workload 上的自然 hit rate、分层单项回归和跨运行稳定性。P1/P2 的会话与证书围栏已达到 `UNIT_PASS`，但 synthetic M0 和 Winter M2 已共同证明 exact-arrival candidate cold search 不适合作为当前性能 source；P2.1 因此改用 control trace，只证明执行等价。P2.1 已通过 M0/M1，下一轮只能在新的计划和资源预算下决定 M2 或 P3，不把 queue 上限从 50,000 直接调大来制造通过结果。独立 FIFO 分类器和 exact 标签安全支配仍是后续候选。任何资源或标签语义变更必须先记录新的实验身份与正确性回归，不能用“全局最优”“稳定加速”或“生产级优势”代替证据。
 
-**本次更新记录：** 将旧的“实现审计报告”重整为现状 + 证据 + 正确性边界 + LTCR-TDA* 方案 + 分阶段计划 + benchmark/回滚门禁；已完成 P0 exact-time candidate、独立 oracle、ETA 收敛器和 P1 per-objective 可恢复 session 骨架的 `UNIT_PASS`。下一步进入 P2 exact same-goal certificate/reuse，不提前接入四层正式链。后续修改直接在本文档对应章节更新，不再创建同主题文档。
+**本次更新记录：** 将旧的“实现审计报告”重整为现状 + 证据 + 正确性边界 + LTCR-TDA* 方案 + 分阶段计划 + benchmark/回滚门禁；现已完成 P0 exact-time candidate、独立 oracle、ETA 收敛器、P1 per-objective 可恢复 session 和 P2 same-goal monotonic certificate reuse 的 `UNIT_PASS`，并实现默认关闭、非发布的 P4a Winter shadow。P2 没有通过 M0 性能门禁，P4a 没有通过 M2 资源/完整路线门禁。P2.1 control trace equivalence 现已完成实现并通过 synthetic M0 与两规模本地 B-grid M1，形成“同 goal 收紧重复查询”上的可重复明显耗时优势，但只证明 control 执行轨迹等价，不证明全局最优或生产级稳定优势。下一轮需在 M2 正式 Winter 与 P3 不同 anchor 中重新择一制定计划；2.2.2 继续暂缓。后续修改直接在本文档对应章节更新，不再创建同主题文档。

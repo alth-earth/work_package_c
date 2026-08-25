@@ -6,7 +6,7 @@ Content Status:
 Document Role: SUPPORTING
 Scope: work package C change history
 Branch: research-validation-system
-Last Verified: 2026-08-24
+Last Verified: 2026-08-25
 ---
 
 # 工作包 C 变更记录
@@ -14,6 +14,45 @@ Last Verified: 2026-08-24
 本文件记录工作包 C 的可见功能、跨包合同、兼容性和验证状态变化。项目用途、运行方法
 与当前架构请先阅读 [README.md](README.md)；长期设计取舍见
 [决策记录](docs/DECISIONS.md)。
+
+## Unreleased — P2.1 control-trace equivalence（2026-08-25 02:32 +08:00）
+
+- 新增内部 `control_trace_reuse.py` 与 `TimeDependentAStar._plan_traced()`：默认 `plan()` 不变；仅显式
+  shadow 记录首次 goal pop 前成功写入的 rolling digest 与保守 elapsed/risk envelope。
+- 复用只接受同 start/goal/departure/objective/input/config/model/evaluator identity 下收紧
+  `maximum_elapsed`/`maximum_risk` 的查询；termination、取消、篡改、放宽、identity mismatch 与
+  transient-label 越界均 fail-closed，不产生 `OPTIMAL` 声明。
+- ingress 与 Winter runner 增加默认关闭、非发布的 `control_trace` 模式；只对 full→main 同 goal
+  尝试真实 hit，其余 layer cold control，sidecar 区分 hit/miss/fallback/zero-search。
+- M0 最终构件 `c-p21-control-trace-reuse-20260825-r4` 为 40/40 通过；两个 synthetic 规模在 R=1/4
+  下 total median 改善约 `48%–79%`，trace overhead median `2.11%–4.29%`。
+- M1 最终构件 `c-p21-bc-coupling-m1-20260825-r3.json` 为 10/10 通过；16×7 与 31×11 本地 B-grid
+  profile 的 total median 改善为 `45.52%/49.32%`，P95 同样改善，median RSS ratio 为
+  `1.000/0.992`。构件来自 dirty research worktree，属于 `EXPERIMENTAL_PASS`。
+- 明确保留并排除错误证据：M0 r1 为 trace 热路径 overhead FAIL；M1 r1 为 `CostBreakdown`
+  序列化 harness FAIL；M1 r2 含 control-only RSS polling 计时不对称。未运行完整 Winter M2、P3、
+  2.2.2，未修改 B/C、C/D 合同、默认 planner、正式 latest 或 frozen artifact。
+
+## Unreleased — P2 monotonic certificate reuse and P4a shadow（2026-08-25 00:42 +08:00）
+
+- 新增未公开导出的内部 `temporal_reuse.py`：从终态 session 独立重算 `U/LB/epsilon`、
+  `OPEN_BOUND/OPEN_EMPTY`、state/route/certificate digest；只允许同一完整身份下收紧
+  `maximum_elapsed` 和/或 `maximum_risk`，命中不推进搜索。
+- 结果状态明确区分 `HIT_EXACT`、`HIT_MONOTONIC`、`MISS_INCOMPATIBLE`、
+  `COLD_CANDIDATE` 和实际运行独立 control 后的 `FALLBACK_CONTROL`；取消直接传播，当前未定义的
+  cumulative-risk 约束 fail-closed。
+- `PreparedRiskPlanning.execute_four_layer_temporal_shadow()` 在同一 committed-window lease 内运行
+  两套 scratch planner/coordinator/store，并明确 `production_published=false`；正式 `execute*()`、
+  session baseline、latest、C→D schema/digest 与 frozen artifact 均不改变。
+- Orchestrator 新增独立 `scripts/winter_p2_shadow.py`，正式 Winter runner 默认行为不变；shadow 只向
+  新 experiment 目录写 control/candidate、certificate/reuse、integrity 和 comparison sidecar。
+- `scripts/validate_temporal_semantics.py --p2-exact-goal-reuse` 的 10 次 synthetic 验证全部通过语义、
+  证书、命中零搜索和显式 control fallback，但 candidate cold median 约 `722.410 ms`，control cold
+  median 约 `135.373 ms`，未通过 M0 性能门禁。
+- Winter 正式输入 prepare-only 通过；有效 paired shadow 在约 `674.463 s` 后因候选 queue 达到
+  `50,000` 硬上限失败关闭，峰值 RSS `229176 KiB`，未生成或发布候选四层结果。因此 P2 仅为
+  `UNIT_PASS`，P4a 工具为 `IMPLEMENTED` 但 M2 未通过，不声明性能优势或默认启用。
+- 完整 C 检查为 258 项通过；Orchestrator 非 integration/real-artifact 测试为 98 项通过。
 
 ## Unreleased — P1 resumable temporal sessions（2026-08-24 23:33 +08:00）
 

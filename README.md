@@ -7,7 +7,7 @@ Content Status:
 Document Role: CANONICAL
 Scope: work package C entrypoint and public boundary
 Branch: research-validation-system
-Last Verified: 2026-08-24
+Last Verified: 2026-08-25
 ---
 
 > [!NOTE]
@@ -30,9 +30,11 @@ C 的阶段角色为 Risk-aware Navigation Decision。四层 × 三目标 = 12 �
 RC1 artifact 验证；当前执行仍是 12 次独立 A*。Shared multi-objective search、增量
 search 和 replay Viewer candidate publication 尚未实现。
 
-核心算法研究线已完成 P0 exact-arrival-time 候选与 P1 内部可恢复 session 骨架的单元验证；
-它们未从公共 planner 包导出、未接 ingress/service，也尚未形成性能优势。当前状态、证据、
-阶段门禁和后续 P2/P3 计划以
+核心算法研究线已完成 P0 exact-arrival-time 候选、P1 内部可恢复 session 骨架、P2 同目标
+单调约束证书复用和 P2.1 control-trace equivalence。P2.1 在显式、默认关闭、不发布的 shadow
+路径中，对同 goal 收紧重复查询取得可重复的 M0/M1 耗时优势；默认 control、正式合同与 frozen
+artifact 均未改变。该结论不外推到不同 anchor、完整 Winter、全局最优或生产默认。当前状态、
+证据、失败实验和后续门禁以
 [`CORE_ALGORITHM_IMPROVEMENT_PLAN.md`](docs/CORE_ALGORITHM_IMPROVEMENT_PLAN.md) 为准。
 
 The isolated component profiler and first synthetic measurements are documented
@@ -52,7 +54,7 @@ C 消费 B 的逐小时风险窗，按 ETA 采样风险，运行时间依赖规�
 
 | 项目 | 状态 |
 |---|---|
-| 版本/工程 | 0.4.0；当前研究工作树 `UV_OFFLINE=1 make check` 为 238 passed |
+| 版本/工程 | 0.4.0；当前研究工作树 `UV_OFFLINE=1 make check` 为 272 passed |
 | 挑战杯主线 | v3 四层 × 三目标（12 路线整组）+ 重规划；v2 三目标为强制后备 |
 | RC1 实源状态 | PASS（2026-08-16）：mur/dikson v3 四层 + 6h 重规划经 orchestrator r6/r7 跑通；单目标 144h ≈96s |
 | RC2 BC 扩展 | `bc.risk-frame.v2` 可选 `hard_reason`（NONE/LAND/DATA_UNAVAILABLE/OTHER），旧帧向后兼容（RC2 分支） |
@@ -124,6 +126,6 @@ Python 公共入口 `RiskSourcePlanningIngress`。正式调用方必须：
 - [B→C 合同](docs/BC_CONTRACT.md)
 - [C→D 合同](docs/CD_CONTRACT.md)
 - [核心算法现状、改进方案与实施计划（首要参考）](docs/CORE_ALGORITHM_IMPROVEMENT_PLAN.md)
-- [P0/P1 时间语义与会话可重复验证入口](scripts/validate_temporal_semantics.py)
+- [P0/P1/P2/P2.1 时间语义、会话与 control-trace 复用验证入口](scripts/validate_temporal_semantics.py)
 - [系统权威](../arctic_route_governance/current/architecture/ARCTIC_ROUTE_SYSTEM.md)
 - [当前路线图](../arctic_route_governance/current/CURRENT_ROADMAP.md)

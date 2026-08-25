@@ -242,6 +242,36 @@ class TimeDependentAStar:
         }
 
     def plan(self, request: PlanningRequest) -> PlanningResult:
+        """Plan with the unchanged control-search API and default behavior."""
+
+        return self._plan(request, trace=None)
+
+    def _plan_traced(
+        self,
+        request: PlanningRequest,
+        *,
+        identity: object = None,
+        observer: object = None,
+    ) -> tuple[PlanningResult, object]:
+        """Run the control search with an internal, opt-in write trace.
+
+        The collector is imported lazily so this internal research carrier
+        cannot affect the normal planner import graph or public exports.
+        ``plan`` never enables this path.
+        """
+
+        from .control_trace_reuse import ControlTraceCollector
+
+        collector = ControlTraceCollector(
+            self,
+            request,
+            identity=identity,
+            observer=observer,
+        )
+        result = self._plan(request, trace=collector)
+        return result, collector.trace
+
+    def _plan(self, request: PlanningRequest, *, trace: object | None) -> PlanningResult:
         started = perf_counter()
         self._last_counters: _Counters | None = None
         self._heur_dist = {}
@@ -256,17 +286,41 @@ class TimeDependentAStar:
         if start_sample.hard_mask:
             raise EndpointBlockedError(f"start node {request.start} is hard-blocked")
 
+        start_state: State = (request.start, 0, None)
         if request.start == request.goal:
-            return self._zero_length_result(request, start_sample, started)
+            result = self._zero_length_result(request, start_sample, started)
+            if trace is not None:
+                trace.record_write(
+                    state=start_state,
+                    parent_state=None,
+                    label_cost_hours=0.0,
+                    arrival_time=request.departure_time,
+                    priority=0.0,
+                    path_elapsed_seconds=0.0,
+                    edge_maximum_risk=0.0,
+                    write_kind="INITIAL",
+                )
+                trace.trace = trace.finish(result, start_state, {})
+            return result
 
         cost_model = self._cost_model(request.objective)
-        start_state: State = (request.start, 0, None)
         labels: dict[State, tuple[float, datetime]] = {start_state: (0.0, request.departure_time)}
         predecessor: dict[State, tuple[State, _EdgeTraversal]] = {}
         serial = count()
         queue: list[tuple[float, float, int, State]] = []
         heuristic = self._heuristic(request.start, request.goal, cost_model, request)
         heappush(queue, (heuristic, 0.0, next(serial), start_state))
+        if trace is not None:
+            trace.record_write(
+                state=start_state,
+                parent_state=None,
+                label_cost_hours=0.0,
+                arrival_time=request.departure_time,
+                priority=heuristic,
+                path_elapsed_seconds=0.0,
+                edge_maximum_risk=0.0,
+                write_kind="INITIAL",
+            )
         counters = _Counters()
         counters.heap_pushes = 1
         next_progress = 0.0
@@ -301,7 +355,7 @@ class TimeDependentAStar:
                     started=started,
                 )
             if node == request.goal:
-                return self._build_result(
+                result = self._build_result(
                     request,
                     state,
                     start_sample,
@@ -310,6 +364,9 @@ class TimeDependentAStar:
                     counters,
                     started,
                 )
+                if trace is not None:
+                    trace.trace = trace.finish(result, state, predecessor)
+                return result
 
             previous_heading = None
             if incoming_code is not None:
@@ -364,6 +421,17 @@ class TimeDependentAStar:
                     request,
                 )
                 heappush(queue, (priority, tentative_cost, next(serial), next_state))
+                if trace is not None:
+                    trace.record_write(
+                        state=next_state,
+                        parent_state=state,
+                        label_cost_hours=tentative_cost,
+                        arrival_time=traversal.arrival_time,
+                        priority=priority,
+                        path_elapsed_seconds=elapsed.total_seconds(),
+                        edge_maximum_risk=traversal.maximum_risk,
+                        write_kind="REPLACEMENT" if previous is not None else "INSERT",
+                    )
                 counters.generated += 1
                 counters.heap_pushes += 1
                 counters.queue_peak = max(counters.queue_peak, len(queue))
