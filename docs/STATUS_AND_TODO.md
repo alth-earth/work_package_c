@@ -1,3 +1,16 @@
+---
+Overall Status: ACTIVE
+Content Status:
+  - COMPLETED
+  - IN_PROGRESS
+  - PLANNED
+Document Role: CANONICAL
+Scope: work package C current status, package-level TODO, and deferred items
+Canonical For: work package C package status and non-algorithm TODO
+Branch: research-validation-system
+Last Verified: 2026-08-25
+---
+
 > [!NOTE]
 > **文档治理声明**
 > - 文件角色：工作包 C 当前进度、挑战杯待办和延期项真源。
@@ -12,8 +25,9 @@
 | 字段 | 当前值 |
 |---|---|
 | 包版本 | 0.4.0 |
-| 当前基线提交 | `b5bcb7e456afafedaedc126ed17957eee2e40c94`（记录时 clean） |
-| 工程复验 | 2026-08-25：`UV_OFFLINE=1 make check` 为 `272 passed`，Ruff/lock/sync/CLI 通过 |
+| 当前算法实现提交 | `9ab88298059b2da5ce3f08c8aed995fcff8e4bd8`（正式 M2 执行时 clean） |
+| 工程复验 | 2026-08-25：`UV_OFFLINE=1 make check` 为 `274 passed`，Ruff/lock/sync/CLI 通过 |
+| 核心算法研究 | P2.1 clean M0/M1 `EXPERIMENTAL_PASS`；Winter M2 因单个 cold 单元中位回归 `5.94% > 5%` 判 `FAIL`，候选默认关闭 |
 | 工程主线 | v2/v3、重规划、围栏和原子发布已实现 |
 | 挑战杯状态 | **Demo RC1 已建立（2026-08-16）**：mur/dikson v3 四层 + 6h 重规划 PASS，D 消费 PASS，r7 复现 PASS |
 | 科学状态 | `demo_unvalidated`；保留接口，不阻塞演示 |
@@ -68,7 +82,7 @@
 ## 保留风险
 
 真实长窗、科学校准、D 长期合同、v3 性能、bathymetry/法规、等待和新算法继续记录，不在本轮
-自动展开。核心算法下一轮固定选择 P2.1 Winter M2；其门禁、延期项和证据边界只见
+自动展开。P2.1 Winter M2 已完成但未通过全部硬门禁；下一轮只允许先做轻量 cold-path 诊断，P3、2.2.2 和默认启用继续延期。门禁、延期项和证据边界只见
 [`CORE_ALGORITHM_IMPROVEMENT_PLAN.md`](CORE_ALGORITHM_IMPROVEMENT_PLAN.md)，本文不复制算法方案。
 
 ## 依赖闸门与执行顺序（源自：[STATUS_AND_TODO_归档_20260815.md](archive/STATUS_AND_TODO_归档_20260815.md)）
@@ -96,7 +110,7 @@ D 消费验收
   决定，不依赖不存在的领域签字流程；
 - 文档闭环：状态变化同步本文件和
   [`../work_package_c_handoff.md`](../work_package_c_handoff.md)，日期排期只更新
-  [`ABC_10_DAY_SPRINT.md`](../../ABC_10_DAY_SPRINT.md)。
+  [`CURRENT_ROADMAP.md`](../../arctic_route_governance/current/CURRENT_ROADMAP.md)。
 
-当前日历见 [ABC_10_DAY_SPRINT.md](../../ABC_10_DAY_SPRINT.md)，详细交接见
+当前路线图见 [CURRENT_ROADMAP.md](../../arctic_route_governance/current/CURRENT_ROADMAP.md)，详细交接见
 [work_package_c_handoff.md](../work_package_c_handoff.md)。

@@ -24,14 +24,21 @@ Last Verified: 2026-08-25
   transient-label 越界均 fail-closed，不产生 `OPTIMAL` 声明。
 - ingress 与 Winter runner 增加默认关闭、非发布的 `control_trace` 模式；只对 full→main 同 goal
   尝试真实 hit，其余 layer cold control，sidecar 区分 hit/miss/fallback/zero-search。
-- M0 最终构件 `c-p21-control-trace-reuse-20260825-r4` 为 40/40 通过；两个 synthetic 规模在 R=1/4
-  下 total median 改善约 `48%–79%`，trace overhead median `2.11%–4.29%`。
-- M1 最终构件 `c-p21-bc-coupling-m1-20260825-r3.json` 为 10/10 通过；16×7 与 31×11 本地 B-grid
-  profile 的 total median 改善为 `45.52%/49.32%`，P95 同样改善，median RSS ratio 为
-  `1.000/0.992`。构件来自 dirty research worktree，属于 `EXPERIMENTAL_PASS`。
+- clean M0 首批 r5 为 40/40 语义通过，但 5×7、R=4 trace overhead `5.98%` 超限；预声明增加
+  20 次确认后，pooled 30 样本四个单元 overhead 为 `1.95%–4.93%`、total median 改善
+  `46.67%–78.85%`。首批失败保留，不由确认批覆盖。
+- clean M1 r4 为 10/10 通过；16×7 与 31×11 本地 B-grid profile 的 paired improvement median
+  为 `48.86%/49.87%`，median RSS ratio 为 `1.000/0.989`。
+- Winter runner 增加正式 ingress、单轨 scratch/非发布证明、隔离 worker timeout/RSS/swap、12-route
+  跨算法业务 digest、trace overhead、零搜索 HIT 和真实证书门禁。screening r1 因正式 digest 保留算法
+  标签产生假阴性，修复提交 `03479058` 后 r2 为 2/2 `PASS`；旧 r1 原样保留。后续 `3097271`
+  将新 experiment identity 绑定 runner/C 实现 SHA 与两仓 commit，旧 artifacts 不重写。
+- Winter formal r1 的 4/4 case、48/48 路线语义、确定性、复用矩阵、RSS/swap 和 trace overhead 均
+  通过，总 wall-time median 改善 `47.86%`；但 `rolling_0_24h × fastest` median 回归
+  `5.94% > 5%`，故 M2 总 verdict 严格为 `FAIL`，候选继续默认关闭、非发布。
 - 明确保留并排除错误证据：M0 r1 为 trace 热路径 overhead FAIL；M1 r1 为 `CostBreakdown`
-  序列化 harness FAIL；M1 r2 含 control-only RSS polling 计时不对称。未运行完整 Winter M2、P3、
-  2.2.2，未修改 B/C、C/D 合同、默认 planner、正式 latest 或 frozen artifact。
+  序列化 harness FAIL；M1 r2 含 control-only RSS polling 计时不对称。未运行 P3、2.2.2 或默认启用，
+  未修改 B/C、C/D 合同、正式 latest 或 frozen artifact。
 
 ## Unreleased — P2 monotonic certificate reuse and P4a shadow（2026-08-25 00:42 +08:00）
 

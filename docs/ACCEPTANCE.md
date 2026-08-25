@@ -1,3 +1,15 @@
+---
+Overall Status: ACTIVE
+Content Status:
+  - COMPLETED
+  - IN_PROGRESS
+Document Role: CANONICAL
+Scope: work package C engineering and research acceptance gates
+Canonical For: work package C acceptance criteria and current gate evidence
+Branch: research-validation-system
+Last Verified: 2026-08-25
+---
+
 > [!NOTE]
 > **文档治理声明**
 > - 文件角色：工作包 C 当前挑战杯工程演示验收真源。
@@ -15,9 +27,9 @@ UV_OFFLINE=1 make check
 git diff --check
 ```
 
-Ruff、pytest、lock/sync 和 CLI 必须通过。当前 C 基线 HEAD
-`b5bcb7e456afafedaedc126ed17957eee2e40c94`，`UV_OFFLINE=1 make check` 为 `272 passed`，
-Ruff、lock/sync 和 CLI 均通过。核心算法研究状态与下一轮门禁只以
+Ruff、pytest、lock/sync 和 CLI 必须通过。当前 P2.1 算法实现提交
+`9ab88298059b2da5ce3f08c8aed995fcff8e4bd8`，`UV_OFFLINE=1 make check` 为 `274 passed`，
+Ruff、lock/sync 和 CLI 均通过。Winter formal shadow 的 M2 总 verdict 为 `FAIL`，候选保持默认关闭；核心算法研究状态与后续门禁只以
 [`CORE_ALGORITHM_IMPROVEMENT_PLAN.md`](CORE_ALGORITHM_IMPROVEMENT_PLAN.md) 为准；本验收文档不复制其研究方案。
 
 ## B. 身份与时间
