@@ -15,7 +15,10 @@ UV_OFFLINE=1 make check
 git diff --check
 ```
 
-Ruff、pytest、lock/sync 和 CLI 必须通过。当前快照为 138 passed。
+Ruff、pytest、lock/sync 和 CLI 必须通过。当前 C 基线 HEAD
+`b5bcb7e456afafedaedc126ed17957eee2e40c94`，`UV_OFFLINE=1 make check` 为 `272 passed`，
+Ruff、lock/sync 和 CLI 均通过。核心算法研究状态与下一轮门禁只以
+[`CORE_ALGORITHM_IMPROVEMENT_PLAN.md`](CORE_ALGORITHM_IMPROVEMENT_PLAN.md) 为准；本验收文档不复制其研究方案。
 
 ## B. 身份与时间
 

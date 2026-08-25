@@ -185,11 +185,28 @@ target.maximum_risk    >= R_trace
 | P0 正确性语义 | `TemporalLabel`/时间展开 reference oracle；FIFO 与非 FIFO fixture；ETA 残差、最大迭代、周期检测和最终重采样 | 反例全部命中预期；control 与 oracle 在小图上路线/代价一致；不收敛显式失败 | `UNIT_PASS` |
 | P1 会话骨架 | 在 C 内实现 per-objective 可恢复 session、OPEN/前驱/标签快照和 input/config/model digest fence | 不跨目标/代际复用；取消、generation、revision、fail-closed 回归通过 | `UNIT_PASS` |
 | P2 same-goal monotonic reuse | 实现同一目标、同一输入下 exact hit 与收紧时域/风险约束的证书迁移，保留 baseline 回退 | M0/M1 与 control 语义一致；证书可重算；命中零搜索扩展；失败自动回退 | `UNIT_PASS`（M0 性能 FAIL） |
-| P2.1 control trace reuse | 为正式 control 增加默认关闭的历史写入轨迹证书；只在同 goal 收紧约束保持整段执行轨迹时复用 | transient-label 反例 fail-closed；M0 总耗时至少改善 20%；M1 两规模 median 至少改善 15% | `EXPERIMENTAL_PASS`（M0/M1） |
+| P2.1 control trace reuse | 为正式 control 增加默认关闭的历史写入轨迹证书；只在同 goal 收紧约束保持整段执行轨迹时复用 | transient-label 反例 fail-closed；M0 总耗时至少改善 20%；M1 两规模 median 至少改善 15% | `EXPERIMENTAL_PASS`（M0/M1；Winter M2 PLANNED） |
 | P3 full/anchor reuse | 为 anchor 计算 `U_A/LB_A`，证书成立才复用 prefix；将四层集成到影子分支 | M1 至少 5 次 paired run；无单层硬回归；无证书误用 | `PLANNED` |
-| P4 formal shadow | Winter 正式 ingress、4×3、12 路线，control/candidate 双轨 | M2 通过确定性、合同、资源和性能阈值；不覆盖冻结 artifact | `IMPLEMENTED`（P4a；M2 FAIL） |
+| P4 formal shadow | Winter 正式 ingress、4×3、12 路线，control/candidate 双轨 | M2 通过确定性、合同、资源和性能阈值；不覆盖冻结 artifact | `IMPLEMENTED`（P4a 工具；旧 exact-temporal Winter M2 FAIL） |
 | P5 默认启用评审 | 仅在重复正式证据支持时改变默认开关，并更新本文档/CHANGELOG | 通过审批、回滚演练和新 experiment identity；否则保持 baseline | `PLANNED` |
 | P6 多目标/自适应后续 | NAMOA*/MOPBD*/自适应网格等独立提案 | 必须先证明 P0/P3 的收益不足且合同必要性成立 | `DEFERRED` |
+
+### 下一轮选择与冻结门禁：P2.1 Winter M2（2026-08-25 13:52 +08:00）
+
+**下一轮固定选择：** 先验证显式、默认关闭、非发布的 `control_trace` 在 Winter 正式四层工作负载上的适用性。M2 只比较同一正式输入下的 control 与 control-trace shadow；仅允许 full→main 的同一 `goal/objective` 尝试复用，rolling、executable 和不同 goal 必须走 cold control。此处是 C 核心算法计划的唯一后续入口，不创建新的同主题文档；以后方案、门禁和结论继续在本文对应章节修改。
+
+**G0–G3 在本轮开始前冻结如下：**
+
+| 门禁 | 冻结条件 | 失败/停止动作 |
+|---|---|---|
+| G0 clean/provenance | C 实施前基线 HEAD 为 `b5bcb7e456afafedaedc126ed17957eee2e40c94`（记录时 clean；后续 M2 实施 commit 可本地领先 origin，但必须固定确切 SHA 且保持 clean）；`UV_OFFLINE=1 make check` 为 `272 passed`，Ruff、lock/sync、CLI 通过；`uv.lock` SHA256 为 `8893cb8387825ca4890ed808f4a98b02ba938337752971dacc3e77f859164f22`。M0/M1 旧构件虽代码哈希可对上，manifest 仍是旧 `5660365…`、dirty，且 M1 `formal_ingress_used=false`，必须在当前 clean 基线下刷新或重新绑定后才能作为前置证据。Winter runner 基线 HEAD 为 `c6a81d3d04e4315a227434605ee75786f263f59c`，其工作树仍有未提交改动，M2 前必须提交或冻结确切 runner SHA。 | 任一工作树 dirty、SHA/lock 未冻结、完整检查失败或旧构件未完成 clean provenance 刷新：不进入正式 M2；不以 push 作为门禁。 |
+| G1 formal identity/contract | 正式 Winter 输入固定为 145 帧、31×11 网格、4 层×3 目标、12 路线；control/candidate 使用同一 committed-window lease、query/content/commit、generation/revision、配置、船模和边评估器，并在执行前后复核。control/candidate 使用独立 scratch coordinator/store；`production_published=false`，不写 formal latest、replanning baseline 或 frozen artifact。 | 任一输入身份漂移、lease 失效、合同/字段/semantic digest 变化、正式存储被写入或出现 partial publication：立即停止并 fail-closed。 |
+| G2 semantic/determinism | 先做 2 次有界筛选，再做至少 3 次串行正式重复；每次 control/candidate 均须 12/12 route integrity，路线业务字段和 route semantic digest 一致，sidecar 记录真实 hit/miss/cold/fallback，重复运行的离散路线 digest 稳定。`compute_ms`、扩展计数等运行字段可不同，但不得塞入业务语义等价判断。 | 任一层/目标缺失、路线 digest 不一致、非确定性、取消、异常或 candidate 失败未明确回退：停止 M2，不重命名或发布候选。 |
+| G3 performance/resource | 相对同次 control：总 wall-time median 至少改善 15%；总 P95 不恶化超过 5%；任一 layer/objective 不回归超过 5%；peak RSS ratio 不超过 1.10；可测的 trace-source overhead median 不超过 5%；运行期间 swap used 不增长（基线可非零）；无 OOM、timeout、资源上限失败。 | 任一阈值失败：M2 `FAIL`，保留 control 和诊断 sidecar，关闭 candidate；不得通过提高 queue/label/expansion 上限或减少 workload 重新制造通过。 |
+
+**停止条件与证据边界：** G0–G3 任一硬条件失败都终止本轮，不执行未经批准的重型重复。若两次筛选没有自然的同 goal full→main eligible hit，则只记录“Winter 适用性/性能优势未证明”，不启动三次正式性能重复。`/root/my_project/.runtime/experiments/winter-c-p2-monotonic-shadow-20260825-r2/` 是旧 `exact-temporal`/`temporal-label` candidate 的 P4a 构件，已因 `queue=50000` 失败且没有 candidate plan set 或 12-route integrity；它不属于 P2.1 `control_trace` 证据，绝不可混入本轮 M2 结论。
+
+**明确延期：** P3 不同 anchor/prefix 复用保持 `PLANNED`；上一版 2.2.2 自适应/非均匀网格保持暂缓，不改 B/C 或 C/D 合同、不引入新网格依赖；P5 默认启用评审保持延期，除非正式重复证据、审批和回滚演练全部通过。M2 期间现有 `plan()`、正式 execute 路径、默认开关和冻结构件均不改变。
 
 **实施顺序硬规则：** 先 P0，再 P1/P2；P3 证书失败必须回退；P4 以前不得将候选算法命名为正式生产 planner；P6 不得倒灌到当前合同。
 
@@ -286,7 +303,8 @@ M0 r1 暴露 JSON/SHA 热路径 overhead 15%–20%，随后改为固定网络字
 3. 上一版 2.2.2 自适应/非均匀网格方向保留但暂缓，只有固定网格瓶颈和合同必要性均有证据时才启动。
 4. 所有性能结论必须来自同输入、同边评估器、重复运行的 paired benchmark；单次 Winter wall time 只能称为工程观察。
 5. 重大算法选择、跨包合同变化和默认开关变化，需要在本文档记录决定、证据、owner、commit 和回滚方式；跨包事项同时走正式提案。
+6. 下一轮固定执行 P2.1 Winter M2；P3、2.2.2 和 P5 均延期，直到本轮门禁产生足够证据并分别完成必要的研究或审批流程。
 
-**开放问题：** 非 FIFO 情形是否进一步采用 label-correcting；ETA 迭代的保守误差模型；P3 anchor 证书的浮点容差；P2.1 在正式 Winter 4×3 workload 上的自然 hit rate、分层单项回归和跨运行稳定性。P1/P2 的会话与证书围栏已达到 `UNIT_PASS`，但 synthetic M0 和 Winter M2 已共同证明 exact-arrival candidate cold search 不适合作为当前性能 source；P2.1 因此改用 control trace，只证明执行等价。P2.1 已通过 M0/M1，下一轮只能在新的计划和资源预算下决定 M2 或 P3，不把 queue 上限从 50,000 直接调大来制造通过结果。独立 FIFO 分类器和 exact 标签安全支配仍是后续候选。任何资源或标签语义变更必须先记录新的实验身份与正确性回归，不能用“全局最优”“稳定加速”或“生产级优势”代替证据。
+**开放问题：** 非 FIFO 情形是否进一步采用 label-correcting；ETA 迭代的保守误差模型；P3 anchor 证书的浮点容差；P2.1 在正式 Winter 4×3 workload 上的自然 hit rate、分层单项回归和跨运行稳定性。P1/P2 的会话与证书围栏已达到 `UNIT_PASS`，但 synthetic M0 和旧 exact-arrival Winter M2 已共同证明 exact-arrival candidate cold search 不适合作为当前性能 source；P2.1 因此改用 control trace，只证明执行等价。下一轮已固定为新的 P2.1 Winter M2 计划，不把 queue 上限从 50,000 直接调大来制造通过结果。独立 FIFO 分类器和 exact 标签安全支配仍是后续候选。任何资源或标签语义变更必须先记录新的实验身份与正确性回归，不能用“全局最优”“稳定加速”或“生产级优势”代替证据。
 
-**本次更新记录：** 将旧的“实现审计报告”重整为现状 + 证据 + 正确性边界 + LTCR-TDA* 方案 + 分阶段计划 + benchmark/回滚门禁；现已完成 P0 exact-time candidate、独立 oracle、ETA 收敛器、P1 per-objective 可恢复 session 和 P2 same-goal monotonic certificate reuse 的 `UNIT_PASS`，并实现默认关闭、非发布的 P4a Winter shadow。P2 没有通过 M0 性能门禁，P4a 没有通过 M2 资源/完整路线门禁。P2.1 control trace equivalence 现已完成实现并通过 synthetic M0 与两规模本地 B-grid M1，形成“同 goal 收紧重复查询”上的可重复明显耗时优势，但只证明 control 执行轨迹等价，不证明全局最优或生产级稳定优势。下一轮需在 M2 正式 Winter 与 P3 不同 anchor 中重新择一制定计划；2.2.2 继续暂缓。后续修改直接在本文档对应章节更新，不再创建同主题文档。
+**本次更新记录：** 将旧的“实现审计报告”重整为现状 + 证据 + 正确性边界 + LTCR-TDA* 方案 + 分阶段计划 + benchmark/回滚门禁；现已完成 P0 exact-time candidate、独立 oracle、ETA 收敛器、P1 per-objective 可恢复 session 和 P2 same-goal monotonic certificate reuse 的 `UNIT_PASS`，并实现默认关闭、非发布的 P4a Winter shadow。P2 没有通过 M0 性能门禁，旧 exact-temporal P4a 没有通过 M2 资源/完整路线门禁。P2.1 control trace equivalence 现已完成实现并通过 synthetic M0 与两规模本地 B-grid M1，形成“同 goal 收紧重复查询”上的可重复明显耗时优势，但只证明 control 执行轨迹等价，不证明全局最优或生产级稳定优势。下一轮已固定为 P2.1 Winter M2；P3、2.2.2 和 P5 延期。后续修改直接在本文档对应章节更新，不再创建同主题文档。

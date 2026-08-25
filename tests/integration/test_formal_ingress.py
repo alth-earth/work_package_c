@@ -417,6 +417,70 @@ def test_control_trace_candidate_failure_is_captured_without_formal_publication(
     assert recording.queries == [query, query]
 
 
+def test_single_shadow_track_reports_twelve_rows_and_preserves_formal_state() -> None:
+    prepared, recording, query, request = _prepared_temporal_shadow_case()
+    formal_layered_before = prepared.session.layered_store.snapshot(
+        run_id=request.run_context.run_id,
+        scenario_id=request.scenario.scenario_id,
+        generation_id=request.generation_id,
+    )
+    formal_generation_before = prepared.session.generation_id
+
+    control = prepared.execute_four_layer_temporal_shadow_track(track="control")
+    candidate = prepared.execute_four_layer_temporal_shadow_track(
+        track="candidate",
+        candidate_mode="control_trace",
+    )
+
+    for result in (control, candidate):
+        assert result.status == "SUCCEEDED"
+        assert result.outcome is not None
+        assert result.outcome.published is False
+        assert result.production_published is False
+        assert result.scratch_published is True
+        assert result.route_integrity is True
+        assert result.plan_set_digest
+        assert len(result.timings) == 12
+        assert all(item.wall_ms >= 0 for item in result.timings)
+        assert all(item.expanded >= 0 and item.edge >= 0 for item in result.timings)
+        assert result.scratch_proof.production_published is False
+        assert result.scratch_proof.production_store_unchanged is True
+        assert result.scratch_proof.production_session_unchanged is True
+        assert result.scratch_proof.scratch_store_isolated is True
+
+    assert [item.reuse_status for item in candidate.timings[:3]] == [
+        "TRACE_CAPTURED"
+    ] * 3
+    assert [item.reuse_status for item in candidate.timings[3:6]] == [
+        "HIT_EXACT"
+    ] * 3
+    assert all(item.search_used is False for item in candidate.timings[3:6])
+    assert all(item.expanded == 0 and item.edge == 0 for item in candidate.timings[3:6])
+    assert all(
+        item.reuse_status == "COLD_CONTROL" and item.search_used
+        for item in candidate.timings[6:]
+    )
+    assert prepared.session.generation_id == formal_generation_before
+    assert prepared.session.layered_store.snapshot(
+        run_id=request.run_context.run_id,
+        scenario_id=request.scenario.scenario_id,
+        generation_id=request.generation_id,
+    ) == formal_layered_before
+    assert recording.queries == [query, query, query]
+
+
+def test_single_shadow_track_plan_set_digest_is_repeatable() -> None:
+    prepared, _, _, _ = _prepared_temporal_shadow_case()
+    first = prepared.execute_four_layer_temporal_shadow_track(track="control")
+    second = prepared.execute_four_layer_temporal_shadow_track(track="control")
+    assert first.status == second.status == "SUCCEEDED"
+    assert first.route_integrity is second.route_integrity is True
+    assert first.plan_set_digest == second.plan_set_digest
+    assert [item.route_digest for item in first.timings] == [
+        item.route_digest for item in second.timings
+    ]
+
+
 def test_formal_four_layer_replan_uses_six_hour_suffix_and_new_revision() -> None:
     configuration = load_configuration(
         CONFIG_ROOT, "tromso_isfjorden_july_2026_retrospective_v1"

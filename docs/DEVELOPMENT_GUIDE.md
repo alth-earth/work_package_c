@@ -16,7 +16,8 @@
 2. [`../work_package_c_handoff.md`](../work_package_c_handoff.md)：状态、缺口和依赖；
 3. [`DECISIONS.md`](DECISIONS.md)：不可破坏的不变量；
 4. [`BC_CONTRACT.md`](BC_CONTRACT.md) 与 [`CD_CONTRACT.md`](CD_CONTRACT.md)：接口；
-5. [`ACCEPTANCE.md`](ACCEPTANCE.md)：完成证据。
+5. [`ACCEPTANCE.md`](ACCEPTANCE.md)：完成证据；
+6. [`CORE_ALGORITHM_IMPROVEMENT_PLAN.md`](CORE_ALGORITHM_IMPROVEMENT_PLAN.md)：核心算法现状、下一轮计划和门禁（唯一 SSOT）。
 
 跨包修改前再读 `../arctic_route_contracts/` 和 orchestrator 的当前 handoff。不要从归档综合
 指南复制旧 v1 字段、旧 B 状态或旧测试数。
@@ -33,8 +34,9 @@ make sync
 UV_OFFLINE=1 make check
 ```
 
-`make check` 依次验证 Ruff、pytest、`uv lock --check`、`uv sync --check` 和 CLI help。当前
-基线为 `138 passed`。已退役旧 B `交付包.zip` 的硬编码外部回归，不再要求本机存在该文件。
+`make check` 依次验证 Ruff、pytest、`uv lock --check`、`uv sync --check` 和 CLI help。当前 C
+基线 HEAD `b5bcb7e456afafedaedc126ed17957eee2e40c94`（记录时 clean），
+`UV_OFFLINE=1 make check` 为 `272 passed`。已退役旧 B `交付包.zip` 的硬编码外部回归，不再要求本机存在该文件。
 
 只改文档时至少运行：
 

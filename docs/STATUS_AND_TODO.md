@@ -12,8 +12,8 @@
 | 字段 | 当前值 |
 |---|---|
 | 包版本 | 0.4.0 |
-| 审计基线提交（源自：[STATUS_AND_TODO_归档_20260815.md](archive/STATUS_AND_TODO_归档_20260815.md)） | `703b1da071754585e3c1bfceeeadf6647c795072` |
-| 工程复验 | 2026-08-14：`138 passed`，Ruff/lock/sync/CLI 通过 |
+| 当前基线提交 | `b5bcb7e456afafedaedc126ed17957eee2e40c94`（记录时 clean） |
+| 工程复验 | 2026-08-25：`UV_OFFLINE=1 make check` 为 `272 passed`，Ruff/lock/sync/CLI 通过 |
 | 工程主线 | v2/v3、重规划、围栏和原子发布已实现 |
 | 挑战杯状态 | **Demo RC1 已建立（2026-08-16）**：mur/dikson v3 四层 + 6h 重规划 PASS，D 消费 PASS，r7 复现 PASS |
 | 科学状态 | `demo_unvalidated`；保留接口，不阻塞演示 |
@@ -68,7 +68,8 @@
 ## 保留风险
 
 真实长窗、科学校准、D 长期合同、v3 性能、bathymetry/法规、等待和新算法继续记录，不在本轮
-自动展开。
+自动展开。核心算法下一轮固定选择 P2.1 Winter M2；其门禁、延期项和证据边界只见
+[`CORE_ALGORITHM_IMPROVEMENT_PLAN.md`](CORE_ALGORITHM_IMPROVEMENT_PLAN.md)，本文不复制算法方案。
 
 ## 依赖闸门与执行顺序（源自：[STATUS_AND_TODO_归档_20260815.md](archive/STATUS_AND_TODO_归档_20260815.md)）
 

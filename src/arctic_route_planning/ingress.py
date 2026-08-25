@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
@@ -21,7 +22,9 @@ from arctic_route_planning.contracts import (
     risk_frame_to_document,
     validate_canonical_risk_id,
 )
+from arctic_route_planning.contracts.layered import PlanLayer
 from arctic_route_planning.cost import VesselPerformanceModel
+from arctic_route_planning.domain import ObjectiveMode
 from arctic_route_planning.errors import (
     ContextMismatchError,
     ContractError,
@@ -35,7 +38,11 @@ from arctic_route_planning.layered import (
     FourLayerReplanningOutcome,
 )
 from arctic_route_planning.planners import TimeDependentAStar
-from arctic_route_planning.publishing import LayeredRoutePlanLatestStore, LayeredStoreSnapshot
+from arctic_route_planning.publishing import (
+    LayeredRoutePlanLatestStore,
+    LayeredStoreSnapshot,
+    four_layer_route_plan_set_semantic_digest,
+)
 from arctic_route_planning.replanning import (
     PlanningCoordinator,
     ReplanningPolicy,
@@ -210,6 +217,175 @@ class TemporalShadowCertificateObservation:
     epsilon: float | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class TemporalShadowTimingObservation:
+    """One non-publishing timing/diagnostic row from a shadow track."""
+
+    layer_index: int
+    layer: str
+    objective: str
+    wall_ms: float
+    expanded: int
+    edge: int
+    search_used: bool
+    trace_status: str | None = None
+    reuse_status: str | None = None
+    route_digest: str | None = None
+
+    @property
+    def expanded_states(self) -> int:
+        return self.expanded
+
+    @property
+    def edge_evaluations(self) -> int:
+        return self.edge
+
+
+@dataclass(frozen=True, slots=True)
+class TemporalShadowScratchProof:
+    """Explicit proof flags for the scratch-only publication boundary."""
+
+    production_published: bool = False
+    scratch_published: bool = False
+    production_store_unchanged: bool = True
+    production_session_unchanged: bool = True
+    scratch_store_isolated: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class TemporalShadowTrackResult:
+    """One isolated control or candidate four-layer shadow track."""
+
+    track: str
+    candidate_mode: str
+    outcome: FourLayerPlanningOutcome | None = None
+    timings: tuple[TemporalShadowTimingObservation, ...] = ()
+    scratch_published: bool = False
+    production_published: bool = False
+    reuse_outcomes: tuple[TemporalShadowReuseObservation, ...] = ()
+    trace_observations: tuple[TemporalShadowTraceObservation, ...] = ()
+    scratch_proof: TemporalShadowScratchProof = field(
+        default_factory=TemporalShadowScratchProof
+    )
+    route_integrity: bool = False
+    plan_set_digest: str | None = None
+    error_type: str | None = None
+    error_message: str | None = None
+
+    @property
+    def status(self) -> str:
+        return "SUCCEEDED" if self.outcome is not None else "FAILED"
+
+    @property
+    def published(self) -> bool:
+        return self.production_published
+
+
+@dataclass(slots=True)
+class _ShadowMeasurement:
+    edge_evaluations: int = 0
+
+
+class _ShadowEdgeCounter:
+    """Temporarily count private edge calls without changing planner APIs."""
+
+    def __init__(self, planner: Any, measurement: _ShadowMeasurement) -> None:
+        self.planner = planner
+        self.measurement = measurement
+        self._original: Any = None
+
+    def __enter__(self) -> _ShadowEdgeCounter:
+        original = getattr(self.planner, "_evaluate_edge", None)
+        if not callable(original):
+            return self
+        self._original = original
+
+        def counted(*args: Any, **kwargs: Any) -> Any:
+            self.measurement.edge_evaluations += 1
+            return original(*args, **kwargs)
+
+        self.planner._evaluate_edge = counted
+        return self
+
+    def __exit__(self, *_: Any) -> None:
+        if self._original is not None:
+            self.planner._evaluate_edge = self._original
+
+
+def _shadow_underlying_planners(planner: Any) -> tuple[Any, ...]:
+    """Find private scratch planners while avoiding duplicate wrapping."""
+
+    values = [planner]
+    for name in ("_planner", "_control_planner"):
+        child = getattr(planner, name, None)
+        if child is not None:
+            values.append(child)
+    unique: list[Any] = []
+    for value in values:
+        if value is not None and all(value is not item for item in unique):
+            unique.append(value)
+    return tuple(unique)
+
+
+def _shadow_layer_name(index: int) -> str:
+    layers = tuple(PlanLayer)
+    return layers[index].value if 0 <= index < len(layers) else f"layer_{index}"
+
+
+def _shadow_result_metrics(result: Any) -> tuple[int, int]:
+    diagnostics = getattr(result, "diagnostics", None)
+    planning_result = getattr(result, "planning_result", result)
+    metrics = getattr(planning_result, "metrics", None)
+    expanded = getattr(diagnostics, "expanded_labels", None)
+    if expanded is None:
+        expanded = getattr(metrics, "expanded_states", 0)
+    edge = getattr(diagnostics, "edge_evaluations", None)
+    if edge is None:
+        edge = 0
+    return int(expanded or 0), int(edge or 0)
+
+
+def _shadow_route_digest(result: Any) -> str | None:
+    try:
+        from arctic_route_planning.planners.temporal_reuse import route_semantic_digest
+
+        return route_semantic_digest(result)
+    except (ImportError, AttributeError, TypeError, ValueError):
+        return None
+
+
+def _shadow_timing(
+    *,
+    layer_index: int,
+    objective: Any,
+    result: Any,
+    started: float,
+    edge_before: int,
+    measurement: _ShadowMeasurement,
+    search_used: bool,
+    trace_status: str | None = None,
+    reuse_status: str | None = None,
+    zero_search: bool = False,
+) -> TemporalShadowTimingObservation:
+    expanded, diagnostic_edges = _shadow_result_metrics(result)
+    edge = max(diagnostic_edges, measurement.edge_evaluations - edge_before)
+    if zero_search:
+        expanded = 0
+        edge = 0
+    return TemporalShadowTimingObservation(
+        layer_index=layer_index,
+        layer=_shadow_layer_name(layer_index),
+        objective=str(getattr(objective, "value", objective)),
+        wall_ms=max(0.0, (time.perf_counter() - started) * 1000.0),
+        expanded=expanded,
+        edge=edge,
+        search_used=search_used,
+        trace_status=trace_status,
+        reuse_status=reuse_status,
+        route_digest=_shadow_route_digest(result),
+    )
+
+
 class _TemporalShadowCandidatePlanner:
     """Adapt the exact temporal or control-trace shadow to layered planning."""
 
@@ -221,6 +397,7 @@ class _TemporalShadowCandidatePlanner:
         window: CommittedRiskWindow,
         candidate_mode: str = _TEMPORAL_SHADOW_EXACT_MODE,
         control_planner: Any | None = None,
+        measurement: _ShadowMeasurement | None = None,
     ) -> None:
         self._planner = planner
         self._request = request
@@ -238,6 +415,8 @@ class _TemporalShadowCandidatePlanner:
         self._reuse_records: list[TemporalShadowReuseObservation] = []
         self._trace_records: list[TemporalShadowTraceObservation] = []
         self._trace_identity = _shadow_trace_identity(request, window)
+        self._measurement = measurement or _ShadowMeasurement()
+        self._timing_records: list[TemporalShadowTimingObservation] = []
 
     @property
     def risk_identity(self) -> Any:
@@ -256,6 +435,8 @@ class _TemporalShadowCandidatePlanner:
         layer_index = self._layer_index
         self._layer_index += 1
         for objective in objectives:
+            started = time.perf_counter()
+            edge_before = self._measurement.edge_evaluations
             objective_request = replace(request, objective=objective)
             source_session = self._full_sessions.get(objective)
             source_goal = self._request.goal
@@ -271,6 +452,19 @@ class _TemporalShadowCandidatePlanner:
                 self._full_traces[objective] = trace
                 self._trace_records.append(
                     _trace_observation(objective, trace, status="TRACE_CAPTURED")
+                )
+                self._timing_records.append(
+                    _shadow_timing(
+                        layer_index=layer_index,
+                        objective=objective,
+                        result=result,
+                        started=started,
+                        edge_before=edge_before,
+                        measurement=self._measurement,
+                        search_used=True,
+                        trace_status="TRACE_CAPTURED",
+                        reuse_status="TRACE_CAPTURED",
+                    )
                 )
                 results[objective] = result
                 continue
@@ -320,6 +514,27 @@ class _TemporalShadowCandidatePlanner:
                         )
                     )
                     if result is not None:
+                        self._timing_records.append(
+                            _shadow_timing(
+                                layer_index=layer_index,
+                                objective=objective,
+                                result=result,
+                                started=started,
+                                edge_before=edge_before,
+                                measurement=self._measurement,
+                                search_used=False,
+                                trace_status=(
+                                    "CERTIFIED_TRACE"
+                                    if trace_transition
+                                    else None
+                                ),
+                                reuse_status=_status_text(
+                                    getattr(observation, "status", None)
+                                )
+                                or "HIT",
+                                zero_search=True,
+                            )
+                        )
                         results[objective] = result
                         continue
                     if trace_transition:
@@ -421,6 +636,34 @@ class _TemporalShadowCandidatePlanner:
                     identity_factory=TemporalSessionIdentity,
                 )
             results[objective] = result
+            fallback_status = None
+            if self._reuse_records:
+                latest = self._reuse_records[-1]
+                if latest.objective == str(getattr(objective, "value", objective)):
+                    fallback_status = latest.status
+            self._timing_records.append(
+                _shadow_timing(
+                    layer_index=layer_index,
+                    objective=objective,
+                    result=result,
+                    started=started,
+                    edge_before=edge_before,
+                    measurement=self._measurement,
+                    search_used=True,
+                    trace_status=(
+                        "CERTIFIED_TRACE"
+                        if self._candidate_mode == _TEMPORAL_SHADOW_CONTROL_TRACE_MODE
+                        and self._full_traces.get(objective) is not None
+                        else None
+                    ),
+                    reuse_status=fallback_status
+                    or (
+                        "COLD_CONTROL"
+                        if self._candidate_mode == _TEMPORAL_SHADOW_CONTROL_TRACE_MODE
+                        else "COLD_CANDIDATE"
+                    ),
+                )
+            )
         return results
 
     def _cold_search(self, request: Any, *, identity_factory: Any) -> Any:
@@ -466,6 +709,60 @@ class _TemporalShadowCandidatePlanner:
     @property
     def candidate_mode(self) -> str:
         return self._candidate_mode
+
+    @property
+    def timing_observations(self) -> tuple[TemporalShadowTimingObservation, ...]:
+        return tuple(self._timing_records)
+
+
+class _MeasuredShadowControlPlanner:
+    """Small protocol adapter for the single-track control run."""
+
+    def __init__(self, planner: Any, measurement: _ShadowMeasurement) -> None:
+        self._planner = planner
+        self._measurement = measurement
+        self._layer_index = 0
+        self._timing_records: list[TemporalShadowTimingObservation] = []
+
+    @property
+    def risk_identity(self) -> Any:
+        return self._planner.risk_identity
+
+    @property
+    def risk_as_of_times(self) -> Any:
+        return getattr(self._planner, "risk_as_of_times", ())
+
+    @property
+    def planner_config(self) -> Any:
+        return self._planner.planner_config
+
+    def plan_candidates(self, request: Any, objectives: tuple[Any, ...]) -> Mapping[Any, Any]:
+        layer_index = self._layer_index
+        self._layer_index += 1
+        results: dict[Any, Any] = {}
+        for objective in objectives:
+            started = time.perf_counter()
+            edge_before = self._measurement.edge_evaluations
+            objective_request = replace(request, objective=objective)
+            result = self._planner.plan(objective_request)
+            self._timing_records.append(
+                _shadow_timing(
+                    layer_index=layer_index,
+                    objective=objective,
+                    result=result,
+                    started=started,
+                    edge_before=edge_before,
+                    measurement=self._measurement,
+                    search_used=True,
+                    reuse_status="CONTROL_SEARCH",
+                )
+            )
+            results[objective] = result
+        return results
+
+    @property
+    def timing_observations(self) -> tuple[TemporalShadowTimingObservation, ...]:
+        return tuple(self._timing_records)
 
 
 @dataclass(frozen=True, slots=True)
@@ -588,6 +885,133 @@ class PreparedRiskPlanning:
         """Explicit alias for the non-publishing control-trace experiment."""
 
         return self.execute_four_layer_temporal_shadow(candidate_mode="control_trace")
+
+    def execute_four_layer_temporal_shadow_track(
+        self,
+        *,
+        track: str,
+        candidate_mode: str = _TEMPORAL_SHADOW_CONTROL_TRACE_MODE,
+    ) -> TemporalShadowTrackResult:
+        """Run exactly one isolated four-layer shadow track.
+
+        The method is intentionally shadow-only.  It reconstructs private
+        planners from the committed lease and gives the scratch service its
+        own coordinator/latest store.  ``track`` is ``control`` or
+        ``candidate``; the latter may use either the exact temporal candidate
+        or the explicit ``control_trace`` experiment.
+        """
+
+        normalized_track = str(track).strip().lower().replace("_", "-")
+        if normalized_track not in {"control", "candidate"}:
+            raise ValueError("track must be 'control' or 'candidate'")
+        candidate_mode = _normalize_temporal_shadow_mode(candidate_mode)
+        planner_config_digest = _verified_planning_configuration_digest(self.configuration)
+        if self.request.planner_config_digest != planner_config_digest:
+            raise ContextMismatchError("请求 planner_config_digest 与执行时冻结配置不一致")
+
+        before_fence = _shadow_production_fence(self)
+        measurement = _ShadowMeasurement()
+        adapter: Any
+        try:
+            with self.source.lease_committed_window(self.query) as current:
+                if normalized_track == "control":
+                    adapter = _MeasuredShadowControlPlanner(
+                        self._private_planner(current), measurement
+                    )
+                    strategy = _run_shadow_strategy(
+                        adapter,
+                        request=self.request,
+                        configuration=self.configuration,
+                        planner_version="time-dependent-a-star.shadow-control.v1",
+                        measurement=measurement,
+                    )
+                else:
+                    if candidate_mode == _TEMPORAL_SHADOW_CONTROL_TRACE_MODE:
+                        candidate_planner = self._private_planner(current)
+                        fallback_planner = self._private_planner(current)
+                    else:
+                        candidate_planner = self._private_temporal_candidate(current)
+                        fallback_planner = None
+                    adapter = _TemporalShadowCandidatePlanner(
+                        candidate_planner,
+                        request=self.request,
+                        window=current,
+                        candidate_mode=candidate_mode,
+                        control_planner=fallback_planner,
+                        measurement=measurement,
+                    )
+                    strategy = _run_shadow_strategy(
+                        adapter,
+                        request=self.request,
+                        configuration=self.configuration,
+                        planner_version=(
+                            "time-dependent-a-star.shadow-control-trace.v1"
+                            if candidate_mode == _TEMPORAL_SHADOW_CONTROL_TRACE_MODE
+                            else "temporal-label-a-star.shadow-candidate.v1"
+                        ),
+                        measurement=measurement,
+                    )
+                self._assert_leased_window_identity(current)
+        except PlanningCancelled:
+            raise
+        except Exception as exc:
+            after_fence = _shadow_production_fence(self)
+            proof = TemporalShadowScratchProof(
+                production_store_unchanged=_shadow_fence_equal(
+                    before_fence, after_fence, index=1
+                ),
+                production_session_unchanged=_shadow_fence_equal(
+                    before_fence, after_fence, index=0
+                )
+                and _shadow_fence_equal(
+                    before_fence, after_fence, index=2
+                ),
+            )
+            return TemporalShadowTrackResult(
+                track=normalized_track,
+                candidate_mode=candidate_mode,
+                scratch_proof=proof,
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+            )
+
+        after_fence = _shadow_production_fence(self)
+        production_store_unchanged = _shadow_fence_equal(
+            before_fence, after_fence, index=1
+        )
+        production_session_unchanged = _shadow_fence_equal(
+            before_fence, after_fence, index=0
+        ) and _shadow_fence_equal(before_fence, after_fence, index=2)
+        outcome = strategy.outcome
+        route_integrity = _shadow_route_integrity(outcome)
+        plan_set_digest = (
+            four_layer_route_plan_set_semantic_digest(outcome.plan_set)
+            if outcome is not None and route_integrity
+            else None
+        )
+        timings = tuple(getattr(adapter, "timing_observations", ()))
+        scratch_proof = TemporalShadowScratchProof(
+            production_published=False,
+            scratch_published=strategy.scratch_published,
+            production_store_unchanged=production_store_unchanged,
+            production_session_unchanged=production_session_unchanged,
+            scratch_store_isolated=True,
+        )
+        return TemporalShadowTrackResult(
+            track=normalized_track,
+            candidate_mode=candidate_mode,
+            outcome=outcome,
+            timings=timings,
+            scratch_published=strategy.scratch_published,
+            production_published=False,
+            reuse_outcomes=strategy.reuse_outcomes,
+            trace_observations=strategy.trace_observations,
+            scratch_proof=scratch_proof,
+            route_integrity=route_integrity,
+            plan_set_digest=plan_set_digest,
+            error_type=strategy.error_type,
+            error_message=strategy.error_message,
+        )
 
     def replan_four_layer_if_needed(
         self,
@@ -906,6 +1330,20 @@ class RiskSourcePlanningIngress:
     ) -> FourLayerPlanningOutcome:
         return self.prepare(request).execute_four_layer()
 
+    def execute_four_layer_temporal_shadow_track(
+        self,
+        request: ServicePlanningRequest,
+        *,
+        track: str,
+        candidate_mode: str = _TEMPORAL_SHADOW_CONTROL_TRACE_MODE,
+    ) -> TemporalShadowTrackResult:
+        """Prepare through the formal fence, then run one scratch track."""
+
+        return self.prepare(request).execute_four_layer_temporal_shadow_track(
+            track=track,
+            candidate_mode=candidate_mode,
+        )
+
     def replan_four_layer_if_needed(
         self,
         request: ServicePlanningRequest,
@@ -930,12 +1368,54 @@ def _verified_planning_configuration_digest(
     return planner_config_digest
 
 
+def _shadow_production_fence(prepared: PreparedRiskPlanning) -> tuple[Any, ...]:
+    request = prepared.request
+    key = {
+        "run_id": request.run_context.run_id,
+        "scenario_id": request.scenario.scenario_id,
+        "generation_id": request.generation_id,
+    }
+    return (
+        prepared.session.generation_id,
+        prepared.session.layered_store.snapshot(**key),
+        prepared.session.coordinator.store.snapshot(**key),
+    )
+
+
+def _shadow_fence_equal(
+    before: tuple[Any, ...], after: tuple[Any, ...], *, index: int
+) -> bool:
+    return len(before) > index and len(after) > index and before[index] == after[index]
+
+
+def _shadow_route_integrity(outcome: FourLayerPlanningOutcome | None) -> bool:
+    if outcome is None:
+        return False
+    try:
+        plan_set = outcome.plan_set
+        if len(plan_set.layers) != 4:
+            return False
+        if tuple(bundle.planning_layer for bundle in plan_set.layers) != tuple(PlanLayer):
+            return False
+        if any(set(bundle.plans) != set(ObjectiveMode) for bundle in plan_set.layers):
+            return False
+        return all(
+            plan.layer_goal_reached
+            and bool(plan.waypoints)
+            for bundle in plan_set.layers
+            for plan in bundle.plans.values()
+        )
+    except (AttributeError, TypeError, ValueError):
+        return False
+
+
 def _run_shadow_strategy(
     planner: Any,
     *,
     request: ServicePlanningRequest,
     configuration: PlanningConfiguration,
     planner_version: str,
+    measurement: _ShadowMeasurement | None = None,
 ) -> TemporalShadowStrategyResult:
     """Execute one strategy with coordinator/store objects owned by the call."""
 
@@ -951,7 +1431,17 @@ def _run_shadow_strategy(
         trigger_evaluator=ReplanTriggerEvaluator(policy),
         planner_version=planner_version,
     )
+    counters = (
+        tuple(
+            _ShadowEdgeCounter(candidate, measurement)
+            for candidate in _shadow_underlying_planners(planner)
+        )
+        if measurement is not None
+        else ()
+    )
     try:
+        for counter in counters:
+            counter.__enter__()
         scratch_outcome = service.execute(request)
     except PlanningCancelled:
         # User/generation cancellation is a control-flow fence, not candidate
@@ -965,6 +1455,9 @@ def _run_shadow_strategy(
             goal_certificates=tuple(getattr(planner, "goal_certificates", ())),
             trace_observations=tuple(getattr(planner, "trace_observations", ())),
         )
+    finally:
+        for counter in reversed(counters):
+            counter.__exit__(None, None, None)
     return TemporalShadowStrategyResult(
         outcome=replace(scratch_outcome, published=False),
         scratch_published=scratch_outcome.published,
@@ -1336,5 +1829,8 @@ __all__ = [
     "TemporalShadowCertificateObservation",
     "TemporalShadowOutcome",
     "TemporalShadowReuseObservation",
+    "TemporalShadowScratchProof",
     "TemporalShadowStrategyResult",
+    "TemporalShadowTimingObservation",
+    "TemporalShadowTrackResult",
 ]
