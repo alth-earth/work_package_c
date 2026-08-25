@@ -72,4 +72,4 @@
 - 真实数据验收、真船校准、D 消费、0–2/2–4/4–6 h 科学可信度分级、等待、D* Lite 和 MPC
   均不属于 0.4.0 已验收范围。
 
-系统级完整依据见 [ARCTIC_ROUTE_SYSTEM.md](../../ARCTIC_ROUTE_SYSTEM.md)。
+系统级完整依据见 [ARCTIC_ROUTE_SYSTEM.md](../../arctic_route_governance/current/architecture/ARCTIC_ROUTE_SYSTEM.md)。

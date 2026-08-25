@@ -442,7 +442,18 @@ def test_single_shadow_track_reports_twelve_rows_and_preserves_formal_state() ->
         assert result.plan_set_digest
         assert len(result.timings) == 12
         assert all(item.wall_ms >= 0 for item in result.timings)
+        assert all(
+            item.pre_ms >= 0 and item.planner_ms >= 0 and item.post_ms >= 0
+            for item in result.timings
+        )
+        assert all(
+            item.pre_ms + item.planner_ms + item.post_ms
+            <= item.wall_ms + 1e-6
+            for item in result.timings
+        )
         assert all(item.expanded >= 0 and item.edge >= 0 for item in result.timings)
+        assert all(item.identity_digest for item in result.timings)
+        assert all(item.state_counts["expanded_labels"] >= 0 for item in result.timings)
         assert result.scratch_proof.production_published is False
         assert result.scratch_proof.production_store_unchanged is True
         assert result.scratch_proof.production_session_unchanged is True
@@ -456,6 +467,14 @@ def test_single_shadow_track_reports_twelve_rows_and_preserves_formal_state() ->
     ] * 3
     assert all(item.search_used is False for item in candidate.timings[3:6])
     assert all(item.expanded == 0 and item.edge == 0 for item in candidate.timings[3:6])
+    assert all(item.trace_context_present for item in candidate.timings[3:])
+    assert all(item.trace_reuse_used for item in candidate.timings[3:6])
+    assert all(not item.trace_reuse_used for item in candidate.timings[6:])
+    assert candidate.status_counts == {
+        "TRACE_CAPTURED": 3,
+        "HIT_EXACT": 3,
+        "COLD_CONTROL": 6,
+    }
     assert all(
         item.reuse_status == "COLD_CONTROL" and item.search_used
         for item in candidate.timings[6:]

@@ -231,6 +231,14 @@ class TemporalShadowTimingObservation:
     trace_status: str | None = None
     reuse_status: str | None = None
     route_digest: str | None = None
+    pre_ms: float = 0.0
+    planner_ms: float = 0.0
+    post_ms: float = 0.0
+    trace_context_present: bool = False
+    trace_reuse_used: bool = False
+    state_counts: Mapping[str, int] = field(default_factory=dict)
+    identity_digest: str | None = None
+    identity_summary: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def expanded_states(self) -> int:
@@ -269,6 +277,8 @@ class TemporalShadowTrackResult:
     )
     route_integrity: bool = False
     plan_set_digest: str | None = None
+    status_counts: Mapping[str, int] = field(default_factory=dict)
+    identity_digests: tuple[str, ...] = ()
     error_type: str | None = None
     error_message: str | None = None
 
@@ -354,6 +364,127 @@ def _shadow_route_digest(result: Any) -> str | None:
         return None
 
 
+def _shadow_identity_summary(identity: Any) -> tuple[str | None, Mapping[str, Any]]:
+    """Expose stable identity facts without serializing planner objects."""
+
+    if identity is None:
+        return None, {}
+    try:
+        digest = getattr(identity, "digest", getattr(identity, "session_id", None))
+    except (AttributeError, TypeError, ValueError):
+        digest = None
+    summary: dict[str, Any] = {}
+    for name in (
+        "base_digest",
+        "risk_identity_digest",
+        "external_identity_digest",
+        "planner_config_digest",
+        "model_digest",
+        "grid_digest",
+        "edge_evaluator_digest",
+        "objective",
+        "start",
+        "goal",
+        "input_revision",
+        "generation_id",
+        "algorithm_version",
+    ):
+        value = getattr(identity, name, None)
+        if value is None:
+            continue
+        value = getattr(value, "value", value)
+        if hasattr(value, "isoformat"):
+            value = value.isoformat()
+        summary[name] = value
+    if digest is not None:
+        summary["digest"] = str(digest)
+        digest = str(digest)
+    return digest, summary
+
+
+def _shadow_identity_for(
+    planner: Any,
+    request: Any,
+    *,
+    candidate_mode: str,
+    input_revision: int = 0,
+    window: CommittedRiskWindow | None = None,
+    external_identity: Any = None,
+) -> Any:
+    """Build a diagnostic-only identity using the same private fences."""
+
+    try:
+        if candidate_mode == _TEMPORAL_SHADOW_EXACT_MODE:
+            from arctic_route_planning.planners.temporal_session import (
+                TemporalSessionIdentity,
+            )
+
+            if window is None:
+                return None
+            return TemporalSessionIdentity.from_planner(
+                planner,
+                request,
+                input_revision=input_revision,
+                risk_window_content_digest=window.content_digest,
+                risk_window_commit_id=window.commit_id,
+            )
+        from arctic_route_planning.planners.control_trace_reuse import (
+            ControlTraceIdentity,
+        )
+
+        return ControlTraceIdentity.from_planner(
+            planner,
+            request,
+            identity=external_identity,
+        )
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def _shadow_state_counts(
+    result: Any,
+    *,
+    expanded: int,
+    edge: int,
+    zero_search: bool,
+) -> Mapping[str, int]:
+    diagnostics = getattr(result, "diagnostics", None)
+    planning_result = getattr(result, "planning_result", result)
+    metrics = getattr(planning_result, "metrics", None)
+    names = (
+        ("expanded_labels", "expanded_states"),
+        ("generated_labels", "generated_states"),
+        ("unique_labels", "unique_states"),
+        ("label_peak", "queue_peak"),
+        ("queue_peak", "queue_peak"),
+        ("heap_pushes", "heap_pushes"),
+        ("heap_pops", "heap_pops"),
+        ("stale_pops", "stale_pops"),
+        ("exact_state_replacements", "reopened_states"),
+    )
+    counts: dict[str, int] = {}
+    for diagnostic_name, metric_name in names:
+        value = getattr(diagnostics, diagnostic_name, None)
+        if value is None:
+            value = getattr(metrics, metric_name, 0)
+        counts[diagnostic_name] = int(value or 0)
+    counts["expanded_labels"] = int(expanded)
+    counts["edge_evaluations"] = int(edge)
+    if zero_search:
+        counts = {name: 0 for name in counts}
+    return counts
+
+
+def _shadow_status_counts(
+    timings: tuple[TemporalShadowTimingObservation, ...],
+) -> Mapping[str, int]:
+    counts: dict[str, int] = {}
+    for timing in timings:
+        if timing.reuse_status is not None:
+            counts[timing.reuse_status] = counts.get(timing.reuse_status, 0) + 1
+    return counts
+
+
 def _shadow_timing(
     *,
     layer_index: int,
@@ -366,23 +497,48 @@ def _shadow_timing(
     trace_status: str | None = None,
     reuse_status: str | None = None,
     zero_search: bool = False,
+    planner_started: float | None = None,
+    post_started: float | None = None,
+    trace_context_present: bool = False,
+    trace_reuse_used: bool = False,
+    identity: Any = None,
 ) -> TemporalShadowTimingObservation:
+    finished = time.perf_counter()
     expanded, diagnostic_edges = _shadow_result_metrics(result)
     edge = max(diagnostic_edges, measurement.edge_evaluations - edge_before)
     if zero_search:
         expanded = 0
         edge = 0
+    planner_mark = planner_started or started
+    post_mark = post_started or finished
+    pre_ms = max(0.0, (planner_mark - started) * 1000.0)
+    planner_ms = max(0.0, (post_mark - planner_mark) * 1000.0)
+    post_ms = max(0.0, (finished - post_mark) * 1000.0)
+    identity_digest, identity_summary = _shadow_identity_summary(identity)
     return TemporalShadowTimingObservation(
         layer_index=layer_index,
         layer=_shadow_layer_name(layer_index),
         objective=str(getattr(objective, "value", objective)),
-        wall_ms=max(0.0, (time.perf_counter() - started) * 1000.0),
+        wall_ms=max(0.0, (finished - started) * 1000.0),
         expanded=expanded,
         edge=edge,
         search_used=search_used,
         trace_status=trace_status,
         reuse_status=reuse_status,
         route_digest=_shadow_route_digest(result),
+        pre_ms=pre_ms,
+        planner_ms=planner_ms,
+        post_ms=post_ms,
+        trace_context_present=trace_context_present,
+        trace_reuse_used=trace_reuse_used,
+        state_counts=_shadow_state_counts(
+            result,
+            expanded=expanded,
+            edge=edge,
+            zero_search=zero_search,
+        ),
+        identity_digest=identity_digest,
+        identity_summary=identity_summary,
     )
 
 
@@ -444,11 +600,13 @@ class _TemporalShadowCandidatePlanner:
                 self._candidate_mode == _TEMPORAL_SHADOW_CONTROL_TRACE_MODE
                 and layer_index == 0
             ):
+                planner_started = time.perf_counter()
                 result, trace = _trace_plan(
                     self._planner,
                     objective_request,
                     identity=self._trace_identity,
                 )
+                post_started = time.perf_counter()
                 self._full_traces[objective] = trace
                 self._trace_records.append(
                     _trace_observation(objective, trace, status="TRACE_CAPTURED")
@@ -464,6 +622,10 @@ class _TemporalShadowCandidatePlanner:
                         search_used=True,
                         trace_status="TRACE_CAPTURED",
                         reuse_status="TRACE_CAPTURED",
+                        planner_started=planner_started,
+                        post_started=post_started,
+                        trace_context_present=True,
+                        identity=getattr(trace, "identity", None),
                     )
                 )
                 results[objective] = result
@@ -501,6 +663,7 @@ class _TemporalShadowCandidatePlanner:
                         source_session,
                         objective_request,
                     )
+                lookup_finished = time.perf_counter()
                 if reuse is not None:
                     result, observation = reuse
                     self._reuse_records.append(
@@ -533,6 +696,22 @@ class _TemporalShadowCandidatePlanner:
                                 )
                                 or "HIT",
                                 zero_search=True,
+                                planner_started=lookup_finished,
+                                post_started=lookup_finished,
+                                trace_context_present=trace_transition,
+                                trace_reuse_used=trace_transition,
+                                identity=(
+                                    getattr(observation, "trace", None)
+                                    and getattr(observation.trace, "identity", None)
+                                )
+                                or _shadow_identity_for(
+                                    self._planner,
+                                    objective_request,
+                                    candidate_mode=self._candidate_mode,
+                                    input_revision=self._request.input_revision,
+                                    window=self._window,
+                                    external_identity=self._trace_identity,
+                                ),
                             )
                         )
                         results[objective] = result
@@ -629,12 +808,15 @@ class _TemporalShadowCandidatePlanner:
                 self._candidate_mode == _TEMPORAL_SHADOW_CONTROL_TRACE_MODE
                 and layer_index > 0
             ):
+                planner_started = time.perf_counter()
                 result = self._control_cold_search(objective_request)
             else:
+                planner_started = time.perf_counter()
                 result = self._cold_search(
                     objective_request,
                     identity_factory=TemporalSessionIdentity,
                 )
+            post_started = time.perf_counter()
             results[objective] = result
             fallback_status = None
             if self._reuse_records:
@@ -650,17 +832,23 @@ class _TemporalShadowCandidatePlanner:
                     edge_before=edge_before,
                     measurement=self._measurement,
                     search_used=True,
-                    trace_status=(
-                        "CERTIFIED_TRACE"
-                        if self._candidate_mode == _TEMPORAL_SHADOW_CONTROL_TRACE_MODE
-                        and self._full_traces.get(objective) is not None
-                        else None
-                    ),
+                    trace_status=None,
                     reuse_status=fallback_status
                     or (
                         "COLD_CONTROL"
                         if self._candidate_mode == _TEMPORAL_SHADOW_CONTROL_TRACE_MODE
                         else "COLD_CANDIDATE"
+                    ),
+                    planner_started=planner_started,
+                    post_started=post_started,
+                    trace_context_present=self._full_traces.get(objective) is not None,
+                    identity=_shadow_identity_for(
+                        self._planner,
+                        objective_request,
+                        candidate_mode=self._candidate_mode,
+                        input_revision=self._request.input_revision,
+                        window=self._window,
+                        external_identity=self._trace_identity,
                     ),
                 )
             )
@@ -744,7 +932,9 @@ class _MeasuredShadowControlPlanner:
             started = time.perf_counter()
             edge_before = self._measurement.edge_evaluations
             objective_request = replace(request, objective=objective)
+            planner_started = time.perf_counter()
             result = self._planner.plan(objective_request)
+            post_started = time.perf_counter()
             self._timing_records.append(
                 _shadow_timing(
                     layer_index=layer_index,
@@ -755,6 +945,13 @@ class _MeasuredShadowControlPlanner:
                     measurement=self._measurement,
                     search_used=True,
                     reuse_status="CONTROL_SEARCH",
+                    planner_started=planner_started,
+                    post_started=post_started,
+                    identity=_shadow_identity_for(
+                        self._planner,
+                        objective_request,
+                        candidate_mode=_TEMPORAL_SHADOW_CONTROL_TRACE_MODE,
+                    ),
                 )
             )
             results[objective] = result
@@ -990,6 +1187,16 @@ class PreparedRiskPlanning:
             else None
         )
         timings = tuple(getattr(adapter, "timing_observations", ()))
+        status_counts = _shadow_status_counts(timings)
+        identity_digests = tuple(
+            sorted(
+                {
+                    timing.identity_digest
+                    for timing in timings
+                    if timing.identity_digest is not None
+                }
+            )
+        )
         scratch_proof = TemporalShadowScratchProof(
             production_published=False,
             scratch_published=strategy.scratch_published,
@@ -1009,6 +1216,8 @@ class PreparedRiskPlanning:
             scratch_proof=scratch_proof,
             route_integrity=route_integrity,
             plan_set_digest=plan_set_digest,
+            status_counts=status_counts,
+            identity_digests=identity_digests,
             error_type=strategy.error_type,
             error_message=strategy.error_message,
         )

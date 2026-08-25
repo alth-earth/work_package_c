@@ -314,4 +314,11 @@ M0 r1 暴露 JSON/SHA 热路径 overhead 15%–20%，随后改为固定网络字
 
 **开放问题：** 非 FIFO 情形是否进一步采用 label-correcting；ETA 迭代的保守误差模型；P3 anchor 证书的浮点容差；P2.1 cold control 旁路是否残留稳定开销，以及 `rolling_0_24h × fastest` 的 `5.94%` 回归能否在不放宽门禁的前提下由实现性诊断解释和消除。Winter 已证明每次自然产生 3 个 full→main 零搜索 hit，并确认约 48% 总 wall-time 改善，但单元硬门禁失败意味着不能宣称生产级稳定加速。独立 FIFO 分类器和 exact 标签安全支配仍是后续候选。任何资源或标签语义变更必须先记录新的实验身份与正确性回归，不能用“全局最优”“稳定加速”或“生产级优势”代替证据。
 
+### P2.1-M2D cold-path 诊断实施记录（2026-08-25 17:49 +08:00）
+
+- C shadow-only 计时已拆分为 `pre_ms`、`planner_ms`、`post_ms`，并增加 `trace_context_present`、`trace_reuse_used`、状态计数和身份摘要；正式 `plan()`、`execute()`、BC/CD 合同、默认开关和发布路径未改变。
+- runner 已增加严格的 `rolling_0_24h × fastest` paired timing decomposition 与统计 helper，输出明确标记 `diagnostic_only=true`、`formal_gate_verdict=NOT_APPLICABLE`；旧 M2 构件未修改。
+- 新 preflight 构件：`/root/my_project/.runtime/experiments/winter-c-p21-cold-diagnostic-20260825-r1/cold-path-diagnostic.json`。1 次独立 control/candidate paired run 中，route digest、expanded `670`、edge `5310` 一致；candidate `2175.45 ms`、control `2095.92 ms`，回归 `3.79%`，其中 `planner_ms` 差异约 `79.48 ms`，`pre/post` 旁路差异接近零。
+- 该结果只有 1 个样本，仅属于 `PRELIMINARY_OBSERVATION_ONLY`，不能区分测量方差与稳定 planner 状态开销，不能改写 M2 `FAIL`，也不能形成生产性能优势声明。后续若继续取样，必须新建诊断 experiment identity；不得以此自动升级为正式 M2 复跑。
+
 **本次更新记录：** 将旧的“实现审计报告”重整为现状 + 证据 + 正确性边界 + LTCR-TDA* 方案 + 分阶段计划 + benchmark/回滚门禁；现已完成 P0 exact-time candidate、独立 oracle、ETA 收敛器、P1 per-objective 可恢复 session 和 P2 same-goal monotonic certificate reuse 的 `UNIT_PASS`，并实现默认关闭、非发布的 P2.1/P4 formal shadow。P2 没有通过 M0 性能门禁，旧 exact-temporal P4a 没有通过 M2 资源/完整路线门禁；P2.1 已通过 clean M0/M1，并在 Winter formal 中取得 `47.86%` 总耗时改善、完整语义和资源通过，但因一个 cold 单元回归 `5.94%` 而严格判 M2 `FAIL`。候选仍只证明受限 control 执行轨迹等价，不证明全局最优或生产级稳定优势。下一轮限于轻量 cold-path 诊断；P3、2.2.2 和 P5 延期。后续修改直接在本文档对应章节更新，不再创建同主题文档。
