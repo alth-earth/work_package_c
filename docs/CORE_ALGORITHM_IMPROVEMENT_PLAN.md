@@ -421,3 +421,24 @@ clean smoke 构件 `/root/my_project/.runtime/experiments/winter-c-p21-m2e-gate-
 **screening 停止。** 空闲20秒预检的 host swap 增量为0；随后启动 holdout screening（2次、alternate、isolated、4×3）。第一个 control worker 执行期间 host `pswpin` 从 `1190563` 增至 `1190572`，停止后为 `1190583`，违反 G3 的零增量要求。构件 `/root/my_project/.runtime/experiments/winter-c-p21-m2e-screening-holdout-20260826-r1/` 保留为 `status=PREPARED` 的中止证据，`cases.jsonl` 为空，未发生任何正式或生产发布；不计入 screening 样本，也不覆盖历史结果。由于冻结停止条件已触发，development screening、formal M2 和任何择优重跑均未执行。
 
 **数据与后续门禁。** 本轮未下载或修改 A/B 输入；两个 `total_with_tide` Winter bundle、B risk-store、RunContext、ExecutionSpec、旧正式失败证据和清理 ledger 均保留，未重新引入 detided。下一次只有在可证明连续零 host swap、进程 swap 为0且 CPU/cache 证据完整的环境中，才可从 holdout screening 重新开始；若资源环境仍无法满足，应改用独立无 swap/资源隔离执行环境，而不是放宽阈值。P3、原方案2.2.2、自适应网格和 P5 继续延期。
+
+### P2.1-M2G 资源资格复核与隔离 screening 停止记录（2026-08-26 16:10 +08:00）
+
+本轮按 M2G 方案执行“资源资格复核 → 新身份 prepare → 隔离 screening 尝试”。由于宿主机 swap 计数在空闲预检和隔离 worker 期间均增长，未形成可计入的 screening case；development screening 和正式 M2 按停止规则未启动。旧正式 M2 `FAIL`、所有有效含潮总流数据和历史诊断构件均保持不变，candidate 继续默认关闭、非发布。
+
+**代码与身份检查。** C `UV_OFFLINE=1 make check` 为 `275 passed`；Orchestrator runner 专项为 `24 passed`，排除既有超长 formal fixture 的套件为 `117 passed, 1 warning`；Orchestrator 相关 Ruff 与 `py_compile` 通过。运行前 C、Orchestrator、A、B 工作树均 clean；本轮冻结 C `52117a8496db2778bd79a2704674ff02c11f44fd`、Orchestrator `93e61b48f5f1555c83b86c297125e946a5ee94fc`、A `4c30ace90935fec9371ca02f654b7ab1554183fa`、B `c861be96c56e80520c7416e0e77c417ebd239fdd`，C/Orchestrator `uv.lock` SHA 分别为 `8893cb8387825ca4890ed808f4a98b02ba938337752971dacc3e77f859164f22` 与 `0fc5cdbc4e94799d1ecb945c16a92b7d12f532d2447f69bae4e4578d0019ce01`。
+
+新建的 prepare-only 身份构件为：
+
+- holdout：`/root/my_project/.runtime/experiments/winter-c-p21-m2g-screening-holdout-20260826-r1/`，`experiment_id=winter-p2-shadow-v3-5fdf635db7971254`；
+- development：`/root/my_project/.runtime/experiments/winter-c-p21-m2g-screening-development-20260826-r1/`，`experiment_id=winter-p2-shadow-v3-7494aac46b35b286`。
+
+两者均绑定新的输入文件 SHA、实现 SHA、仓库 SHA 和锁文件 SHA，状态为 `PREPARED`，不代表 screening 通过。
+
+**资源复核结果。** 当前主机最多两轮连续预检均失败：第一轮空闲约 20 秒后 `pswpin` 至少增加 `4`，继续观察约 40 秒累计增加 `8`；第二轮等待后约 20 秒增加 `7`。进程自身 `VmSwap` 始终为 `0 kB`，但 G3 要求的 host `pswpin/pswpout` 双计数零增量未满足。
+
+随后使用 systemd cgroup `MemoryMax=4G`、`MemorySwapMax=0` 启动 holdout screening（`isolated`、`alternate`、2 次、4×3）。unit 内 `memory.swap.current=0`，但首个 worker 运行约 20 秒期间 host `pswpin` 从 `1191712` 增至 `1191720`（`+8`），故立即终止；证据构件为 `/root/my_project/.runtime/experiments/winter-c-p21-m2g-screening-holdout-20260826-r2/resource-gate-abort.json`。该目录 `cases.jsonl` 为 0 行，manifest 仍为启动前 `PREPARED`，screening 结果记为 `NOT_EVALUATED_RESOURCE_GATE`，没有路线、性能或 M2 样本。
+
+**数据、发布与清理。** 本轮未下载、修改或重新生成 A/B 数据；holdout/development 两套 `total_with_tide` bundle、B risk-store、RunContext、ExecutionSpec、detided 退役 ledger 和旧失败构件均保留。新建构件仅为小型 manifest、输入身份、endpoint mapping、空 cases 和资源停止 sidecar；没有错误 payload 或大体积中间数据可清理，故不删除可审计构件。没有写入 formal latest、frozen、production 或 presentation store，也未引入 detided。
+
+**当前结论与后续条件。** P2.1 M2 仍为 `FAIL/未重入`；本轮只能证明“当前宿主机即使使用无 swap cgroup 也无法满足全局 host swap 门禁”，不能证明算法性能失败。下一轮必须在宿主机连续零 swap 且完整 CPU/cache 证据成立后，或在能同时隔离并观测零 host swap 的外部 runner 上，从 holdout 2 次 screening 重新开始；两个窗口 screening 全部通过后才允许各窗口 4 次正式重复。P3、原方案 2.2.2、自适应网格和 P5 继续延期。
