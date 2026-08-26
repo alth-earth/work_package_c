@@ -24,16 +24,15 @@ from typing import TYPE_CHECKING, Any
 from arctic_route_planning.contracts.codec import risk_frame_content_digest
 from arctic_route_planning.domain.models import ObjectiveMode
 from arctic_route_planning.errors import NoRouteError, PlanningCancelled
-
-from .errors import EndpointBlockedError, PlanningHorizonExceeded
+from arctic_route_planning.planners.errors import EndpointBlockedError, PlanningHorizonExceeded
 
 if TYPE_CHECKING:
-    from .temporal_label_astar import (
+    from arctic_route_planning.planners.temporal_label_astar import (
         TemporalCandidateResult,
         TemporalDiagnostics,
         TemporalLabelAStar,
     )
-    from .time_dependent_astar import PlanningRequest
+    from arctic_route_planning.planners.time_dependent_astar import PlanningRequest
 
 
 _ALGORITHM_VERSION = "ltcr-tda-temporal-session.v1"
@@ -661,10 +660,12 @@ class TemporalSession:
 
     def _edge_rejection(self, error: Exception) -> str | None:
         from arctic_route_planning.cost import UnnavigableSpeedError
+        from arctic_route_planning.planners.eta_refinement import EtaRefinementError
+        from arctic_route_planning.planners.temporal_label_astar import (
+            _eta_rejection_reason,
+            _RejectedEdge,
+        )
         from arctic_route_planning.risk import RiskCoverageError, RiskSamplingError
-
-        from .eta_refinement import EtaRefinementError
-        from .temporal_label_astar import _eta_rejection_reason, _RejectedEdge
 
         if isinstance(error, RiskCoverageError):
             return "coverage"
@@ -680,7 +681,7 @@ class TemporalSession:
         return None
 
     def _finish_goal(self) -> TemporalCandidateResult:
-        from .temporal_label_astar import TemporalCandidateResult
+        from arctic_route_planning.planners.temporal_label_astar import TemporalCandidateResult
 
         result = self.planner._build_result(
             self.request,
@@ -697,7 +698,7 @@ class TemporalSession:
         return self.result
 
     def _finish_zero(self) -> TemporalCandidateResult:
-        from .temporal_label_astar import TemporalCandidateResult
+        from arctic_route_planning.planners.temporal_label_astar import TemporalCandidateResult
 
         result = self.planner._zero_length_result(
             self.request,
@@ -839,7 +840,7 @@ def restore_session(
     session.identity = checkpoint.identity
     session.state = checkpoint.state
     session.context = planner._new_execution_context()
-    from .temporal_label_astar import _MutableDiagnostics
+    from arctic_route_planning.planners.temporal_label_astar import _MutableDiagnostics
 
     session.context.diagnostics = _MutableDiagnostics(
         **{

@@ -496,3 +496,43 @@ clean smoke 构件 `/root/my_project/.runtime/experiments/winter-c-p21-m2e-gate-
 **因果判定与停止决策。** 当前证据支持“结果对执行顺序及 full→main 重复工作路径敏感”，但不支持已找到一个可安全推广的 cache/trace 生命周期修复。两种允许的最小消融都没有同时满足焦点 overall、per-order 和 `≤5pp` 顺序门禁；不能把 `force-main-cold` 的改变工作量误报成算法优势，也不能把 normalization 失败包装成架构性结论。因此本轮按停止规则**停止 P2.1-M2I**：不实施修复、不进入 development/holdout screening、不执行条件式正式 M2，也不择优重跑或放宽阈值。P2.1 M2 总体继续为 `FAIL`，candidate 保持默认关闭、非发布；P3、2.2.2 和 P5 继续延期，任何后续替代方案须先在本文档建立独立计划和门禁。
 
 **构件与复核入口。** 三组完整诊断构件及 `manifest.json`、`cases.jsonl`、`comparison-summary.json`、reuse sidecar 均原样保留在上述目录，供后续审计；没有删除有效数据或中间证据。下一次工作只能以本文档为 SSOT，在新的 experiment identity 下重新提出 P3 或其他替代方案，并继续保持含潮总流输入与现有合同边界。
+
+### P3 SMO-A* 实现、正确性验证与 Winter 基准（2026-08-27 00:30 +08:00）
+
+P2.1-M2I 停止后，按本文档要求建立独立 P3 计划。P3 选择 SMO-A*（Shared-Memoization Objective-A*）作为新的候选算法，不修改 P2.1 的控制轨迹复用路径、不改变 B/C/D 合同、不改变正式 A* 默认。所有 P3 构件为研究验证性质，candidate 保持默认关闭、非发布。
+
+**算法定义。** SMO-A* 是纯记忆化优化：在 `plan_candidates(shared_edge_evaluation=True)` 时，三个目标函数（fastest / low_risk / recommended）共享一个 per-call 遍历缓存。缓存键为 `(start_node, end_node, departure_time, incoming_code)`，全部为目标无关且确定性可哈希。首次评估的边（cache miss）执行完整的风险采样、速度计算和几何评估，将目标无关结果存为 `_EdgeTraversalData`；后续目标命中缓存时仅执行轻量的 `CostModel.evaluate()`（目标相关），跳过昂贵的风险采样。被拒绝的边（hard mask / risk / coverage / speed）也被缓存为异常对象，后续目标直接 re-raise 而不重新评估。每个 `plan_candidates` 调用创建独立缓存，不跨层共享。
+
+**实现位置。** `src/arctic_route_planning/planners/time_dependent_astar.py`：新增 `_EdgeTraversalData` dataclass、`_REJECTED`/`_CACHE_MISS` 哨兵、`_evaluate_edge_data()` / `_compute_cost()` / `_build_traversal()` / `_evaluate_edge_cached()` 方法；`_Counters` 新增 `cache_hits`/`cache_misses`；`SearchMetrics` 新增 `traversal_cache_hits`/`traversal_cache_misses`；`plan_candidates()` 新增 keyword-only `shared_edge_evaluation: bool = False`，默认 `False` 保持完全向后兼容。`profiling.py` 已更新以识别新方法名。原始 `_evaluate_edge()` 保留用于非缓存路径的向后兼容。
+
+**P2.1 归档。** `control_trace_reuse.py`、`temporal_reuse.py`、`temporal_session.py` 移至 `planners/_archive/`；对应测试移至 `tests/unit/_archive/`；`pyproject.toml` 添加 `norecursedirs` 排除归档目录；`temporal_label_astar.py` 保留（P0 正确性 oracle）；`ingress.py`、`benchmark_bc_coupling.py`、`validate_temporal_semantics.py` 的导入路径已更新。
+
+**正确性测试。** 新增 `tests/unit/test_smo_astar.py`（12 tests），分四组：
+
+| 测试组 | 数量 | 验证内容 |
+|---|---:|---|
+| `TestSmoAstarRouteIdentity` | 4 | 零风险/动态风险/hard mask 网格下 shared 与 baseline 路线完全一致；所有 step 级字段（ETA/speed/risk/heading）匹配 |
+| `TestSmoAstarCacheStatistics` | 4 | shared 模式 cache hits > 0；非 shared 模式 cache hits/misses 均为 0；cache ops > 0；首个目标全 miss |
+| `TestSmoAstarRejectedEdgeCaching` | 2 | hard mask 和 risk threshold 拒绝的边被缓存，后续目标跳过 |
+| `TestSmoAstarBackwardCompat` | 2 | 默认 `shared_edge_evaluation=False` 与显式 `False` 结果一致；`expanded_states`/`generated_states`/`source_risk_ids` 匹配 |
+
+全套测试 190 passed（含 12 SMO-A* + 133 unit + 45 integration，排除归档 P2.1 测试）；Ruff 全部通过。
+
+**Winter 基准结果。** 使用 holdout `total_with_tide` 输入（145 帧、risk content digest `115ad3ab…`），start=(5,7) goal=(26,2)，departure 2026-02-22T00:00Z，1 次重复：
+
+| 指标 | Baseline A* | SMO-A* (shared) |
+|---|---:|---:|
+| Wall time | 326.748 s | 285.233 s |
+| Expanded states | 108,238 | 108,238 |
+| Cache hits | 0 | 120,309 |
+| Cache misses | 0 | 721,510 |
+| Cache hit rate | — | 14.3% |
+| Wall improvement | — | +12.71% |
+| RSS (KiB) | 188,264 | 750,796 |
+| Route identity | — | PASS (all 3 objectives) |
+
+**结果分析。** SMO-A* 在真实 Winter 数据上产生与 baseline 完全相同的路线，证明纯记忆化不改变搜索结构。+12.71% 的 wall-time 改善是正向的，但低于 P3 计划中设定的 15% 目标。14.3% 的 cache hit rate 较低，原因有二：(1) 三个目标函数探索搜索空间的不同区域，许多边仅被一个目标评估；(2) 时间扩展状态图中，同一物理边在不同时间桶有不同的缓存键。RSS 从 188 MB 增至 750 MB，因为缓存存储了 721,510 个 `_EdgeTraversalData` 对象；这是 SMO-A* 的主要代价。
+
+**当前成熟度。** SMO-A* 处于「实现完成 + 正确性验证通过 + 基准数据正向但不充分」阶段。+12.71% 改善低于 15% 目标、cache hit rate 低于 50% 目标、RSS 增长显著。不满足进入正式 M2 门禁的条件。candidate 保持默认关闭、非发布。
+
+**下一步条件。** 在进入条件式 M2 之前，需要：(1) 在 development bundle 上重复基准以验证一致性；(2) 分析 cache miss 的具体构成（搜索路径差异 vs 时间桶分散），评估是否可通过缓存键归约（如时间桶对齐）提升 hit rate；(3) 评估 RSS 增长是否可接受或需要 LRU 淘汰策略；(4) 若 SMO-A* 无法达到 15% 改善目标，则按原计划启动 ARA*（Anytime Repairing A*）作为备选方案。不得放宽 P3 验收目标或冻结门禁。P2.1 M2 的 FAIL 记录和构件原样保留，不被 P3 覆盖。

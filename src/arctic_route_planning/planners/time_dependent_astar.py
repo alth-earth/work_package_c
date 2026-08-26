@@ -126,6 +126,8 @@ class SearchMetrics:
     stale_pops: int = 0
     reopened_states: int = 0
     max_time_index: int = 0
+    traversal_cache_hits: int = 0
+    traversal_cache_misses: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,6 +163,26 @@ class _EdgeTraversal:
     source_risk_ids: tuple[str, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class _EdgeTraversalData:
+    """Objective-independent edge evaluation result for cross-objective reuse."""
+
+    arrival_time: datetime
+    heading_degrees: float
+    speed_knots: float
+    distance_km: float
+    travel_hours: float
+    risk_score: float
+    maximum_risk: float
+    confidence: float
+    heading_change_degrees: float
+    source_risk_ids: tuple[str, ...]
+
+
+_REJECTED = object()
+_CACHE_MISS = object()
+
+
 @dataclass(slots=True)
 class _Counters:
     """Mutable hot-loop accumulator; snapshotted into SearchMetrics on exit."""
@@ -181,6 +203,8 @@ class _Counters:
     last_f: float = 0.0
     last_g: float = 0.0
     max_bucket: int = 0
+    cache_hits: int = 0
+    cache_misses: int = 0
 
 
 class _RejectedEdge(Exception):
@@ -265,7 +289,7 @@ class TimeDependentAStar:
         ``plan`` never enables this path.
         """
 
-        from .control_trace_reuse import ControlTraceCollector
+        from ._archive.control_trace_reuse import ControlTraceCollector
 
         collector = ControlTraceCollector(
             self,
@@ -276,7 +300,13 @@ class TimeDependentAStar:
         result = self._plan(request, trace=collector)
         return result, collector.trace
 
-    def _plan(self, request: PlanningRequest, *, trace: object | None) -> PlanningResult:
+    def _plan(
+        self,
+        request: PlanningRequest,
+        *,
+        trace: object | None,
+        traversal_cache: dict | None = None,
+    ) -> PlanningResult:
         started = perf_counter()
         self._last_counters: _Counters | None = None
         self._heur_dist = {}
@@ -373,20 +403,18 @@ class TimeDependentAStar:
                     trace.trace = trace.finish(result, state, predecessor)
                 return result
 
-            previous_heading = None
-            if incoming_code is not None:
-                prev_node = (node[0] - incoming_code[0], node[1] - incoming_code[1])
-                previous_heading = self._edge_geometry(prev_node, node)[1]
             for neighbor in self.grid.neighbors(node):
                 self._check_cancelled(request)
                 try:
-                    traversal = self._evaluate_edge(
+                    traversal = self._evaluate_edge_cached(
                         node,
                         neighbor,
                         arrival_time,
-                        previous_heading,
+                        incoming_code,
                         request,
                         cost_model,
+                        traversal_cache,
+                        counters,
                     )
                 except RiskCoverageError:
                     counters.coverage += 1
@@ -453,24 +481,55 @@ class TimeDependentAStar:
         self,
         request: PlanningRequest,
         objectives: Iterable[ObjectiveMode | str] = tuple(ObjectiveMode),
+        *,
+        shared_edge_evaluation: bool = False,
     ) -> dict[ObjectiveMode, PlanningResult]:
-        """Plan the same request independently under multiple objective policies."""
+        """Plan the same request under multiple objective policies.
 
-        return {
-            mode: self.plan(replace(request, objective=mode))
-            for raw_mode in objectives
-            for mode in (ObjectiveMode(raw_mode),)
-        }
+        When *shared_edge_evaluation* is true the three objective searches
+        share a session-scoped traversal cache so that risk sampling, speed
+        calculation and edge geometry are evaluated at most once per
+        (start, end, departure_time, incoming_code) tuple.  Each
+        objective still maintains independent labels, predecessors and open
+        sets, so the returned routes are identical to the non-shared path.
+        """
 
-    def _evaluate_edge(
+        if not shared_edge_evaluation:
+            return {
+                mode: self.plan(replace(request, objective=mode))
+                for raw_mode in objectives
+                for mode in (ObjectiveMode(raw_mode),)
+            }
+        traversal_cache: dict = {}
+        results: dict[ObjectiveMode, PlanningResult] = {}
+        for raw_mode in objectives:
+            mode = ObjectiveMode(raw_mode)
+            results[mode] = self._plan(
+                replace(request, objective=mode),
+                trace=None,
+                traversal_cache=traversal_cache,
+            )
+        return results
+
+    def _evaluate_edge_data(
         self,
         start: Node,
         end: Node,
         departure_time: datetime,
-        previous_heading: float | None,
+        incoming_code: HeadingCode,
         request: PlanningRequest,
-        cost_model: CostModel,
-    ) -> _EdgeTraversal:
+    ) -> _EdgeTraversalData:
+        """Objective-independent edge evaluation: risk, speed, geometry.
+
+        All inputs (start, end, departure_time, incoming_code, request
+        parameters) are identical across objectives, so the result is
+        deterministic and safe to share via a session-scoped cache.
+        """
+        previous_heading = None
+        if incoming_code is not None:
+            prev_node = (start[0] - incoming_code[0], start[1] - incoming_code[1])
+            previous_heading = self._edge_geometry(prev_node, start)[1]
+
         distance_km, _, points = self._edge_geometry(
             start, end, minimum_samples=request.edge_sample_count
         )
@@ -479,8 +538,6 @@ class TimeDependentAStar:
         samples: tuple[SampledRisk, ...] = ()
         speed = calm_speed
 
-        # See _EDGE_REFINEMENT_ROUNDS: two passes keep ETA and environment
-        # speed mutually consistent without hiding a complex optimizer.
         for _ in range(_EDGE_REFINEMENT_ROUNDS):
             samples = tuple(
                 self.risk_sampler.sample(
@@ -493,7 +550,159 @@ class TimeDependentAStar:
             if any(sample.hard_mask for sample in samples):
                 raise _RejectedEdge("hard")
             if any(
-                sample.confidence < self.planner_config.minimum_confidence for sample in samples
+                sample.confidence < self.planner_config.minimum_confidence
+                for sample in samples
+            ):
+                raise _RejectedEdge("risk")
+            if request.maximum_risk is not None and any(
+                sample.risk_score > request.maximum_risk for sample in samples
+            ):
+                raise _RejectedEdge("risk")
+            speed = self.vessel_model.effective_speed(
+                min(sample.environment_speed_factor for sample in samples)
+            )
+            travel_hours = distance_km / speed.speed_km_per_hour
+
+        risk_score = _trapezoidal_average(sample.risk_score for sample in samples)
+        maximum_risk = max(sample.risk_score for sample in samples)
+        confidence = min(sample.confidence for sample in samples)
+        heading = self._edge_geometry(start, end)[1]
+        return _EdgeTraversalData(
+            arrival_time=departure_time + timedelta(hours=travel_hours),
+            heading_degrees=heading,
+            speed_knots=speed.speed_knots,
+            distance_km=distance_km,
+            travel_hours=travel_hours,
+            risk_score=risk_score,
+            maximum_risk=maximum_risk,
+            confidence=confidence,
+            heading_change_degrees=heading_change_degrees(previous_heading, heading),
+            source_risk_ids=_unique(
+                risk_id for sample in samples for risk_id in sample.source_risk_ids
+            ),
+        )
+
+    def _compute_cost(
+        self,
+        data: _EdgeTraversalData,
+        cost_model: CostModel,
+    ) -> CostBreakdown:
+        """Objective-specific cost from cached traversal data."""
+        return cost_model.evaluate(
+            EdgeCostInput(
+                distance_km=data.distance_km,
+                travel_hours=data.travel_hours,
+                risk_score=data.risk_score,
+                confidence=data.confidence,
+                heading_change_degrees=data.heading_change_degrees,
+            )
+        )
+
+    def _build_traversal(
+        self,
+        start: Node,
+        end: Node,
+        data: _EdgeTraversalData,
+        cost: CostBreakdown,
+    ) -> _EdgeTraversal:
+        """Combine cached traversal data with objective-specific cost."""
+        return _EdgeTraversal(
+            start=start,
+            end=end,
+            arrival_time=data.arrival_time,
+            heading_degrees=data.heading_degrees,
+            speed_knots=data.speed_knots,
+            distance_km=data.distance_km,
+            risk_score=data.risk_score,
+            maximum_risk=data.maximum_risk,
+            confidence=data.confidence,
+            cost=cost,
+            source_risk_ids=data.source_risk_ids,
+        )
+
+    def _evaluate_edge_cached(
+        self,
+        start: Node,
+        end: Node,
+        departure_time: datetime,
+        incoming_code: HeadingCode,
+        request: PlanningRequest,
+        cost_model: CostModel,
+        traversal_cache: dict | None,
+        counters: _Counters,
+    ) -> _EdgeTraversal:
+        """Edge evaluation with optional cross-objective traversal cache.
+
+        On cache hit only the cheap cost computation is redone; the
+        expensive risk sampling and speed calculation are skipped.
+        Rejected edges (hard mask, risk threshold, coverage, speed) are
+        also cached so subsequent objectives skip the expensive evaluation.
+        """
+        cache_key = None
+        if traversal_cache is not None:
+            cache_key = (start, end, departure_time, incoming_code)
+            cached = traversal_cache.get(cache_key, _CACHE_MISS)
+            if cached is not _CACHE_MISS:
+                if isinstance(cached, BaseException):
+                    raise cached
+                counters.cache_hits += 1
+                cost = self._compute_cost(cached, cost_model)
+                return self._build_traversal(start, end, cached, cost)
+
+        if traversal_cache is not None:
+            counters.cache_misses += 1
+        try:
+            data = self._evaluate_edge_data(
+                start, end, departure_time, incoming_code, request
+            )
+        except (_RejectedEdge, RiskCoverageError, UnnavigableSpeedError) as exc:
+            if traversal_cache is not None:
+                traversal_cache[cache_key] = exc
+            raise
+
+        if traversal_cache is not None:
+            traversal_cache[cache_key] = data
+
+        cost = self._compute_cost(data, cost_model)
+        return self._build_traversal(start, end, data, cost)
+
+    def _evaluate_edge(
+        self,
+        start: Node,
+        end: Node,
+        departure_time: datetime,
+        previous_heading: float | None,
+        request: PlanningRequest,
+        cost_model: CostModel,
+    ) -> _EdgeTraversal:
+        """Edge evaluation with full risk sampling and cost computation.
+
+        This method is kept for direct callers.  The hot path in
+        _plan now goes through _evaluate_edge_cached which may
+        share the expensive risk-sampling step across objectives.
+        """
+        distance_km, _, points = self._edge_geometry(
+            start, end, minimum_samples=request.edge_sample_count
+        )
+        calm_speed = self._calm_speed
+        travel_hours = distance_km / calm_speed.speed_km_per_hour
+        samples: tuple[SampledRisk, ...] = ()
+        speed = calm_speed
+
+        for _ in range(_EDGE_REFINEMENT_ROUNDS):
+            samples = tuple(
+                self.risk_sampler.sample(
+                    departure_time + timedelta(hours=travel_hours * fraction),
+                    point.longitude,
+                    point.latitude,
+                )
+                for point, fraction in _with_fractions(points)
+            )
+            if any(sample.hard_mask for sample in samples):
+                raise _RejectedEdge("hard")
+            if any(
+                sample.confidence < self.planner_config.minimum_confidence
+                for sample in samples
             ):
                 raise _RejectedEdge("risk")
             if request.maximum_risk is not None and any(
@@ -795,4 +1004,6 @@ def _metrics(counters: _Counters, started: float) -> SearchMetrics:
         stale_pops=counters.stale_pop,
         reopened_states=counters.reopened,
         max_time_index=counters.max_bucket,
+        traversal_cache_hits=counters.cache_hits,
+        traversal_cache_misses=counters.cache_misses,
     )

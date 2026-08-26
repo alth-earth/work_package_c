@@ -464,7 +464,7 @@ def _shadow_result_metrics(result: Any) -> tuple[int, int]:
 
 def _shadow_route_digest(result: Any) -> str | None:
     try:
-        from arctic_route_planning.planners.temporal_reuse import route_semantic_digest
+        from arctic_route_planning.planners._archive.temporal_reuse import route_semantic_digest
 
         return route_semantic_digest(result)
     except (ImportError, AttributeError, TypeError, ValueError):
@@ -522,7 +522,7 @@ def _shadow_identity_for(
 
     try:
         if candidate_mode == _TEMPORAL_SHADOW_EXACT_MODE:
-            from arctic_route_planning.planners.temporal_session import (
+            from arctic_route_planning.planners._archive.temporal_session import (
                 TemporalSessionIdentity,
             )
 
@@ -535,7 +535,7 @@ def _shadow_identity_for(
                 risk_window_content_digest=window.content_digest,
                 risk_window_commit_id=window.commit_id,
             )
-        from arctic_route_planning.planners.control_trace_reuse import (
+        from arctic_route_planning.planners._archive.control_trace_reuse import (
             ControlTraceIdentity,
         )
 
@@ -723,7 +723,7 @@ class _TemporalShadowCandidatePlanner:
     ) -> Mapping[Any, Any]:
         # Importing the session identity here keeps P1 absent from the normal
         # formal ingress import graph and makes this adapter shadow-only.
-        from arctic_route_planning.planners.temporal_session import TemporalSessionIdentity
+        from arctic_route_planning.planners._archive.temporal_session import TemporalSessionIdentity
 
         results: dict[Any, Any] = {}
         layer_index = self._layer_index
@@ -1913,7 +1913,7 @@ def _temporal_goal_reuse_available(planner: Any) -> bool:
     if callable(method):
         return True
     try:
-        from arctic_route_planning.planners import temporal_reuse
+        from arctic_route_planning.planners._archive import temporal_reuse
     except ImportError:  # pragma: no cover - candidate module is optional
         return False
     return callable(getattr(temporal_reuse, "try_reuse", None)) or callable(
@@ -1923,7 +1923,7 @@ def _temporal_goal_reuse_available(planner: Any) -> bool:
 
 def _control_trace_reuse_available() -> bool:
     try:
-        from arctic_route_planning.planners import control_trace_reuse
+        from arctic_route_planning.planners._archive import control_trace_reuse
     except ImportError:  # pragma: no cover - candidate module is optional
         return False
     return callable(getattr(control_trace_reuse, "trace_plan", None)) and callable(
@@ -1947,7 +1947,7 @@ def _try_temporal_goal_reuse(
     method = getattr(planner, "reuse_exact_goal", None)
     if not callable(method):
         try:
-            from arctic_route_planning.planners import temporal_reuse
+            from arctic_route_planning.planners._archive import temporal_reuse
         except ImportError:  # pragma: no cover - candidate module is optional
             return None
         method = getattr(temporal_reuse, "try_reuse", None)
@@ -1980,7 +1980,7 @@ def _trace_plan(
 ) -> tuple[Any, Any]:
     """Run one control search through the private trace collector."""
 
-    from arctic_route_planning.planners import control_trace_reuse
+    from arctic_route_planning.planners._archive import control_trace_reuse
 
     result, trace = control_trace_reuse.trace_plan(
         planner,
@@ -2002,7 +2002,7 @@ def _try_control_trace_reuse(
     """Invoke the private conservative control-trace proof, if available."""
 
     try:
-        from arctic_route_planning.planners import control_trace_reuse
+        from arctic_route_planning.planners._archive import control_trace_reuse
     except ImportError:  # pragma: no cover - candidate module is optional
         return None
     method = getattr(control_trace_reuse, "try_reuse", None)
@@ -2143,7 +2143,7 @@ def _goal_certificate(source: Any) -> Any:
             continue
         return candidate() if callable(candidate) else candidate
     try:
-        from arctic_route_planning.planners import temporal_reuse
+        from arctic_route_planning.planners._archive import temporal_reuse
     except ImportError:  # pragma: no cover - candidate module is optional
         return None
     certify = getattr(temporal_reuse, "certify_session", None)

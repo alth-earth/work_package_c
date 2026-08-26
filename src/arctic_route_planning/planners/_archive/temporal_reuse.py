@@ -25,8 +25,7 @@ from math import isfinite
 from typing import TYPE_CHECKING, Any
 
 from arctic_route_planning.errors import PlanningCancelled
-
-from .temporal_session import (
+from arctic_route_planning.planners._archive.temporal_session import (
     TemporalSessionCheckpoint,
     TemporalSessionIdentity,
     TemporalSessionIdentityMismatch,
@@ -36,9 +35,9 @@ from .temporal_session import (
 )
 
 if TYPE_CHECKING:
-    from .temporal_label_astar import TemporalCandidateResult
-    from .temporal_session import TemporalSession
-    from .time_dependent_astar import PlanningRequest
+    from arctic_route_planning.planners._archive.temporal_session import TemporalSession
+    from arctic_route_planning.planners.temporal_label_astar import TemporalCandidateResult
+    from arctic_route_planning.planners.time_dependent_astar import PlanningRequest
 
 
 _CERTIFICATE_EPSILON = 1e-12

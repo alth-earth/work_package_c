@@ -10,7 +10,7 @@ from arctic_route_planning.cost import VesselPerformanceModel
 from arctic_route_planning.domain.models import ObjectiveMode
 from arctic_route_planning.errors import PlanningCancelled
 from arctic_route_planning.grid import RegularGrid
-from arctic_route_planning.planners.control_trace_reuse import (
+from arctic_route_planning.planners._archive.control_trace_reuse import (
     ControlTraceObserver,
     ControlTraceReuseReason,
     ControlTraceReuseStatus,

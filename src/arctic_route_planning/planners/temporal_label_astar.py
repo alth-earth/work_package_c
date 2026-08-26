@@ -307,7 +307,10 @@ class TemporalLabelAStar(TimeDependentAStar):
         # Keep the compatibility wrapper deliberately thin.  The search state
         # is owned by ``TemporalSession`` so one planner can safely create
         # independent sessions for multiple objectives.
-        from .temporal_session import advance_session, create_session
+        from arctic_route_planning.planners._archive.temporal_session import (
+            advance_session,
+            create_session,
+        )
 
         session = create_session(self, request)
         result = advance_session(session)
@@ -318,7 +321,7 @@ class TemporalLabelAStar(TimeDependentAStar):
     def create_session(self, request: PlanningRequest, identity: Any = None) -> Any:
         """Create an internal resumable search session."""
 
-        from .temporal_session import create_session
+        from arctic_route_planning.planners._archive.temporal_session import create_session
 
         return create_session(self, request, identity=identity)
 
@@ -329,21 +332,21 @@ class TemporalLabelAStar(TimeDependentAStar):
     ) -> Any:
         """Create isolated internal sessions for the requested objectives."""
 
-        from .temporal_session import create_session_bundle
+        from arctic_route_planning.planners._archive.temporal_session import create_session_bundle
 
         return create_session_bundle(self, request, objectives)
 
     def advance_session(self, session: Any, expansion_slice: int | None = None) -> Any:
         """Advance one of this planner's internal sessions."""
 
-        from .temporal_session import advance_session
+        from arctic_route_planning.planners._archive.temporal_session import advance_session
 
         return advance_session(session, expansion_slice=expansion_slice)
 
     def checkpoint_session(self, session: Any) -> Any:
         """Return an immutable in-process checkpoint for ``session``."""
 
-        from .temporal_session import checkpoint_session
+        from arctic_route_planning.planners._archive.temporal_session import checkpoint_session
 
         return checkpoint_session(session)
 
@@ -355,7 +358,7 @@ class TemporalLabelAStar(TimeDependentAStar):
     ) -> Any:
         """Restore a session after validating its complete identity fence."""
 
-        from .temporal_session import restore_session
+        from arctic_route_planning.planners._archive.temporal_session import restore_session
 
         return restore_session(self, checkpoint, request=request, identity=identity)
 

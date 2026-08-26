@@ -18,8 +18,7 @@ from arctic_route_planning.cost import VesselPerformanceModel
 from arctic_route_planning.domain.models import ObjectiveMode
 from arctic_route_planning.errors import PlanningCancelled
 from arctic_route_planning.grid import RegularGrid
-from arctic_route_planning.planners.temporal_label_astar import TemporalLabelAStar
-from arctic_route_planning.planners.temporal_reuse import (
+from arctic_route_planning.planners._archive.temporal_reuse import (
     TemporalGoalCertificate,
     TemporalOpenTermination,
     TemporalReuseCertificateError,
@@ -30,7 +29,8 @@ from arctic_route_planning.planners.temporal_reuse import (
     reuse_or_plan,
     try_reuse,
 )
-from arctic_route_planning.planners.temporal_session import TemporalSessionState
+from arctic_route_planning.planners._archive.temporal_session import TemporalSessionState
+from arctic_route_planning.planners.temporal_label_astar import TemporalLabelAStar
 from arctic_route_planning.planners.time_dependent_astar import PlanningRequest, TimeDependentAStar
 from arctic_route_planning.risk import RiskSampler
 

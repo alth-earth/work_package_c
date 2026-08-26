@@ -38,11 +38,11 @@ from arctic_route_planning.cost import VesselPerformanceModel
 from arctic_route_planning.domain.models import ObjectiveMode, PlannerConfig
 from arctic_route_planning.grid import RegularGrid
 from arctic_route_planning.planners import PlanningRequest, TimeDependentAStar
-from arctic_route_planning.planners.control_trace_reuse import (
+from arctic_route_planning.planners._archive.control_trace_reuse import (
     ControlTraceReuseStatus,
     trace_plan,
 )
-from arctic_route_planning.planners.control_trace_reuse import (
+from arctic_route_planning.planners._archive.control_trace_reuse import (
     try_reuse as try_control_trace_reuse,
 )
 from arctic_route_planning.planners.eta_refinement import EtaRefinementPolicy
@@ -50,7 +50,7 @@ from arctic_route_planning.planners.temporal_label_astar import (
     TemporalLabelAStar,
     TemporalSearchLimits,
 )
-from arctic_route_planning.planners.temporal_reuse import (
+from arctic_route_planning.planners._archive.temporal_reuse import (
     TemporalReuseStatus,
     certify_session,
     reuse_or_plan,
@@ -141,13 +141,13 @@ def _implementation_sha256(project_root: Path) -> dict[str, str]:
 
 def _implementation_sha256_p1(project_root: Path) -> dict[str, str]:
     paths = set(_implementation_sha256(project_root))
-    paths.add("src/arctic_route_planning/planners/temporal_session.py")
+    paths.add("src/arctic_route_planning/planners/_archive/temporal_session.py")
     return {relative: _sha256(project_root / relative) for relative in sorted(paths)}
 
 
 def _implementation_sha256_p2(project_root: Path) -> dict[str, str]:
     paths = set(_implementation_sha256_p1(project_root))
-    paths.add("src/arctic_route_planning/planners/temporal_reuse.py")
+    paths.add("src/arctic_route_planning/planners/_archive/temporal_reuse.py")
     return {relative: _sha256(project_root / relative) for relative in sorted(paths)}
 
 
@@ -156,8 +156,8 @@ def _implementation_sha256_p21(project_root: Path) -> dict[str, str]:
         "scripts/validate_temporal_semantics.py": _sha256(
             project_root / "scripts/validate_temporal_semantics.py"
         ),
-        "src/arctic_route_planning/planners/control_trace_reuse.py": _sha256(
-            project_root / "src/arctic_route_planning/planners/control_trace_reuse.py"
+        "src/arctic_route_planning/planners/_archive/control_trace_reuse.py": _sha256(
+            project_root / "src/arctic_route_planning/planners/_archive/control_trace_reuse.py"
         ),
         "src/arctic_route_planning/planners/time_dependent_astar.py": _sha256(
             project_root / "src/arctic_route_planning/planners/time_dependent_astar.py"

@@ -36,6 +36,7 @@ packages = ["src/arctic_route_planning"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
+norecursedirs = ["tests/unit/_archive", "tests/integration/_archive"]
 
 [tool.ruff]
 target-version = "py313"

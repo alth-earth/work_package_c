@@ -26,7 +26,7 @@ from arctic_route_planning.coupling_benchmark import (
 from arctic_route_planning.domain.models import ObjectiveMode
 from arctic_route_planning.endpoints import map_corridor_endpoints
 from arctic_route_planning.planners import PlanningRequest, TimeDependentAStar
-from arctic_route_planning.planners.control_trace_reuse import (
+from arctic_route_planning.planners._archive.control_trace_reuse import (
     ControlTraceReuseStatus,
     trace_plan,
     try_reuse,
@@ -717,8 +717,8 @@ def _run_paired(args: argparse.Namespace) -> int:
                 "src/arctic_route_planning/coupling_benchmark.py": _sha256(
                     project_root / "src/arctic_route_planning/coupling_benchmark.py"
                 ),
-                "src/arctic_route_planning/planners/control_trace_reuse.py": _sha256(
-                    project_root / "src/arctic_route_planning/planners/control_trace_reuse.py"
+                "src/arctic_route_planning/planners/_archive/control_trace_reuse.py": _sha256(
+                    project_root / "src/arctic_route_planning/planners/_archive/control_trace_reuse.py"
                 ),
                 "src/arctic_route_planning/planners/time_dependent_astar.py": _sha256(
                     project_root / "src/arctic_route_planning/planners/time_dependent_astar.py"

@@ -69,7 +69,11 @@ def profile_synthetic_three_objective_planning(
             stats,
             lambda filename, name: "/risk/sampler.py" in filename and name == "sample",
         ),
-        "edge_traversal": _category(stats, lambda _filename, name: name == "_evaluate_edge"),
+        "edge_traversal": _category(
+            stats,
+            lambda _filename, name: name
+            in ("_evaluate_edge", "_evaluate_edge_data", "_evaluate_edge_cached"),
+        ),
         "heuristic": _category(stats, lambda _filename, name: name == "_heuristic"),
         "objective_calculation": _category(
             stats,
