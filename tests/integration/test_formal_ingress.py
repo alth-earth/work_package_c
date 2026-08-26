@@ -536,6 +536,49 @@ def test_single_shadow_track_plan_set_digest_is_repeatable() -> None:
     ]
 
 
+def test_shadow_track_exposes_cpu_gc_and_trace_lifecycle_diagnostics() -> None:
+    prepared, _, _, _ = _prepared_temporal_shadow_case()
+    control = prepared.execute_four_layer_temporal_shadow_track(track="control")
+    candidate = prepared.execute_four_layer_temporal_shadow_track(
+        track="candidate",
+        candidate_mode="control_trace",
+    )
+
+    assert all(item.planner_cpu_ms >= 0 for item in control.timings)
+    assert all(len(item.gc_count_before) == 3 for item in control.timings)
+    assert all(len(item.gc_count_after) == 3 for item in control.timings)
+    assert all(len(item.gc_collections_delta) == 3 for item in control.timings)
+    assert candidate.trace_lifecycle[:3] == ("retained",) * 3
+    assert candidate.trace_lifecycle[3:] == ("retained",) * 9
+
+
+def test_shadow_diagnostic_profiles_are_isolated_from_formal_baseline() -> None:
+    prepared, _, _, _ = _prepared_temporal_shadow_case()
+    forced_cold = prepared.execute_four_layer_temporal_shadow_track(
+        track="candidate",
+        candidate_mode="control_trace",
+        diagnostic_profile="force_main_cold",
+    )
+    normalized = prepared.execute_four_layer_temporal_shadow_track(
+        track="candidate",
+        candidate_mode="control_trace",
+        diagnostic_profile="post_main_normalize",
+    )
+
+    assert forced_cold.status == normalized.status == "SUCCEEDED"
+    assert [item.reuse_status for item in forced_cold.timings[3:6]] == [
+        "COLD_CONTROL"
+    ] * 3
+    assert forced_cold.status_counts == {
+        "TRACE_CAPTURED": 3,
+        "COLD_CONTROL": 9,
+    }
+    assert normalized.trace_lifecycle[:6] == ("retained",) * 6
+    assert normalized.trace_lifecycle[6:] == ("retired",) * 6
+    assert all(not item.trace_context_present for item in normalized.timings[6:])
+    assert normalized.trace_normalization_ms >= 0
+
+
 def test_formal_four_layer_replan_uses_six_hour_suffix_and_new_revision() -> None:
     configuration = load_configuration(
         CONFIG_ROOT, "tromso_isfjorden_july_2026_retrospective_v1"
