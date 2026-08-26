@@ -4,11 +4,12 @@ Content Status:
   - COMPLETED
   - IN_PROGRESS
   - PLANNED
+  - EXPERIMENTAL
 Document Role: CANONICAL
 Scope: C 核心算法现状、证据、正确性边界、改进设计与实施计划
 Canonical For: 工作包 C 核心算法改进实现的首要参考
 Branch: research-validation-system
-Last Verified: 2026-08-26
+Last Verified: 2026-08-27
 Related Canonical Docs:
   - "README.md"
   - "ARCHITECTURE_AND_DECISIONS.md"
@@ -21,7 +22,7 @@ Related Canonical Docs:
 
 # 工作包 C 核心算法现状、改进方案与实施计划
 
-> 本文档将“工作包 C 核心算法实现审计报告”与后续改进方案合并为一个持续维护的计划文档。当前正式基线是带风险、速度和 ETA 耦合的时间依赖 A*；P2.1 研究分支已在同 goal 收紧重复查询上证明相对独立 cold control 的可重复明显耗时优势。M2H 的 holdout 正式窗口通过，但 development 正式窗口仍因多个单元硬门禁失败而使本轮总体 verdict 保持 `FAIL`。候选继续默认关闭、非发布，尚不能声明生产级稳定优势或全局最优。
+> 本文档将“工作包 C 核心算法实现审计报告”与后续改进方案合并为一个持续维护的计划文档。当前正式基线是带风险、速度和 ETA 耦合的时间依赖 A*。P2.1 控制轨迹复用在同 goal 收紧查询上证明约 48% 总耗时改善，但 Winter M2 因 development 窗口多个单元硬门禁失败而总体保持 `FAIL`；P2.1-M2I 因果诊断后停止。P3 SMO-A*（共享记忆化目标 A*）已实现并通过正确性验证，Winter holdout 基准显示 +12.71% wall-time 改善和 100% 路线一致性，但改善幅度和 cache hit rate 未达 P3 目标。所有候选继续默认关闭、非发布，尚不能声明生产级稳定优势或全局最优。
 
 ## 1. 文档定位与更新规则（2026-08-24 20:52 +08:00）
 
@@ -85,7 +86,8 @@ RiskSourcePlanningIngress.execute
 | 单元/合同回归 | `UNIT_PASS` | P0 clean/synced 基线为 `215 passed`；P2.1 算法实现提交 `9ab88298059b2da5ce3f08c8aed995fcff8e4bd8` 执行 `UV_OFFLINE=1 make check` 为 `274 passed`，Ruff、lock/sync、CLI 通过 |
 | 当前 A* 的全局最优性 | `NOT_IMPLEMENTED`（未证明） | 时间桶合并、FIFO、ETA 迭代和连续时间误差均无通用证明 |
 | P2.1 相对独立 cold control 的受限重复查询优势 | `EXPERIMENTAL_PASS` | clean M0/M1 与 Winter formal 均观测到约 47%–79% 总耗时改善；只适用于同 goal 收紧查询，不等于跨 workload 稳定优势 |
-| 相对于传统算法的生产级稳定性能优势 | `NOT_IMPLEMENTED`（未证明） | Winter M2 因 `rolling_0_24h × fastest` 中位回归 `5.94% > 5%` 失败；候选未默认启用 |
+| 相对于传统算法的生产级稳定性能优势 | `NOT_IMPLEMENTED`（未证明） | P2.1 Winter M2 因 `rolling_0_24h × fastest` 中位回归 `5.94% > 5%` 失败；候选未默认启用 |
+| P3 SMO-A* 共享记忆化多目标搜索 | `EXPERIMENTAL` | 12 正确性测试通过；Winter holdout 基准 +12.71% wall-time 改善、14.3% cache hit rate、100% 路线一致；低于 15% 改善和 50% hit rate 目标 |
 | bounded LRU 风险采样缓存 | `EXPERIMENTAL` | direct medium 实验约 14.77% median 改善，但增加约 38.6 MiB RSS，未通过正式 12 路线门禁 |
 
 **上一版审计的状态修正：** 上一版把计数器热循环、环境变量/资源观测耦合、v3 常量散落、层窗口常量、session 无界增长等工程项标为已修复；代码和测试已支持这一结论。本次不再把这些历史问题列为当前算法瓶颈，当前重点转为时间依赖搜索语义、可证明复用和可重复性能证据。
@@ -169,7 +171,8 @@ target.maximum_risk    >= R_trace
 |---|---|---|---|
 | LTCR-TDA* / P2.1 control trace | 同一 goal/objective 的收紧约束轨迹等价证书和安全回退 | 避开 exact cold 爆炸，直接针对已观测的 full/main 重复，C-only | **当前第一优先级** |
 | SIPP-like safe-interval search | 将 hard-mask 时间区间显式放入状态，可表达等待 | 需先定义保守 safe interval，软风险不能误判为绝对安全 | P0 后小规模实验 |
-| ARA*/Anytime weighted A* | 先求可行解，再用 epsilon 收敛换取时间预算内的质量 | 可在 C 内独立实现，但必须报告相对 oracle 的代价差 | 备选基线/时间预算实验 |
+| SMO-A*（Shared-Memoization Objective-A*） | 三个目标共享 per-call 边遍历缓存，跳过重复风险采样 | C-only 纯记忆化，不改变搜索结构；所有层均等受益 | **当前第二优先级**；已实现，基准未达 15% 目标 |
+| ARA*/Anytime weighted A* | 先求可行解，再用 epsilon 收敛换取时间预算内的质量 | 可在 C 内独立实现，但必须报告相对 oracle 的代价差 | 备选方案（SMO-A* 不达标时启动） |
 | Shared NAMOA*-like | 对时间、风险、距离/转向维护 Pareto 标签，减少三目标重复 | 标签可能爆炸，且 temporal dominance 尚未定义 | 第二阶段候选 |
 | MOPBD* | 在局部风险变化和稳定状态下复用多目标搜索树 | 需要增量差分索引、局部变化假设和更强证明 | 远期研究 |
 | D* Lite/LPA* | 借鉴增量队列和边成本变化更新 | 经典假设不直接覆盖时变 RiskFrame；不能只改名 | 仅作理论参考 |
@@ -187,7 +190,7 @@ target.maximum_risk    >= R_trace
 | P1 会话骨架 | 在 C 内实现 per-objective 可恢复 session、OPEN/前驱/标签快照和 input/config/model digest fence | 不跨目标/代际复用；取消、generation、revision、fail-closed 回归通过 | `UNIT_PASS` |
 | P2 same-goal monotonic reuse | 实现同一目标、同一输入下 exact hit 与收紧时域/风险约束的证书迁移，保留 baseline 回退 | M0/M1 与 control 语义一致；证书可重算；命中零搜索扩展；失败自动回退 | `UNIT_PASS`（M0 性能 FAIL） |
 | P2.1 control trace reuse | 为正式 control 增加默认关闭的历史写入轨迹证书；只在同 goal 收紧约束保持整段执行轨迹时复用 | transient-label 反例 fail-closed；M0 总耗时至少改善 20%；M1 两规模 median 至少改善 15% | `EXPERIMENTAL_PASS`（M0/M1）；Winter M2 `FAIL` |
-| P3 full/anchor reuse | 为 anchor 计算 `U_A/LB_A`，证书成立才复用 prefix；将四层集成到影子分支 | M1 至少 5 次 paired run；无单层硬回归；无证书误用 | `PLANNED` |
+| P3 SMO-A* / full-anchor reuse | SMO-A* 共享记忆化已实现；full-anchor `U_A/LB_A` 证书复用保持 `PLANNED` | SMO-A*: 路线一致 PASS、cache hit rate >= 50%、wall >= 15%；full-anchor: M1 >= 5 次 paired | SMO-A* `EXPERIMENTAL`（基准未达标）；full-anchor `PLANNED` |
 | P4 formal shadow | Winter 正式 ingress、4×3、12 路线，control/candidate 双轨 | M2 通过确定性、合同、资源和性能阈值；不覆盖冻结 artifact | `IMPLEMENTED`；原始 M2 `FAIL`，M2H holdout `PASS`、development `FAIL` |
 | P5 默认启用评审 | 仅在重复正式证据支持时改变默认开关，并更新本文档/CHANGELOG | 通过审批、回滚演练和新 experiment identity；否则保持 baseline | `PLANNED` |
 | P6 多目标/自适应后续 | NAMOA*/MOPBD*/自适应网格等独立提案 | 必须先证明 P0/P3 的收益不足且合同必要性成立 | `DEFERRED` |
@@ -340,7 +343,8 @@ M0 r1 暴露 JSON/SHA 热路径 overhead 15%–20%，随后改为固定网络字
 3. 上一版 2.2.2 自适应/非均匀网格方向保留但暂缓，只有固定网格瓶颈和合同必要性均有证据时才启动。
 4. 所有性能结论必须来自同输入、同边评估器、重复运行的 paired benchmark；单次 Winter wall time 只能称为工程观察。
 5. 重大算法选择、跨包合同变化和默认开关变化，需要在本文档记录决定、证据、owner、commit 和回滚方式；跨包事项同时走正式提案。
-6. P2.1 原始 Winter M2 因 `rolling_0_24h × fastest` 回归 `5.94% > 5%` 判 `FAIL`；M2E 完成 cold-path 对称化，M2F/M2G 因 host swap 证据不足停止。M2H 在连续零 host swap 的受控环境中完成双窗口 screening：holdout 正式 M2 `PASS`，development 正式 M2 因 `executable_0_6h × low_risk` 与三个 rolling 单元超过 5% 门禁而 `FAIL`，故 P2.1 总体仍 `FAIL`，candidate 保持默认关闭。下一步只能针对这些失败单元做新的诊断计划；P3、2.2.2 和 P5 继续延期。
+6. P2.1 原始 Winter M2 因 `rolling_0_24h × fastest` 回归 `5.94% > 5%` 判 `FAIL`；M2E 完成 cold-path 对称化，M2F/M2G 因 host swap 证据不足停止。M2H 在连续零 host swap 的受控环境中完成双窗口 screening：holdout 正式 M2 `PASS`，development 正式 M2 因 `executable_0_6h × low_risk` 与三个 rolling 单元超过 5% 门禁而 `FAIL`，故 P2.1 总体仍 `FAIL`，candidate 保持默认关闭。M2I 因果诊断后停止 P2.1 改进。
+7. P3 SMO-A* 已实现并通过 12 项正确性测试，Winter holdout 基准显示 +12.71% wall-time 改善和 100% 路线一致性，但改善低于 15% 目标、cache hit rate 14.3% 低于 50% 目标、RSS 增长约 4 倍。SMO-A* 保持 `EXPERIMENTAL`，不进入正式 M2。下一步需在 development bundle 验证一致性、分析 cache miss 构成并评估 RSS 优化；若仍不达标则启动 ARA* 备选方案。P2.1 M2 的 FAIL 记录和构件原样保留。
 
 **开放问题：** 非 FIFO 情形是否进一步采用 label-correcting；ETA 迭代的保守误差模型；P3 anchor 证书的浮点容差；P2.1 cold control 旁路是否残留稳定开销，以及 `rolling_0_24h × fastest` 的 `5.94%` 回归能否在不放宽门禁的前提下由实现性诊断解释和消除。Winter 已证明每次自然产生 3 个 full→main 零搜索 hit，并确认约 48% 总 wall-time 改善，但单元硬门禁失败意味着不能宣称生产级稳定加速。独立 FIFO 分类器和 exact 标签安全支配仍是后续候选。任何资源或标签语义变更必须先记录新的实验身份与正确性回归，不能用“全局最优”“稳定加速”或“生产级优势”代替证据。
 
@@ -385,7 +389,7 @@ M0 r1 暴露 JSON/SHA 热路径 overhead 15%–20%，随后改为固定网络字
 - 本轮 A→B→C 是同一严寒 identity 的 `REAL_E2E_PASS` 复核，不是新增环境样本，也不是独立外部有效性证明。
 - 下一轮先执行：至少 2 个独立 Winter `ScenarioRunGroup`（含 1 个 holdout）的 A→B→C 复核；样本纳入规则先于路线结果冻结；每个新 bundle 使用新的 RunContext/B commit/C experiment identity。P3、2.2.2、P5 继续延期，除非后续证据证明合同或固定网格是必要瓶颈。
 
-**本次更新记录：** 将旧的“实现审计报告”重整为现状 + 证据 + 正确性边界 + LTCR-TDA* 方案 + 分阶段计划 + benchmark/回滚门禁；现已完成 P0 exact-time candidate、独立 oracle、ETA 收敛器、P1 per-objective 可恢复 session 和 P2 same-goal monotonic certificate reuse 的 `UNIT_PASS`，并实现默认关闭、非发布的 P2.1/P4 formal shadow。P2 没有通过 M0 性能门禁，旧 exact-temporal P4a 没有通过 M2 资源/完整路线门禁；P2.1 已通过 clean M0/M1，并在 Winter formal 中取得 `47.86%` 总耗时改善、完整语义和资源通过，但因一个 cold 单元回归 `5.94%` 而严格判 M2 `FAIL`。候选仍只证明受限 control 执行轨迹等价，不证明全局最优或生产级稳定优势。本轮已完成轻量 cold-path 诊断、同一严寒 identity 的 A→B→C 复核和样本盘点；下一轮转入至少两个独立 Winter ScenarioRunGroup（含 holdout）的验证，P3、2.2.2 和 P5 继续延期。后续修改直接在本文档对应章节更新，不再创建同主题文档。
+**本次更新记录：** 将旧的“实现审计报告”重整为现状 + 证据 + 正确性边界 + 改进方案 + 分阶段计划 + benchmark/回滚门禁。P0/P1/P2 达到 `UNIT_PASS`；P2.1 在 Winter formal 取得约 48% 总耗时改善但因单元硬门禁失败判 M2 `FAIL`，M2I 诊断后停止。P3 SMO-A* 已实现、通过 12 项正确性测试并在 Winter holdout 基准取得 +12.71% 改善和 100% 路线一致，但未达 15% 改善和 50% cache hit rate 目标，保持 `EXPERIMENTAL`。所有候选默认关闭、非发布。后续修改直接在本文档对应章节更新，不再创建同主题文档。
 
 ### P2.1-M2E 冷路径对称化与诊断收口记录（2026-08-26）
 
@@ -497,7 +501,7 @@ clean smoke 构件 `/root/my_project/.runtime/experiments/winter-c-p21-m2e-gate-
 
 **构件与复核入口。** 三组完整诊断构件及 `manifest.json`、`cases.jsonl`、`comparison-summary.json`、reuse sidecar 均原样保留在上述目录，供后续审计；没有删除有效数据或中间证据。下一次工作只能以本文档为 SSOT，在新的 experiment identity 下重新提出 P3 或其他替代方案，并继续保持含潮总流输入与现有合同边界。
 
-### P3 SMO-A* 实现、正确性验证与 Winter 基准（2026-08-27 00:30 +08:00）
+### 【2026-08-27 | EXPERIMENTAL】P3 SMO-A* 实现、正确性验证与 Winter 基准
 
 P2.1-M2I 停止后，按本文档要求建立独立 P3 计划。P3 选择 SMO-A*（Shared-Memoization Objective-A*）作为新的候选算法，不修改 P2.1 的控制轨迹复用路径、不改变 B/C/D 合同、不改变正式 A* 默认。所有 P3 构件为研究验证性质，candidate 保持默认关闭、非发布。
 
