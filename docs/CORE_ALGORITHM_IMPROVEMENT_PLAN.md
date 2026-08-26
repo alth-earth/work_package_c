@@ -476,3 +476,23 @@ clean smoke 构件 `/root/my_project/.runtime/experiments/winter-c-p21-m2e-gate-
 其余单元通过，且总体收益门禁通过；因此该窗口的 `m2_gate_verdict=FAIL`，本轮总体仍为 `FAIL`。manifest 的 `runner_failures=1` 是 runner 对上述 M2 gate 失败的计数，不是 worker 异常：4 个案例均已正常完成，`failed_cases=0`，没有 OOM/timeout 或数据/合同错误。
 
 **当前决策与下一步。** M2H 证明 holdout 窗口在新资源门禁下可通过，也证明 development 窗口的总体复用收益仍明显；但 development 的 objective/layer 局部回归仍是冻结硬门禁失败，不能据此启用 candidate 或宣称跨窗口生产级稳定加速。保留四个正式/筛选构件、输入 bundle、B risk-store、RunContext、ExecutionSpec、detided 退役 ledger、M2/M2G 历史失败证据和本轮资源观测，不删除可审计数据，不执行择优重跑。下一轮必须先建立新的诊断 experiment identity，针对 `executable × low_risk` 与三个 `rolling` 单元拆分 planner/旁路/缓存及系统抖动，再由本文档重新批准是否复测；不得放宽 5% 门禁、减少重复、改变 workload 或把 holdout PASS 当作总体 PASS。P3、2.2.2 和 P5 继续延期，candidate 保持默认关闭、非发布。
+
+### P2.1-M2I 全轨迹因果诊断与消融结论（2026-08-26 22:28 +08:00）
+
+本轮按 M2I 计划执行了“development baseline → 两个最小消融”的完整 4-layer track 诊断。运行只使用已有 development `total_with_tide` bundle 与 B risk-store，不下载或重建数据，不改变 B/C/D 合同、5% 性能门禁、正式 A* 默认路径或发布边界。所有构件均为 `diagnostic_only=true`、shadow-only；候选仍未写入 formal latest、replanning baseline、frozen artifact 或 production。
+
+**固定身份与证据完整性。** C 固定在 `e81573da6f5d573a8eac1839609a26fb8fabc7f7`；baseline 使用 orchestrator `88e2ee41e193d1c6413ef63d4626781e7b856d6f`，两个消融使用 `b978fa3c2f848216dcfeb62e27a6f93c569bb735`。baseline 为 8 个交替顺序 case（4 control-first、4 candidate-first），每个消融为 6 个平衡 case（3+3）；三组均 `evidence_complete=true`，所有 case `status=PASS`、`failed_cases=0`，资源证据中 worker CPU 绑定一致、进程 `VmSwap` 增量为 0，WSL cgroup 峰值约 334 MB、swap 为 0。manifest 的 `status=FAIL`/`runner_failures=1` 来自诊断门禁失败，不是 worker 异常。
+
+**结果摘要（`median_regression_percent`：正值为 candidate 回归，负值为 candidate 更快）。**
+
+| profile / 构件 | 重复与复用计数 | 四个焦点单元 overall median | 失败门禁与最大焦点顺序差 |
+|---|---|---|---|
+| baseline：`winter-c-p21-m2i-diagnostic-development-20260826-r1/` | 8；`3 trace + 3 HIT + 6 cold` | `+0.5645% / -3.2358% / -3.0654% / +0.2366%` | overall 与每顺序 median 通过；`rolling × recommended` 顺序差 `5.9400pp`，`focus_cell_order_gap_le_5pp=FAIL` |
+| `force-main-cold`：`winter-c-p21-m2i-ablation-force-main-cold-20260826-r1/` | 6；`3 trace + 0 HIT + 9 cold`（按消融定义） | `-3.5591% / -5.2135% / -3.1795% / -3.0692%` | overall/per-order median 通过；`rolling × fastest` 顺序差 `5.2873pp`，顺序门禁仍 `FAIL` |
+| `post-main-normalize`：`winter-c-p21-m2i-ablation-post-main-normalize-20260826-r1/` | 6；`3 trace + 3 HIT + 6 cold`，生命周期证据完整 | `+3.2280% / +1.0126% / +2.1054% / +2.4362%` | `executable × low_risk` 超 overall `3%`（`3.2280%`）；最大焦点顺序差 `rolling × low_risk=8.6637pp`，门禁 `FAIL` |
+
+焦点列顺序依次为：`executable_0_6h × low_risk`、`rolling_0_24h × fastest`、`rolling_0_24h × low_risk`、`rolling_0_24h × recommended`。`force-main-cold` 的结果不能作为候选收益证据：它故意取消 main 层 zero-search reuse，改变了被比较的工作量和 P2.1 适用性；虽然整体中位数更快，仍未消除顺序门禁。`post-main-normalize` 没有改善 baseline，反而使 overall 与顺序差异变差，因此不实施该生命周期改动。
+
+**因果判定与停止决策。** 当前证据支持“结果对执行顺序及 full→main 重复工作路径敏感”，但不支持已找到一个可安全推广的 cache/trace 生命周期修复。两种允许的最小消融都没有同时满足焦点 overall、per-order 和 `≤5pp` 顺序门禁；不能把 `force-main-cold` 的改变工作量误报成算法优势，也不能把 normalization 失败包装成架构性结论。因此本轮按停止规则**停止 P2.1-M2I**：不实施修复、不进入 development/holdout screening、不执行条件式正式 M2，也不择优重跑或放宽阈值。P2.1 M2 总体继续为 `FAIL`，candidate 保持默认关闭、非发布；P3、2.2.2 和 P5 继续延期，任何后续替代方案须先在本文档建立独立计划和门禁。
+
+**构件与复核入口。** 三组完整诊断构件及 `manifest.json`、`cases.jsonl`、`comparison-summary.json`、reuse sidecar 均原样保留在上述目录，供后续审计；没有删除有效数据或中间证据。下一次工作只能以本文档为 SSOT，在新的 experiment identity 下重新提出 P3 或其他替代方案，并继续保持含潮总流输入与现有合同边界。
