@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import resource
 import sys
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
@@ -12,6 +11,11 @@ from heapq import heappop, heappush
 from itertools import count
 from math import isfinite
 from time import perf_counter
+
+try:
+    import resource
+except ImportError:  # pragma: no cover - resource is unavailable on Windows.
+    resource = None
 
 from arctic_route_planning.cost import (
     KNOT_TO_KM_PER_HOUR,
@@ -285,7 +289,11 @@ class TimeDependentAStar:
                 next_progress = perf_counter()
                 elapsed = next_progress - started
                 rate = counters.expanded / elapsed if elapsed > 0 else 0.0
-                rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
+                rss_mb = (
+                    resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
+                    if resource is not None
+                    else 0.0
+                )
                 horizon_h = request.maximum_elapsed.total_seconds() / 3600.0
                 expanded_line = (
                     f"elapsed={elapsed:.1f}s expanded={counters.expanded} "
