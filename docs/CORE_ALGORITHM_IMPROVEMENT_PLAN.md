@@ -8,7 +8,7 @@ Document Role: CANONICAL
 Scope: C 核心算法现状、证据、正确性边界、改进设计与实施计划
 Canonical For: 工作包 C 核心算法改进实现的首要参考
 Branch: research-validation-system
-Last Verified: 2026-08-25
+Last Verified: 2026-08-26
 Related Canonical Docs:
   - "README.md"
   - "ARCHITECTURE_AND_DECISIONS.md"
@@ -215,6 +215,36 @@ target.maximum_risk    >= R_trace
 
 **明确延期：** P3 不同 anchor/prefix 复用保持 `PLANNED`；上一版 2.2.2 自适应/非均匀网格保持暂缓，不改 B/C 或 C/D 合同、不引入新网格依赖；P5 默认启用评审保持延期，除非正式重复证据、审批和回滚演练全部通过。M2 期间现有 `plan()`、正式 execute 路径、默认开关和冻结构件均不改变。
 
+### 下一轮 Winter 含潮总流闭环与数据治理实施记录（2026-08-26 02:20 +08:00）
+
+本轮把“含潮总流优先”从策略要求落实为正式输入门禁，并在不改变 B/C 合同的前提下完成一套 holdout 闭环。该节是当前执行状态的首要记录；具体原始文件、日志和校验摘要保留在 `.runtime/experiments/` 对应实验目录。
+
+**A：原生网格含潮总流。** 正式 Copernicus 源固定为产品 `ARCTIC_ANALYSISFORECAST_PHY_TIDE_002_015`、数据集 `dataset-topaz6-arc-15min-3km-be`、`dataset_part=originalGrid`。A 使用原生 TOPAZ 北极立体投影的 `x/y` 查询与 2D `latitude/longitude`，对含潮总流不可用时 `require_total_current=True` 直接 fail-closed，不发布 detided 后备。2026-02-22～02-28 holdout 采用 6 个 24 h 分块获取（145 条 current records，6 个 total snapshots，`current_component=total`、`tide_included=true`、无 warnings）；完整 replay `all_required_complete=true`，bundle digest 为 `e2b9c6a95ed112a782b525ca82d0ae68a8fd4aed69c835234e6ccfc8272d091a`，文件 SHA-256 为 `ae08becffe148030b9c5de9f023214cc558821227a1994855f233308e642b9cd`。
+
+**B：必要的曲线网格适配。** TOPAZ `originalGrid` 保留 2D 经纬度和 1D 100 km 投影轴，原 B regrid 只接受一维规则经纬度，因此本轮在 B 内增加了精确、显式、fail-closed 的北极立体投影适配：连续变量线性插值，分类变量最近邻，未知投影/轴/单位拒绝。B `bc.risk-frame.v2` holdout 结果为 `FORMAL_VALIDATED`，145 帧，schema 与 commit readback 均 PASS，commit/content digest 为 `115ad3ab6d7034fabc9428f91c14099b02dff8bb2443569a8d3947187fbb5ff9`。该改动未修改 RiskFrame、风险公式、默认值或跨包合同；B 聚焦测试 `16 passed`、Ruff 通过。
+
+**C：正式输入消费。** C holdout 以同一 B committed window 执行正式四层规划，`cd.four-layer-route-plan-set.v3` 为 12/12 routes、地理完整性 PASS；planning wall `302.692069 s`，peak RSS `198620 KiB`，输出仅写入实验目录。该结果是 `REAL_E2E_PASS` 的 A→B→C 闭环证据，不是 production publication，也不改变冻结 M2 verdict。
+
+**开发窗口与采样身份。** 2026-03-22～03-28 发展窗口优先复用已处理的 72 h 冰浓度/冰厚/波浪筛选数据，保留原筛选 root；在独立 formal root 补齐 GEBCO、Copernicus 冰情/水位，并将 GFS 直链 404 记录为失败证据后使用已批准的 CARRA winter fallback。current 仍必须单独按 `TOTAL_ONLY_FAIL_CLOSED` 获取；任何未完成或非 total 结果不得进入 bundle。该窗口已在独立 RunContext、bundle 和 B/C 实验身份下完成，可计为第二个独立 A→B→C 样本。
+
+**detided 退役。** detided 仅作为强制后备，不再作为本轮正式输入。在本轮清理范围内，A canonical、实验 holdout 和 preflight 中明确标记 `current_component=detided` 的 payload、raw/source current snapshot、detided bundle 及其未注册副本，在完成含潮总流闭环和 ledger 固化后删除；保留小型失败摘要、M2 正式失败证据、总流 bundle/B/C 结果和冻结备份目录。删除清单、SHA-256、硬链接引用与释放空间写入 `/root/my_project/.runtime/experiments/detided-retirement-20260826/cleanup-ledger-v2.json`，不得以清理动作改写历史 M2 结论。
+
+**当前门禁结论。** holdout A→B→C 通过不等于 P2.1 M2 通过；冻结的 `rolling_0_24h × fastest` 单元回归 `5.94% > 5%` 仍为 `FAIL`，candidate 继续默认关闭、非发布。P3、2.2.2 和 P5 继续延期；下一步只在本节记录的新实验身份上进行 P2.1 shadow/重复和第二独立 Winter ScenarioRunGroup，不能用 detided 旧窗口或同一窗口重放冒充独立样本。
+
+### Winter development 窗口收口与 detided 退役完成记录（2026-08-26 03:51 +08:00）
+
+**第二个严寒窗口已完成。** 2026-03-22 00:00～03-28 00:00 UTC development window 复用既有冰浓度、冰厚和波浪处理结果，并补齐其余 A 数据；最终 1212 条记录覆盖 12 类必需数据，其中 `ocean_current` 为 145 条且全部 `current_component=total`、`tide_included=true`。GFS 历史直链 404 作为失败证据保留，风/温度/能见度使用已批准的 CARRA winter fallback；含潮总流仍使用 `TOTAL_ONLY_FAIL_CLOSED`，未把 detided 混入 bundle。
+
+该窗口的 v2 bundle 为 `/root/my_project/.runtime/experiments/a-winter-formal-development-total-20260322/tromso_to_isfjorden_outer_winter_development_total_20260322T000000Z_min144_v2_bundle.json`，`bundle_id=a-bundle-6fb64bb7470bd026bc9b97ea`，bundle digest 为 `6fb64bb7470bd026bc9b97eaa25f4294bfc5c34350afb2b561d4af3d442d214c`，文件 SHA-256 为 `83392d7085b096f4b532f349ae96a2fd838784a49d5ef5d0b05af9fe17df420b`；其 RunContext 为 `run-6f82124f-8548-4153-b006-6c0a6d6130d1`，与 holdout 身份独立。
+
+**A→B→C 结果。** B 输出 `FORMAL_VALIDATED`，145 帧，schema/commit readback PASS，risk content digest 为 `bdfd7964df96ffcad7dd78d9830394a0a91d7fbbfde16c0649d2ba2fb68a00ab`；C 在隔离实验目录完成 `cd.four-layer-route-plan-set.v3` 的 12/12 routes 与 integrity `PASS`，planning wall `341.991636 s`、total wall `344.788310 s`、peak RSS `200840 KiB`。两者均未写 production latest、replanning baseline 或 frozen artifact。
+
+**P2.1 development shadow 只作筛选，不改 M2。** `/root/my_project/.runtime/experiments/winter-c-p21-shadow-development-total-20260826/comparison-summary.json` 包含 2 个交替顺序 case，语义、reuse matrix/timing 和 RSS 通过（median RSS ratio `1.032486`），总体 candidate/control median wall 为 `182.083/345.764 s`，改善 `47.339%`；但 `executable_0_6h × fastest/low_risk` 的筛选回归约 `5.36%/6.42%`，因此 screening `FAIL`，重复数不足以评估 M2（`NOT_EVALUATED_INSUFFICIENT_REPETITIONS`）。不以该结果促进 candidate，也不覆盖冻结的正式 M2 `FAIL`。
+
+**detided 已按要求精确退役。** 在 holdout、development A→B→C 和 P2.1 shadow 完成后，运行 `/root/my_project/work_package_a/scripts/retire_detided_data.py --purge --confirm`，ledger 为 `/root/my_project/.runtime/experiments/detided-retirement-20260826/cleanup-ledger-v2.json`：删除 4356 个 detided payload/raw/sidecar/source 文件及 3 个 detided bundle，共 4359 个文件、1448 条 manifest rows、1,318,695,475 bytes；删除前后均按 SHA-256 与硬链接引用核验。canonical/holdout/preflight 不再有 detided current rows；冻结历史备份目录保留，供审计，不作为当前数据源。小型失败日志、正式 M2 失败证据、含潮总流 bundle 及 B/C 结果继续保留。
+
+**当前结论不变。** 含潮总流已成为严寒正式窗口的实际首选并完成两个独立窗口的 A→B→C 闭环，但 P2.1 正式 M2 仍因 `rolling_0_24h × fastest` 中位回归 `5.94% > 5%` 保持 `FAIL`，candidate 默认关闭、非发布；P3、2.2.2、P5 继续延期。
+
 **实施顺序硬规则：** 先 P0，再 P1/P2；P3 证书失败必须回退；P4 以前不得将候选算法命名为正式生产 planner；P6 不得倒灌到当前合同。
 
 **P2/P4a 实施规格冻结（2026-08-25 00:09 +08:00）：** P2 不停留在普通 exact-key 缓存，而是在同一 start、goal、departure、objective、RiskFrame、generation/revision、网格、船模、代价模型、ETA policy、边采样、搜索限制和 evaluator 身份下，允许把已认证的宽约束结果迁移到更窄的 `maximum_elapsed` 和/或 `maximum_risk` 查询。目标可行域必须是源可行域的子集，且源路线自身满足目标约束；反向放宽、不同目标、不同身份或路线不满足收紧约束时一律 cold candidate。证书必须从 session 当前 labels、incumbent 和过滤 stale 后的有效 OPEN 独立重算，固定记录 `U`、`LB`、epsilon、`OPEN_BOUND/OPEN_EMPTY` 终止原因、session/state digest 和路线语义 digest；命中必须为零新增 expansion 与 edge evaluation。无界全局缓存禁止，每个 objective 只保留一个受身份约束的证书；取消直接传播，不能用 control fallback 掩盖，其他候选失败可从零运行 scratch control 并显式记录 `FALLBACK_CONTROL`。
@@ -321,4 +351,57 @@ M0 r1 暴露 JSON/SHA 热路径 overhead 15%–20%，随后改为固定网络字
 - 新 preflight 构件：`/root/my_project/.runtime/experiments/winter-c-p21-cold-diagnostic-20260825-r1/cold-path-diagnostic.json`。1 次独立 control/candidate paired run 中，route digest、expanded `670`、edge `5310` 一致；candidate `2175.45 ms`、control `2095.92 ms`，回归 `3.79%`，其中 `planner_ms` 差异约 `79.48 ms`，`pre/post` 旁路差异接近零。
 - 该结果只有 1 个样本，仅属于 `PRELIMINARY_OBSERVATION_ONLY`，不能区分测量方差与稳定 planner 状态开销，不能改写 M2 `FAIL`，也不能形成生产性能优势声明。后续若继续取样，必须新建诊断 experiment identity；不得以此自动升级为正式 M2 复跑。
 
-**本次更新记录：** 将旧的“实现审计报告”重整为现状 + 证据 + 正确性边界 + LTCR-TDA* 方案 + 分阶段计划 + benchmark/回滚门禁；现已完成 P0 exact-time candidate、独立 oracle、ETA 收敛器、P1 per-objective 可恢复 session 和 P2 same-goal monotonic certificate reuse 的 `UNIT_PASS`，并实现默认关闭、非发布的 P2.1/P4 formal shadow。P2 没有通过 M0 性能门禁，旧 exact-temporal P4a 没有通过 M2 资源/完整路线门禁；P2.1 已通过 clean M0/M1，并在 Winter formal 中取得 `47.86%` 总耗时改善、完整语义和资源通过，但因一个 cold 单元回归 `5.94%` 而严格判 M2 `FAIL`。候选仍只证明受限 control 执行轨迹等价，不证明全局最优或生产级稳定优势。下一轮限于轻量 cold-path 诊断；P3、2.2.2 和 P5 延期。后续修改直接在本文档对应章节更新，不再创建同主题文档。
+### P2.1-M2D 与 Winter A→B→C 复核完成记录（2026-08-25 19:55 +08:00）
+
+本节是本轮执行结果的当前记录；依据治理标准的 SSOT、时间戳标题、证据分级和历史构件保留要求追加，不重写旧的 M2 失败记录。
+
+**1. cold-path 目标诊断（诊断性，不是正式 M2）**
+
+- 新增可复现脚本：`arctic_route_orchestrator/scripts/winter_cold_target_diagnostic.py`。它只运行 `rolling_0_24h × fastest` 的 paired cold control/candidate 子进程，记录 planner/旁路耗时、expanded/edge、route digest 和 trace context；不调用正式发布路径。
+- 10 对样本构件：`/root/my_project/.runtime/experiments/winter-c-p21-cold-target-diagnostic-20260825-r6/cold-path-diagnostic.json`。
+- 10/10 对路线 digest、expanded `670`、edge `5310` 一致；candidate 状态为 `COLD_CONTROL` 且 trace context 存在。candidate 回归中位数 `2.4465%`，最大 `7.9033%`，最小 `-4.1994%`；planner 差值中位数约 `47.94 ms`。
+- 结论：更支持局部运行方差或 shadow/cold 边界的小额开销，不支持核心算法架构失败；但仍不能宣称该单元稳定满足 `5%` 门禁。
+- 证据等级：`PRELIMINARY_OBSERVATION_ONLY`；`diagnostic_only=true`、`formal_gate_verdict=NOT_APPLICABLE`、`formal_m2_verdict_unchanged=FAIL`。不得用该结果放宽阈值、删除失败单元或启用 candidate。
+
+**2. 新实验身份上的 A→B→C 闭环复核**
+
+- A 复用当前唯一完整的严寒样本：`a-bundle-a2146dd0adbaa7db77a6beb7`，bundle digest `a2146dd0adbaa7db77a6beb7c818e975888600fb31236901fd4af2092069fb71`，2026-02-15T00:00Z～2026-02-21T00:00Z，12 类数据、1212 records。文件 SHA-256 为 `e28bcca682bb1047381d96d574d42c927f28bf5cd26c363f19fff1fff21c3a2f`；identity 以 bundle/RunContext/B commit 的当前 `00:00Z` 结束时间为准，旧文档中的 `12:00Z` 仅作为历史描述保留。
+- B 在隔离输出 `/root/my_project/.runtime/experiments/winter-b-validation-20260825-replay-medium-r2/` 重新生成正式 `bc.risk-frame.v2`：145 frames，commit/content digest `01275645ad90c43874511e593958ca45e0f063e63e82b0547398711a00ec0fde`，`FORMAL_VALIDATED`。模型仍为 `demo_unvalidated`，没有科学校准结论。
+- C 在隔离输出 `/root/my_project/.runtime/experiments/winter-c-validation-20260825-replay-medium-r2/` 完成 `cd.four-layer-route-plan-set.v3`：12/12 routes、integrity `PASS`、planning wall `363.458670 s`、peak RSS `168364 KiB`、published 仅限实验目录。与原 Winter C formal 输出按路线业务字段比较，`business_semantic_mismatch_count=0`。
+- 同一新 B identity 的一次 P2.1 shadow：`/root/my_project/.runtime/experiments/winter-c-p21-shadow-replay-20260825-r1/`，`status=PASS`、`passed_cases=1`、semantic/reuse/swap/resource 边界通过，但因仅 1 次重复，M2 与 screening 均为 `NOT_EVALUATED_INSUFFICIENT_REPETITIONS`；`formal_latest_store_written=false`、`frozen_artifact_written=false`、`production_published=false`。
+- 首次 B 重放曾错误传入仓库根目录而非 A 的公开 `data/` 根目录，失败目录 `/root/my_project/.runtime/experiments/winter-b-validation-20260825-replay-medium/` 保留；修正为 `work_package_a/data` 后通过。这是执行参数纠正，不是数据质量或合同失败。
+- 为使 B 的锁文件反映 A 当前 acquisition extra，本轮在 B 执行离线 `uv lock`，仅更新 B `uv.lock`；`uv lock --check` 已通过。未修改 A→B→C 合同、风险公式、C planner 或默认开关。
+
+**3. 已有样本盘点与下载决策**
+
+- 可复现盘点脚本：`arctic_route_orchestrator/scripts/inventory_winter_samples.py`；构件：`/root/my_project/.runtime/experiments/winter-sample-inventory-20260825-r1/sample-inventory.json`。
+- 盘点到 4 个完整 12 类 bundle：1 个当前可复用 Winter、1 个历史 superseded Winter、2 个 August summer control。当前没有第二个独立且已通过 A 门禁的严寒窗口。
+- 因此本轮不下载、不覆盖、不删除任何已有数据；当前闭环直接复用 active Winter。新增严寒窗口仍是下一阶段的必要验证，不把同一窗口的重放计为独立样本。
+- 后续采集前必须先完成缺口查询、预注册恶劣条件分层和独立 ScenarioRunGroup/holdout 设计，并修正 `/root/my_project/work_package_a/.cdsapirc` 权限至 `0600`；代理变量已存在，但 ecCodes/凭据路径必须按进程注入，不能写入日志。若无真实缺口，不重新下载已有完整类型。
+
+**本轮状态与下一步**
+
+- `P2.1-M2`：仍为 `FAIL`，冻结的 5% 单元门禁、总体收益门禁和“任一单元失败则整体失败”规则不变；candidate 继续默认关闭、非发布。
+- 本轮 A→B→C 是同一严寒 identity 的 `REAL_E2E_PASS` 复核，不是新增环境样本，也不是独立外部有效性证明。
+- 下一轮先执行：至少 2 个独立 Winter `ScenarioRunGroup`（含 1 个 holdout）的 A→B→C 复核；样本纳入规则先于路线结果冻结；每个新 bundle 使用新的 RunContext/B commit/C experiment identity。P3、2.2.2、P5 继续延期，除非后续证据证明合同或固定网格是必要瓶颈。
+
+**本次更新记录：** 将旧的“实现审计报告”重整为现状 + 证据 + 正确性边界 + LTCR-TDA* 方案 + 分阶段计划 + benchmark/回滚门禁；现已完成 P0 exact-time candidate、独立 oracle、ETA 收敛器、P1 per-objective 可恢复 session 和 P2 same-goal monotonic certificate reuse 的 `UNIT_PASS`，并实现默认关闭、非发布的 P2.1/P4 formal shadow。P2 没有通过 M0 性能门禁，旧 exact-temporal P4a 没有通过 M2 资源/完整路线门禁；P2.1 已通过 clean M0/M1，并在 Winter formal 中取得 `47.86%` 总耗时改善、完整语义和资源通过，但因一个 cold 单元回归 `5.94%` 而严格判 M2 `FAIL`。候选仍只证明受限 control 执行轨迹等价，不证明全局最优或生产级稳定优势。本轮已完成轻量 cold-path 诊断、同一严寒 identity 的 A→B→C 复核和样本盘点；下一轮转入至少两个独立 Winter ScenarioRunGroup（含 holdout）的验证，P3、2.2.2 和 P5 继续延期。后续修改直接在本文档对应章节更新，不再创建同主题文档。
+
+### P2.1-M2E 冷路径对称化与诊断收口记录（2026-08-26）
+
+本轮已完成实现修正和增强测试，但未进入正式 M2 重跑。旧正式 M2 `FAIL` 及其原始构件保持不变，candidate 仍默认关闭、非发布。
+
+**实现变更。** C 的 `control_trace` shadow candidate 现在在同一 candidate 轨道中使用一个 planner：full trace、full→main 零搜索复用、rolling/executable cold fallback 共用该轨道的只读边几何缓存；control 与 candidate 仍使用相互独立的 planner。新增 shadow-only `edge_geometry_cache_before/after/delta` 字段，不改变 `RiskFrame`、`RoutePlanV3`、A→B/B→C 合同或正式 `plan()/execute()` 路径。orchestrator runner 增加进程 `VmSwap`/内核 swap 观测、明确的 `NOT_MEASURED` 状态，并将隔离 worker 固定到同一可用 CPU 以降低配对测量抖动；5% 冻结门槛未修改。cold diagnostic runner 现支持 rolling/executable、三目标和不同窗口 anchor。
+
+**代码与合同测试。** C `UV_OFFLINE=1 make check`：`275 passed`；orchestrator unit tests：`100 passed`（仅已有 ecCodes warning）；runner/C 相关 Ruff、py_compile 和 `git diff --check` 均通过。新增测试覆盖单 planner 生命周期、control/candidate 隔离、cache 增量连续性、full→main 命中零 cache 工作，以及 swap 测量缺失时强制失败。
+
+**双窗口定向诊断。** 使用已保留的两套含潮总流窗口，未下载新数据、未写 production/frozen/latest：
+
+- holdout `2026-02-22～02-28`：rolling/fastest（CPU 固定后）10 对中位回归 `+1.58%`；executable/fastest `-0.98%`、low-risk `-2.62%`、recommended（CPU 固定后）`+1.33%`；各目标均 `10/10` route digest、expanded、edge 一致。
+- development `2026-03-22～03-28`：rolling/fastest `-1.81%`；executable/fastest `+2.10%`、low-risk `+4.67%`、recommended `-1.62%`；各目标均 `10/10` route digest、expanded、edge 一致。
+
+构件分别保存在 `.runtime/experiments/winter-c-p21-cold-parity-*`。结果继续属于 `diagnostic_only`，不能改判 M2；development recommended 诊断中有两对 host `pswpin` 增长（进程 `VmSwap` 增量为0），说明当前环境尚不具备无 swap 增长的正式复测条件。由于一个定向单元仍超过本轮预注册的3%诊断余量，且 swap 证据未完全满足 G3，本轮按停止规则不启动 screening 或正式 M2。
+
+**数据与错误中间物。** 两个 total-current bundle、A→B→C 输出、旧失败证据和清理 ledger 均保留；此前一次将 `recommended` 请求误标为 `fastest` 的两对诊断目录已移入系统回收站，不作为证据。detided 不重新引入。
+
+**当前结论与下一步。** 代码层面的 cache 生命周期不对称已消除，冷路径的 route/search 工作量始终一致；但尚未证明所有正式单元在冻结5%门禁下稳定通过。因此 P2.1 M2 仍为 `FAIL/未重入`，P3、2.2.2、P5 继续延期。下一次执行必须先获得 clean/frozen 的相关代码与输入 identity、连续零 swap 证据，再按 holdout→development 顺序各做2次 screening；screening 双窗口均通过后，才允许各窗口4次交替正式重复。

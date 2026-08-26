@@ -239,6 +239,12 @@ class TemporalShadowTimingObservation:
     state_counts: Mapping[str, int] = field(default_factory=dict)
     identity_digest: str | None = None
     identity_summary: Mapping[str, Any] = field(default_factory=dict)
+    # Shadow-only snapshots make cache reuse auditable without changing the
+    # planner or route contracts.  Empty mappings mean that a planner does not
+    # expose this optional diagnostic surface.
+    edge_geometry_cache_before: Mapping[str, int] = field(default_factory=dict)
+    edge_geometry_cache_after: Mapping[str, int] = field(default_factory=dict)
+    edge_geometry_cache_delta: Mapping[str, int] = field(default_factory=dict)
 
     @property
     def expanded_states(self) -> int:
@@ -326,7 +332,7 @@ def _shadow_underlying_planners(planner: Any) -> tuple[Any, ...]:
     """Find private scratch planners while avoiding duplicate wrapping."""
 
     values = [planner]
-    for name in ("_planner", "_control_planner"):
+    for name in ("_planner",):
         child = getattr(planner, name, None)
         if child is not None:
             values.append(child)
@@ -335,6 +341,34 @@ def _shadow_underlying_planners(planner: Any) -> tuple[Any, ...]:
         if value is not None and all(value is not item for item in unique):
             unique.append(value)
     return tuple(unique)
+
+
+def _shadow_edge_geometry_cache_stats(planner: Any) -> dict[str, int]:
+    """Read optional planner cache counters into a JSON-safe shadow snapshot."""
+
+    try:
+        stats = getattr(planner, "edge_geometry_cache_stats", None)
+        if callable(stats):
+            stats = stats()
+        if not isinstance(stats, Mapping):
+            return {}
+        return {
+            str(name): int(value)
+            for name, value in stats.items()
+            if isinstance(value, int) and not isinstance(value, bool)
+        }
+    except (AttributeError, TypeError, ValueError):
+        return {}
+
+
+def _shadow_cache_delta(
+    before: Mapping[str, int],
+    after: Mapping[str, int],
+) -> dict[str, int]:
+    """Return deterministic counter/entry deltas for one shadow operation."""
+
+    names = sorted(set(before) | set(after))
+    return {name: int(after.get(name, 0)) - int(before.get(name, 0)) for name in names}
 
 
 def _shadow_layer_name(index: int) -> str:
@@ -502,6 +536,8 @@ def _shadow_timing(
     trace_context_present: bool = False,
     trace_reuse_used: bool = False,
     identity: Any = None,
+    edge_geometry_cache_before: Mapping[str, int] | None = None,
+    edge_geometry_cache_after: Mapping[str, int] | None = None,
 ) -> TemporalShadowTimingObservation:
     finished = time.perf_counter()
     expanded, diagnostic_edges = _shadow_result_metrics(result)
@@ -515,6 +551,8 @@ def _shadow_timing(
     planner_ms = max(0.0, (post_mark - planner_mark) * 1000.0)
     post_ms = max(0.0, (finished - post_mark) * 1000.0)
     identity_digest, identity_summary = _shadow_identity_summary(identity)
+    cache_before = dict(edge_geometry_cache_before or {})
+    cache_after = dict(edge_geometry_cache_after or {})
     return TemporalShadowTimingObservation(
         layer_index=layer_index,
         layer=_shadow_layer_name(layer_index),
@@ -539,6 +577,9 @@ def _shadow_timing(
         ),
         identity_digest=identity_digest,
         identity_summary=identity_summary,
+        edge_geometry_cache_before=cache_before,
+        edge_geometry_cache_after=cache_after,
+        edge_geometry_cache_delta=_shadow_cache_delta(cache_before, cache_after),
     )
 
 
@@ -555,15 +596,14 @@ class _TemporalShadowCandidatePlanner:
         control_planner: Any | None = None,
         measurement: _ShadowMeasurement | None = None,
     ) -> None:
+        # Keep the old private-call keyword source-compatible for bounded
+        # diagnostics outside C.  It is intentionally ignored: control-trace
+        # cold fallback must run on this same candidate planner.
+        del control_planner
         self._planner = planner
         self._request = request
         self._window = window
         self._candidate_mode = _normalize_temporal_shadow_mode(candidate_mode)
-        if self._candidate_mode == _TEMPORAL_SHADOW_CONTROL_TRACE_MODE and (
-            control_planner is None
-        ):
-            raise ValueError("control_trace mode requires an isolated control planner")
-        self._control_planner = control_planner
         self._layer_index = 0
         self._full_sessions: dict[Any, Any] = {}
         self._full_certificates: dict[Any, Any] = {}
@@ -593,6 +633,7 @@ class _TemporalShadowCandidatePlanner:
         for objective in objectives:
             started = time.perf_counter()
             edge_before = self._measurement.edge_evaluations
+            cache_before = _shadow_edge_geometry_cache_stats(self._planner)
             objective_request = replace(request, objective=objective)
             source_session = self._full_sessions.get(objective)
             source_goal = self._request.goal
@@ -607,6 +648,7 @@ class _TemporalShadowCandidatePlanner:
                     identity=self._trace_identity,
                 )
                 post_started = time.perf_counter()
+                cache_after = _shadow_edge_geometry_cache_stats(self._planner)
                 self._full_traces[objective] = trace
                 self._trace_records.append(
                     _trace_observation(objective, trace, status="TRACE_CAPTURED")
@@ -626,6 +668,8 @@ class _TemporalShadowCandidatePlanner:
                         post_started=post_started,
                         trace_context_present=True,
                         identity=getattr(trace, "identity", None),
+                        edge_geometry_cache_before=cache_before,
+                        edge_geometry_cache_after=cache_after,
                     )
                 )
                 results[objective] = result
@@ -677,6 +721,7 @@ class _TemporalShadowCandidatePlanner:
                         )
                     )
                     if result is not None:
+                        cache_after = _shadow_edge_geometry_cache_stats(self._planner)
                         self._timing_records.append(
                             _shadow_timing(
                                 layer_index=layer_index,
@@ -712,6 +757,8 @@ class _TemporalShadowCandidatePlanner:
                                     window=self._window,
                                     external_identity=self._trace_identity,
                                 ),
+                                edge_geometry_cache_before=cache_before,
+                                edge_geometry_cache_after=cache_after,
                             )
                         )
                         results[objective] = result
@@ -817,6 +864,7 @@ class _TemporalShadowCandidatePlanner:
                     identity_factory=TemporalSessionIdentity,
                 )
             post_started = time.perf_counter()
+            cache_after = _shadow_edge_geometry_cache_stats(self._planner)
             results[objective] = result
             fallback_status = None
             if self._reuse_records:
@@ -850,6 +898,8 @@ class _TemporalShadowCandidatePlanner:
                         window=self._window,
                         external_identity=self._trace_identity,
                     ),
+                    edge_geometry_cache_before=cache_before,
+                    edge_geometry_cache_after=cache_after,
                 )
             )
         return results
@@ -874,9 +924,11 @@ class _TemporalShadowCandidatePlanner:
         return getattr(result, "planning_result", result)
 
     def _control_cold_search(self, request: Any) -> Any:
-        if self._control_planner is None:  # pragma: no cover - guarded in init
-            raise RuntimeError("control-trace shadow has no control planner")
-        result = self._control_planner.plan(request)
+        # Keep one candidate track stateful across full trace capture, the
+        # full->main lookup, and the intentionally cold lower-layer searches.
+        # The enclosing control track is still a separately reconstructed
+        # planner, so no control/candidate state is shared.
+        result = self._planner.plan(request)
         return getattr(result, "planning_result", result)
 
     @property
@@ -931,10 +983,12 @@ class _MeasuredShadowControlPlanner:
         for objective in objectives:
             started = time.perf_counter()
             edge_before = self._measurement.edge_evaluations
+            cache_before = _shadow_edge_geometry_cache_stats(self._planner)
             objective_request = replace(request, objective=objective)
             planner_started = time.perf_counter()
             result = self._planner.plan(objective_request)
             post_started = time.perf_counter()
+            cache_after = _shadow_edge_geometry_cache_stats(self._planner)
             self._timing_records.append(
                 _shadow_timing(
                     layer_index=layer_index,
@@ -952,6 +1006,8 @@ class _MeasuredShadowControlPlanner:
                         objective_request,
                         candidate_mode=_TEMPORAL_SHADOW_CONTROL_TRACE_MODE,
                     ),
+                    edge_geometry_cache_before=cache_before,
+                    edge_geometry_cache_after=cache_after,
                 )
             )
             results[objective] = result
@@ -1032,23 +1088,20 @@ class PreparedRiskPlanning:
             )
             try:
                 if candidate_mode == _TEMPORAL_SHADOW_CONTROL_TRACE_MODE:
-                    # The trace candidate is itself a separately constructed
-                    # control planner; its writes are collected only through
-                    # the opt-in internal API.  A third planner is reserved
-                    # for cold control fallback so counters/state never cross
-                    # the tracks.
+                    # The trace candidate is a separately constructed control
+                    # planner; its writes are collected only through the
+                    # opt-in internal API.  The same candidate planner also
+                    # owns the intentionally cold lower-layer searches so its
+                    # cache/state progression is auditable within one track.
                     candidate_planner = self._private_planner(current)
-                    trace_control_planner = self._private_planner(current)
                 else:
                     candidate_planner = self._private_temporal_candidate(current)
-                    trace_control_planner = None
                 candidate = _run_shadow_strategy(
                     _TemporalShadowCandidatePlanner(
                         candidate_planner,
                         request=self.request,
                         window=current,
                         candidate_mode=candidate_mode,
-                        control_planner=trace_control_planner,
                     ),
                     request=self.request,
                     configuration=self.configuration,
@@ -1125,16 +1178,13 @@ class PreparedRiskPlanning:
                 else:
                     if candidate_mode == _TEMPORAL_SHADOW_CONTROL_TRACE_MODE:
                         candidate_planner = self._private_planner(current)
-                        fallback_planner = self._private_planner(current)
                     else:
                         candidate_planner = self._private_temporal_candidate(current)
-                        fallback_planner = None
                     adapter = _TemporalShadowCandidatePlanner(
                         candidate_planner,
                         request=self.request,
                         window=current,
                         candidate_mode=candidate_mode,
-                        control_planner=fallback_planner,
                         measurement=measurement,
                     )
                     strategy = _run_shadow_strategy(

@@ -379,6 +379,42 @@ def test_control_trace_shadow_reuses_only_full_to_main_and_cold_controls_other_l
     assert recording.queries == [query, query]
 
 
+def test_control_trace_candidate_keeps_one_planner_and_audits_cache_progression(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepared, _, _, _ = _prepared_temporal_shadow_case()
+    original_factory = type(prepared)._private_planner
+    created: list[object] = []
+
+    def record_factory(owner, current):
+        planner = original_factory(owner, current)
+        created.append(planner)
+        return planner
+
+    monkeypatch.setattr(type(prepared), "_private_planner", record_factory)
+    result = prepared.execute_four_layer_temporal_shadow_track(
+        track="candidate",
+        candidate_mode="control_trace",
+    )
+
+    assert result.status == "SUCCEEDED"
+    assert len(created) == 1
+    assert len(result.timings) == 12
+    for previous, current in zip(result.timings, result.timings[1:], strict=False):
+        assert current.edge_geometry_cache_before == previous.edge_geometry_cache_after
+    for timing in result.timings:
+        before = timing.edge_geometry_cache_before
+        after = timing.edge_geometry_cache_after
+        delta = timing.edge_geometry_cache_delta
+        assert set(before) == set(after) == set(delta) == {"entries", "hits", "misses"}
+        assert all(after[name] >= before[name] for name in before)
+        assert all(delta[name] == after[name] - before[name] for name in before)
+    assert all(
+        timing.edge_geometry_cache_delta == {"entries": 0, "hits": 0, "misses": 0}
+        for timing in result.timings[3:6]
+    )
+
+
 def test_control_trace_candidate_failure_is_captured_without_formal_publication(
     monkeypatch,
 ) -> None:
