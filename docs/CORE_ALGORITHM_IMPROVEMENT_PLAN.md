@@ -21,7 +21,7 @@ Related Canonical Docs:
 
 # 工作包 C 核心算法现状、改进方案与实施计划
 
-> 本文档将“工作包 C 核心算法实现审计报告”与后续改进方案合并为一个持续维护的计划文档。当前正式基线是带风险、速度和 ETA 耦合的时间依赖 A*；P2.1 研究分支已在同 goal 收紧重复查询上证明相对独立 cold control 的可重复明显耗时优势，并完成 Winter 正式 shadow，但因一个 cold 单元的中位耗时回归超过冻结上限而判 M2 `FAIL`。候选继续默认关闭、非发布，尚不能声明生产级稳定优势或全局最优。
+> 本文档将“工作包 C 核心算法实现审计报告”与后续改进方案合并为一个持续维护的计划文档。当前正式基线是带风险、速度和 ETA 耦合的时间依赖 A*；P2.1 研究分支已在同 goal 收紧重复查询上证明相对独立 cold control 的可重复明显耗时优势。M2H 的 holdout 正式窗口通过，但 development 正式窗口仍因多个单元硬门禁失败而使本轮总体 verdict 保持 `FAIL`。候选继续默认关闭、非发布，尚不能声明生产级稳定优势或全局最优。
 
 ## 1. 文档定位与更新规则（2026-08-24 20:52 +08:00）
 
@@ -188,7 +188,7 @@ target.maximum_risk    >= R_trace
 | P2 same-goal monotonic reuse | 实现同一目标、同一输入下 exact hit 与收紧时域/风险约束的证书迁移，保留 baseline 回退 | M0/M1 与 control 语义一致；证书可重算；命中零搜索扩展；失败自动回退 | `UNIT_PASS`（M0 性能 FAIL） |
 | P2.1 control trace reuse | 为正式 control 增加默认关闭的历史写入轨迹证书；只在同 goal 收紧约束保持整段执行轨迹时复用 | transient-label 反例 fail-closed；M0 总耗时至少改善 20%；M1 两规模 median 至少改善 15% | `EXPERIMENTAL_PASS`（M0/M1）；Winter M2 `FAIL` |
 | P3 full/anchor reuse | 为 anchor 计算 `U_A/LB_A`，证书成立才复用 prefix；将四层集成到影子分支 | M1 至少 5 次 paired run；无单层硬回归；无证书误用 | `PLANNED` |
-| P4 formal shadow | Winter 正式 ingress、4×3、12 路线，control/candidate 双轨 | M2 通过确定性、合同、资源和性能阈值；不覆盖冻结 artifact | `IMPLEMENTED`；exact-temporal 与 P2.1 control-trace Winter M2 均 `FAIL` |
+| P4 formal shadow | Winter 正式 ingress、4×3、12 路线，control/candidate 双轨 | M2 通过确定性、合同、资源和性能阈值；不覆盖冻结 artifact | `IMPLEMENTED`；原始 M2 `FAIL`，M2H holdout `PASS`、development `FAIL` |
 | P5 默认启用评审 | 仅在重复正式证据支持时改变默认开关，并更新本文档/CHANGELOG | 通过审批、回滚演练和新 experiment identity；否则保持 baseline | `PLANNED` |
 | P6 多目标/自适应后续 | NAMOA*/MOPBD*/自适应网格等独立提案 | 必须先证明 P0/P3 的收益不足且合同必要性成立 | `DEFERRED` |
 
@@ -340,7 +340,7 @@ M0 r1 暴露 JSON/SHA 热路径 overhead 15%–20%，随后改为固定网络字
 3. 上一版 2.2.2 自适应/非均匀网格方向保留但暂缓，只有固定网格瓶颈和合同必要性均有证据时才启动。
 4. 所有性能结论必须来自同输入、同边评估器、重复运行的 paired benchmark；单次 Winter wall time 只能称为工程观察。
 5. 重大算法选择、跨包合同变化和默认开关变化，需要在本文档记录决定、证据、owner、commit 和回滚方式；跨包事项同时走正式提案。
-6. P2.1 Winter M2 已完成并因一个 cold 单元回归 `5.94% > 5%` 判 `FAIL`；后续 M2E 已完成 cold-path 对称化，M2F 虽通过 clean smoke，但在正式 screening 首个 worker 期间触发 host swap 增量而按 G3 停止，候选保持默认关闭。下一次必须先获得连续零 host swap 与完整资源证据，才可重新开始 screening；P3、2.2.2 和 P5 继续延期。
+6. P2.1 原始 Winter M2 因 `rolling_0_24h × fastest` 回归 `5.94% > 5%` 判 `FAIL`；M2E 完成 cold-path 对称化，M2F/M2G 因 host swap 证据不足停止。M2H 在连续零 host swap 的受控环境中完成双窗口 screening：holdout 正式 M2 `PASS`，development 正式 M2 因 `executable_0_6h × low_risk` 与三个 rolling 单元超过 5% 门禁而 `FAIL`，故 P2.1 总体仍 `FAIL`，candidate 保持默认关闭。下一步只能针对这些失败单元做新的诊断计划；P3、2.2.2 和 P5 继续延期。
 
 **开放问题：** 非 FIFO 情形是否进一步采用 label-correcting；ETA 迭代的保守误差模型；P3 anchor 证书的浮点容差；P2.1 cold control 旁路是否残留稳定开销，以及 `rolling_0_24h × fastest` 的 `5.94%` 回归能否在不放宽门禁的前提下由实现性诊断解释和消除。Winter 已证明每次自然产生 3 个 full→main 零搜索 hit，并确认约 48% 总 wall-time 改善，但单元硬门禁失败意味着不能宣称生产级稳定加速。独立 FIFO 分类器和 exact 标签安全支配仍是后续候选。任何资源或标签语义变更必须先记录新的实验身份与正确性回归，不能用“全局最优”“稳定加速”或“生产级优势”代替证据。
 
@@ -442,3 +442,37 @@ clean smoke 构件 `/root/my_project/.runtime/experiments/winter-c-p21-m2e-gate-
 **数据、发布与清理。** 本轮未下载、修改或重新生成 A/B 数据；holdout/development 两套 `total_with_tide` bundle、B risk-store、RunContext、ExecutionSpec、detided 退役 ledger 和旧失败构件均保留。新建构件仅为小型 manifest、输入身份、endpoint mapping、空 cases 和资源停止 sidecar；没有错误 payload 或大体积中间数据可清理，故不删除可审计构件。没有写入 formal latest、frozen、production 或 presentation store，也未引入 detided。
 
 **当前结论与后续条件。** P2.1 M2 仍为 `FAIL/未重入`；本轮只能证明“当前宿主机即使使用无 swap cgroup 也无法满足全局 host swap 门禁”，不能证明算法性能失败。下一轮必须在宿主机连续零 swap 且完整 CPU/cache 证据成立后，或在能同时隔离并观测零 host swap 的外部 runner 上，从 holdout 2 次 screening 重新开始；两个窗口 screening 全部通过后才允许各窗口 4 次正式重复。P3、原方案 2.2.2、自适应网格和 P5 继续延期。
+
+### P2.1-M2H 条件式 screening 与双窗口正式复测记录（2026-08-26 18:45 +08:00）
+
+本轮按 M2G 之后的条件式方案执行“资源资格确认 → holdout screening → development screening → 条件式双窗口正式 M2”。本轮不下载或重建数据，不改变 5% 性能门禁，不写入 formal latest、replanning baseline、frozen artifact 或 production；M2H 的 holdout 通过不能覆盖 development 失败或历史 M2 失败。
+
+**执行边界与可重复性。** 使用现有两套完整严寒 `total_with_tide` 输入：holdout bundle 文件 SHA-256 为 `ae08becffe148030b9c5de9f023214cc558821227a1994855f233308e642b9cd`，risk content digest 为 `115ad3ab6d7034fabc9428f91c14099b02dff8bb2443569a8d3947187fbb5ff9`；development bundle 文件 SHA-256 为 `83392d7085b096f4b532f349ae96a2fd838784a49d5ef5d0b05af9fe17df420b`，risk content digest 为 `bdfd7964df96ffcad7dd78d9830394a0a91d7fbbfde16c0649d2ba2fb68a00ab`。两套输入均为 145 帧、含潮总流、独立 RunContext/B commit，detided 没有重新引入。C 与 orchestrator 工作树在运行前 clean，分别固定在 `bd70fff224ad5414d081f96afaef841f07ba0adf` 与 `93e61b48f5f1555c83b86c297125e946a5ee94fc`；C `uv.lock` SHA-256 为 `8893cb8387825ca4890ed808f4a98b02ba938337752971dacc3e77f859164f22`，orchestrator 为 `0fc5cdbc4e94799d1ecb945c16a92b7d12f532d2447f69bae4e4578d0019ce01`。
+
+运行使用 `control-trace`、`isolated`、`alternate`，每个 worker 固定同一 CPU；systemd cgroup 设置 `MemoryMax=4G`、`MemorySwapMax=0`、`OOMPolicy=stop`。WSL 本地 swap 已关闭，预检和四个运行阶段的 host `pswpin/pswpout` 均保持零，未出现 OOM、timeout 或进程 `VmSwap` 增长。这里的 WSL 内存状态是本机运行保障，不是项目级资源要求。
+
+**代码与测试门禁。** C `UV_OFFLINE=1 make check` 为 `275 passed`；orchestrator `tests/unit/test_winter_p2_shadow.py` 为 `24 passed`，此前排除既有超长 formal fixture 的套件为 `117 passed, 1 warning`；Ruff、`py_compile` 和 `git diff --check` 通过。本轮未修改算法或合同代码，运行构件只绑定上述实现与输入身份。
+
+**screening 结果（每窗口 2 次重复）。** 两个窗口均通过 screening，且均为 2/2 case `PASS`；由于重复数不足，screening manifest 的正式 M2 verdict 正确保持 `NOT_EVALUATED_INSUFFICIENT_REPETITIONS`。
+
+| 窗口 | 构件 / experiment_id | 总 wall median 改善 | RSS median ratio | 语义/确定性/复用/CPU/swap | screening |
+|---|---|---:|---:|---|---|
+| holdout | `winter-c-p21-m2h-screening-holdout-20260826-r1/` / `winter-p2-shadow-v3-dd5b1449f0211e38` | `48.1504%` | `0.9953` | 全部 `PASS` | `PASS` |
+| development | `winter-c-p21-m2h-screening-development-20260826-r1/` / `winter-p2-shadow-v3-bd4e7c9b939be228` | `47.7234%` | `1.0032` | 全部 `PASS` | `PASS` |
+
+两个 screening 构件均为 shadow-only，未发布候选；其形式字段中的 trace-source formal gate 因样本数不足显示 `NOT_MEASURED`，不应与 screening 自身的 trace-source gate 混淆。
+
+**正式 holdout M2。** 构件为 `/root/my_project/.runtime/experiments/winter-c-p21-m2h-formal-holdout-20260826-r1/`，`experiment_id=winter-p2-shadow-v3-34d7cc036fed1790`。4/4 case `PASS`，`m2_gate_verdict=PASS`；总体 candidate/control wall median 为 `165.311/321.383 s`，改善 `48.5625%`，P95 改善 `48.8010%`，RSS median ratio `0.9964`。12 路线语义与完整性、确定性、复用矩阵与 timing、CPU、swap、trace-source overhead 均 `PASS`，每轮均得到预期 `3 trace captured + 3 zero-search HIT + 6 cold`。`production_published=false`、`formal_latest_store_written=false`、`frozen_artifact_written=false`。
+
+**正式 development M2。** 构件为 `/root/my_project/.runtime/experiments/winter-c-p21-m2h-formal-development-20260826-r1/`，`experiment_id=winter-p2-shadow-v3-5533d32e6afd91a6`。4/4 case 本身均 `PASS`，路线语义、确定性、复用、CPU、swap 和 trace-source overhead 均通过；总体 candidate/control wall median 为 `178.211/329.076 s`，改善 `45.8449%`，P95 改善 `46.1634%`，RSS median ratio `0.9993`。但冻结的“任一 layer/objective 单元不得回归超过 5%”门禁失败：
+
+| 失败单元 | median 改善（负值为回归） | P95 回归 |
+|---|---:|---:|
+| `executable_0_6h × low_risk` | `-7.8513%` | `9.2793%` |
+| `rolling_0_24h × fastest` | `-5.8632%` | `4.0090%` |
+| `rolling_0_24h × low_risk` | `-6.2755%` | `16.0324%` |
+| `rolling_0_24h × recommended` | `-6.6599%` | `18.3608%` |
+
+其余单元通过，且总体收益门禁通过；因此该窗口的 `m2_gate_verdict=FAIL`，本轮总体仍为 `FAIL`。manifest 的 `runner_failures=1` 是 runner 对上述 M2 gate 失败的计数，不是 worker 异常：4 个案例均已正常完成，`failed_cases=0`，没有 OOM/timeout 或数据/合同错误。
+
+**当前决策与下一步。** M2H 证明 holdout 窗口在新资源门禁下可通过，也证明 development 窗口的总体复用收益仍明显；但 development 的 objective/layer 局部回归仍是冻结硬门禁失败，不能据此启用 candidate 或宣称跨窗口生产级稳定加速。保留四个正式/筛选构件、输入 bundle、B risk-store、RunContext、ExecutionSpec、detided 退役 ledger、M2/M2G 历史失败证据和本轮资源观测，不删除可审计数据，不执行择优重跑。下一轮必须先建立新的诊断 experiment identity，针对 `executable × low_risk` 与三个 `rolling` 单元拆分 planner/旁路/缓存及系统抖动，再由本文档重新批准是否复测；不得放宽 5% 门禁、减少重复、改变 workload 或把 holdout PASS 当作总体 PASS。P3、2.2.2 和 P5 继续延期，candidate 保持默认关闭、非发布。
