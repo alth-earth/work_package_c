@@ -3,7 +3,7 @@
 >
 > - 文件角色：共享 RunContext 与 C v2/v3 输出的稳定迁移操作说明。
 > - 改造时间：2026-08-14（Asia/Shanghai）。
-> - 原文件去向：`SHARED_CONTEXT_MIGRATION.archive-20260814-pre-governance.md`。
+> - 原文件去向：`docs/archive/SHARED_CONTEXT_MIGRATION.archive-20260814-pre-governance.md`。
 > - 改造原因：将技术迁移顺序与冲刺日历分离，并补充 orchestrator 和 provenance/calibration 边界。
 
 # 共享配置与 v2/v3 合同迁移

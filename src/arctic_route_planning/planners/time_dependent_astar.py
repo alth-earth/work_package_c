@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
@@ -43,6 +42,17 @@ from .errors import (
 
 type HeadingCode = tuple[int, int] | None
 type State = tuple[Node, int, HeadingCode]
+
+# Label relaxation tolerance: costs closer than this are treated as equal,
+# absorbing floating-point noise from the equivalent-hours accumulator.
+_COST_EPSILON = 1e-12
+
+# Two refinement rounds keep ETA and environment-dependent speed mutually
+# consistent without hiding a complex optimizer inside the baseline: round one
+# samples risk with a calm-water ETA estimate, round two re-estimates travel
+# time with the sampled environment speed.  Further rounds would change the
+# ETA by less than the risk frames' temporal resolution.
+_EDGE_REFINEMENT_ROUNDS = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,8 +161,10 @@ class _EdgeTraversal:
     source_risk_ids: tuple[str, ...]
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class _Counters:
+    """Mutable hot-loop accumulator; snapshotted into SearchMetrics on exit."""
+
     expanded: int = 0
     generated: int = 0
     unique: int = 1
@@ -235,51 +247,104 @@ class TimeDependentAStar:
         }
 
     def plan(self, request: PlanningRequest) -> PlanningResult:
+        """Plan with the unchanged control-search API and default behavior."""
+
+        return self._plan(request, trace=None)
+
+    def _plan_traced(
+        self,
+        request: PlanningRequest,
+        *,
+        identity: object = None,
+        observer: object = None,
+    ) -> tuple[PlanningResult, object]:
+        """Run the control search with an internal, opt-in write trace.
+
+        The collector is imported lazily so this internal research carrier
+        cannot affect the normal planner import graph or public exports.
+        ``plan`` never enables this path.
+        """
+
+        from .control_trace_reuse import ControlTraceCollector
+
+        collector = ControlTraceCollector(
+            self,
+            request,
+            identity=identity,
+            observer=observer,
+        )
+        result = self._plan(request, trace=collector)
+        return result, collector.trace
+
+    def _plan(self, request: PlanningRequest, *, trace: object | None) -> PlanningResult:
         started = perf_counter()
         self._last_counters: _Counters | None = None
         self._heur_dist = {}
         self._calm_speed = self.vessel_model.effective_speed(1.0)
-        env_progress = float(os.environ.get("C_ASTAR_PROGRESS_SECONDS", "0") or 0)
-        self._progress_interval = (
-            request.progress_interval_seconds
-            if request.progress_interval_seconds is not None
-            else (env_progress if env_progress > 0 else None)
-        )
+        # Progress cadence is resolved by the application layer via
+        # ``PlanningRequest.progress_interval_seconds``; the planner core no
+        # longer reads environment variables directly.
+        self._progress_interval = request.progress_interval_seconds
         self._check_cancelled(request)
         self._validate_request_nodes(request)
         start_sample = self._sample_node(request.start, request.departure_time)
         if start_sample.hard_mask:
             raise EndpointBlockedError(f"start node {request.start} is hard-blocked")
 
+        start_state: State = (request.start, 0, None)
         if request.start == request.goal:
-            return self._zero_length_result(request, start_sample, started)
+            result = self._zero_length_result(request, start_sample, started)
+            if trace is not None:
+                trace.record_write(
+                    state=start_state,
+                    parent_state=None,
+                    label_cost_hours=0.0,
+                    arrival_time=request.departure_time,
+                    priority=0.0,
+                    path_elapsed_seconds=0.0,
+                    edge_maximum_risk=0.0,
+                    write_kind="INITIAL",
+                )
+                trace.trace = trace.finish(result, start_state, {})
+            return result
 
         cost_model = self._cost_model(request.objective)
-        start_state: State = (request.start, 0, None)
         labels: dict[State, tuple[float, datetime]] = {start_state: (0.0, request.departure_time)}
         predecessor: dict[State, tuple[State, _EdgeTraversal]] = {}
         serial = count()
         queue: list[tuple[float, float, int, State]] = []
         heuristic = self._heuristic(request.start, request.goal, cost_model, request)
         heappush(queue, (heuristic, 0.0, next(serial), start_state))
+        if trace is not None:
+            trace.record_write(
+                state=start_state,
+                parent_state=None,
+                label_cost_hours=0.0,
+                arrival_time=request.departure_time,
+                priority=heuristic,
+                path_elapsed_seconds=0.0,
+                edge_maximum_risk=0.0,
+                write_kind="INITIAL",
+            )
         counters = _Counters()
-        counters = replace(counters, heap_pushes=1)
+        counters.heap_pushes = 1
         next_progress = 0.0
 
         while queue:
             self._check_cancelled(request)
             popped_priority, queued_cost, _, state = heappop(queue)
-            counters = replace(counters, heap_pops=counters.heap_pops + 1)
+            counters.heap_pops += 1
             best_cost, arrival_time = labels[state]
             if queued_cost != best_cost:
-                counters = replace(counters, stale_pop=counters.stale_pop + 1)
+                counters.stale_pop += 1
                 continue
             node, _, incoming_code = state
-            counters = replace(counters, expanded=counters.expanded + 1)
-            counters = replace(counters, unique=len(labels))
+            counters.expanded += 1
+            counters.unique = len(labels)
             self._last_counters = counters
-            counters = replace(counters, best_f=min(counters.best_f, popped_priority))
-            counters = replace(counters, last_f=popped_priority, last_g=queued_cost)
+            counters.best_f = min(counters.best_f, popped_priority)
+            counters.last_f = popped_priority
+            counters.last_g = queued_cost
             if counters.expanded > request.max_expansions:
                 raise NoRouteError(f"planning exceeded max_expansions={request.max_expansions}")
             if (
@@ -287,35 +352,15 @@ class TimeDependentAStar:
                 and perf_counter() - next_progress >= self._progress_interval
             ):
                 next_progress = perf_counter()
-                elapsed = next_progress - started
-                rate = counters.expanded / elapsed if elapsed > 0 else 0.0
-                rss_mb = (
-                    resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
-                    if resource is not None
-                    else 0.0
-                )
-                horizon_h = request.maximum_elapsed.total_seconds() / 3600.0
-                expanded_line = (
-                    f"elapsed={elapsed:.1f}s expanded={counters.expanded} "
-                    f"generated={counters.generated} "
-                )
-                set_line = (
-                    f"unique={len(labels)} open={len(queue)} stale={counters.stale_pop} "
-                )
-                reopen_line = (
-                    f"reopened={counters.reopened} rate={rate:.0f}/s "
-                    f"max_bucket={counters.max_bucket} "
-                )
-                print(
-                    f"[astar] obj={request.objective.value} horizon_h={horizon_h:.0f} "
-                    f"{expanded_line}{set_line}{reopen_line}"
-                    f"f={counters.last_f:.3f} g={counters.last_g:.3f} "
-                    f"h={counters.last_f - counters.last_g:.3f} rss={rss_mb:.0f}MB",
-                    file=sys.stderr,
-                    flush=True,
+                self._emit_progress(
+                    request,
+                    counters,
+                    labels=labels,
+                    open_size=len(queue),
+                    started=started,
                 )
             if node == request.goal:
-                return self._build_result(
+                result = self._build_result(
                     request,
                     state,
                     start_sample,
@@ -324,6 +369,9 @@ class TimeDependentAStar:
                     counters,
                     started,
                 )
+                if trace is not None:
+                    trace.trace = trace.finish(result, state, predecessor)
+                return result
 
             previous_heading = None
             if incoming_code is not None:
@@ -341,36 +389,34 @@ class TimeDependentAStar:
                         cost_model,
                     )
                 except RiskCoverageError:
-                    counters = replace(counters, coverage=counters.coverage + 1)
+                    counters.coverage += 1
                     continue
                 except UnnavigableSpeedError:
-                    counters = replace(counters, speed=counters.speed + 1)
+                    counters.speed += 1
                     continue
                 except _RejectedEdge as rejection:
                     if rejection.reason == "hard":
-                        counters = replace(counters, hard=counters.hard + 1)
+                        counters.hard += 1
                     else:
-                        counters = replace(counters, risk=counters.risk + 1)
+                        counters.risk += 1
                     continue
                 elapsed = traversal.arrival_time - request.departure_time
                 if request.maximum_elapsed is not None and elapsed > request.maximum_elapsed:
-                    counters = replace(counters, coverage=counters.coverage + 1)
+                    counters.coverage += 1
                     continue
                 time_bucket = int(
                     elapsed.total_seconds() // request.time_bucket_size.total_seconds()
                 )
-                counters = replace(
-                    counters,
-                    max_bucket=max(counters.max_bucket, time_bucket),
-                )
+                if time_bucket > counters.max_bucket:
+                    counters.max_bucket = time_bucket
                 heading_code = (neighbor[0] - node[0], neighbor[1] - node[1])
                 next_state: State = (neighbor, time_bucket, heading_code)
                 tentative_cost = best_cost + traversal.cost.total_equivalent_hours
                 previous = labels.get(next_state)
-                if previous is not None and tentative_cost >= previous[0] - 1e-12:
+                if previous is not None and tentative_cost >= previous[0] - _COST_EPSILON:
                     continue
                 if previous is not None:
-                    counters = replace(counters, reopened=counters.reopened + 1)
+                    counters.reopened += 1
                 labels[next_state] = (tentative_cost, traversal.arrival_time)
                 predecessor[next_state] = (state, traversal)
                 priority = tentative_cost + self._heuristic(
@@ -380,12 +426,20 @@ class TimeDependentAStar:
                     request,
                 )
                 heappush(queue, (priority, tentative_cost, next(serial), next_state))
-                counters = replace(
-                    counters,
-                    generated=counters.generated + 1,
-                    heap_pushes=counters.heap_pushes + 1,
-                    queue_peak=max(counters.queue_peak, len(queue)),
-                )
+                if trace is not None:
+                    trace.record_write(
+                        state=next_state,
+                        parent_state=state,
+                        label_cost_hours=tentative_cost,
+                        arrival_time=traversal.arrival_time,
+                        priority=priority,
+                        path_elapsed_seconds=elapsed.total_seconds(),
+                        edge_maximum_risk=traversal.maximum_risk,
+                        write_kind="REPLACEMENT" if previous is not None else "INSERT",
+                    )
+                counters.generated += 1
+                counters.heap_pushes += 1
+                counters.queue_peak = max(counters.queue_peak, len(queue))
 
         if counters.coverage:
             self._last_counters = counters
@@ -425,9 +479,9 @@ class TimeDependentAStar:
         samples: tuple[SampledRisk, ...] = ()
         speed = calm_speed
 
-        # Two refinements keep ETA and environment-dependent speed mutually
-        # consistent without hiding a complex optimizer inside the baseline.
-        for _ in range(2):
+        # See _EDGE_REFINEMENT_ROUNDS: two passes keep ETA and environment
+        # speed mutually consistent without hiding a complex optimizer.
+        for _ in range(_EDGE_REFINEMENT_ROUNDS):
             samples = tuple(
                 self.risk_sampler.sample(
                     departure_time + timedelta(hours=travel_hours * fraction),
@@ -650,10 +704,63 @@ class TimeDependentAStar:
         if request.cancel_check is not None and request.cancel_check():
             raise PlanningCancelled("planning request was cancelled")
 
+    @staticmethod
+    def _emit_progress(
+        request: PlanningRequest,
+        counters: _Counters,
+        *,
+        labels: Mapping[State, tuple[float, datetime]],
+        open_size: int,
+        started: float,
+    ) -> None:
+        """Emit one progress line to stderr; observability lives here, not in plan()."""
+
+        elapsed = perf_counter() - started
+        rate = counters.expanded / elapsed if elapsed > 0 else 0.0
+        rss_mb = _peak_rss_mb()
+        rss_part = f"rss={rss_mb:.0f}MB" if isfinite(rss_mb) else "rss=na"
+        horizon_h = (
+            request.maximum_elapsed.total_seconds() / 3600.0
+            if request.maximum_elapsed is not None
+            else 0.0
+        )
+        expanded_line = (
+            f"elapsed={elapsed:.1f}s expanded={counters.expanded} "
+            f"generated={counters.generated} "
+        )
+        set_line = (
+            f"unique={len(labels)} open={open_size} stale={counters.stale_pop} "
+        )
+        reopen_line = (
+            f"reopened={counters.reopened} rate={rate:.0f}/s "
+            f"max_bucket={counters.max_bucket} "
+        )
+        print(
+            f"[astar] obj={request.objective.value} horizon_h={horizon_h:.0f} "
+            f"{expanded_line}{set_line}{reopen_line}"
+            f"f={counters.last_f:.3f} g={counters.last_g:.3f} "
+            f"h={counters.last_f - counters.last_g:.3f} {rss_part}",
+            file=sys.stderr,
+            flush=True,
+        )
+
 
 def _with_fractions(points: tuple[GeoPoint, ...]) -> Iterable[tuple[GeoPoint, float]]:
     denominator = len(points) - 1
     return ((point, index / denominator) for index, point in enumerate(points))
+
+
+def _peak_rss_mb() -> float:
+    """Peak RSS in MiB, or NaN where the Unix ``resource`` module is absent."""
+
+    try:
+        import resource
+    except ImportError:
+        return float("nan")
+    try:
+        return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
+    except OSError:
+        return float("nan")
 
 
 def _trapezoidal_average(values: Iterable[float]) -> float:

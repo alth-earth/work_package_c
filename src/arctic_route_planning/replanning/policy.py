@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from math import isfinite
 from typing import TYPE_CHECKING
 
@@ -76,7 +76,7 @@ class ReplanObservation:
     def __post_init__(self) -> None:
         for name in ("observed_at", "risk_valid_time"):
             value = getattr(self, name)
-            if value.tzinfo is None or value.utcoffset() != UTC.utcoffset(value):
+            if value.tzinfo is None or value.utcoffset() != timedelta(0):
                 raise ValueError(f"{name} must be timezone-aware UTC")
         if isinstance(self.data_revision, bool) or self.data_revision < 0:
             raise ValueError("data_revision must be a non-negative integer")

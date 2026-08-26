@@ -14,7 +14,7 @@ Last Verified: 2026-08-21
 >
 > - 文件角色：当前 C→D 输出合同说明；Python 模型和 JSON Schema 仍是机器可执行真源。
 > - 改造时间：2026-08-14（Asia/Shanghai）。
-> - 原文件去向：`CD_CONTRACT.archive-20260814-pre-governance.md`。
+> - 原文件去向：`docs/archive/CD_CONTRACT.archive-20260814-pre-governance.md`。
 > - 改造原因：保留 v3/v2 稳定技术语义，移除冲刺日历职责。
 
 # C → D：RoutePlan v3 与 v2 兼容
@@ -92,3 +92,31 @@ Python 真源：
 `cd.route-plan.v1` 只保留 Schema 作为历史审计/显式迁移材料。
 
 > ⚠️ 与现状不符：任何把 v1 描述为当前正式 C→D 合同的文档都是过时内容。
+
+## 可选 sidecar：推荐选择理由（Selection Rationale v1）
+
+> 跨包合约变更提案：[`CD_CONTRACT_SELECTION_RATIONALE_PROPOSAL.md`](CD_CONTRACT_SELECTION_RATIONALE_PROPOSAL.md)（状态 `APPROVED`，2026-08-24 C/D 负责方批准）。
+
+`selection-rationale` 是**可选、独立**的 sidecar，解释 C 为何选择 `recommended` 路线而非
+`fastest` 基线。它不进入任何路线或整组的内容身份/digest（保持 SSOT 与失败关闭语义）。
+
+机器真源：
+
+- `arctic_route_planning.publishing.SelectionRationale`；
+- `schemas/selection-rationale-v1.schema.json`。
+
+承载位置（均为可选字段，缺省 `None`）：
+
+- v2：`PlanningBatch.selection_rationale`；
+- v3：`FourLayerPlanningOutcome.selection_rationale`（由 `full_voyage` 层的 recommended 与 fastest 派生）；
+- CLI 额外写出 `selection-rationale.json`，并在 `run-summary.json` 增加 `selection_rationale` 摘要段。
+
+语义约束：
+
+- `schema_version = "selection-rationale.v1"`；
+- `baseline_objective` 必须为 `fastest`（Schema `const`），保证权衡基准恒定；
+- `tradeoffs` 含 delta 距离/ETA/风险与平均/最大风险降低百分比；风险 delta 限定在 [-1, 1]；
+- `selected_objective` ∈ `{fastest, low_risk, recommended}`；
+- 无推荐/最快对偶时不产出 rationale（字段为 `None`，不写文件），主路线合同不受影响。
+
+D 必须将 rationale 视为可选；旧 C 不产 rationale 时正常降级显示，不得因此阻塞路线消费。

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from threading import Event, RLock
 from uuid import uuid4
 
-from arctic_route_planning.errors import PlanningCancelledError
+from arctic_route_planning.errors import PlanningCancelled
 from arctic_route_planning.publishing import (
     CDLatestStore,
     CDStoreSnapshot,
@@ -16,9 +16,8 @@ from arctic_route_planning.publishing import (
     RoutePlan,
 )
 
-
-class PlanningCancelled(PlanningCancelledError):
-    """Raised when work is superseded before completion/publication."""
+# ``PlanningCancelled`` is canonically defined in ``arctic_route_planning.errors``
+# and re-exported here for the historical ``replanning`` import path.
 
 
 @dataclass(slots=True)

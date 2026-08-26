@@ -8,18 +8,27 @@ from datetime import UTC, datetime, timedelta
 from itertools import pairwise
 from types import MappingProxyType
 
-from arctic_route_planning.contracts import ProvenanceKind, RouteMetrics, Waypoint
+from arctic_route_planning.contracts import ProvenanceKind, RouteMetrics, RoutePlan, Waypoint
 from arctic_route_planning.contracts.layered import (
+    EXECUTABLE_HOURS,
+    FOUR_LAYER_ROUTE_PLAN_SET_V3_SCHEMA_VERSION,
+    MAIN_CORRIDOR_HOURS,
+    MAIN_CORRIDOR_START_OFFSET_HOURS,
+    ROLLING_HOURS,
+    ROUTE_PLAN_V3_SCHEMA_VERSION,
     FourLayerRoutePlanSet,
     LayerRouteBundle,
     PlanLayer,
     RoutePlanV3,
 )
-from arctic_route_planning.domain import ObjectiveMode, PlanKind
-from arctic_route_planning.errors import ContextMismatchError, PlanningCancelledError
+from arctic_route_planning.domain import ObjectiveMode, PlanKind, PlannerConfig
+from arctic_route_planning.errors import ContextMismatchError, ContractError, PlanningCancelledError
 from arctic_route_planning.planners import PlanningRequest, PlanningResult
 from arctic_route_planning.publishing import (
+    ROUTE_PLAN_SCHEMA_VERSION,
     PublicationRejected,
+    SelectionRationale,
+    build_selection_rationale,
     four_layer_route_plan_set_semantic_digest,
     route_plan_v3_semantic_digest,
 )
@@ -40,6 +49,7 @@ from arctic_route_planning.service import (
     KNOT_TO_METRES_PER_SECOND,
     CandidatePlanner,
     ServicePlanningRequest,
+    progress_interval_from_env,
 )
 
 
@@ -53,6 +63,7 @@ class FourLayerPlanningOutcome:
     snapshot: LayeredStoreSnapshot
     published: bool
     switch_decision: SwitchDecision | None = None
+    selection_rationale: SelectionRationale | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,7 +79,7 @@ class FourLayerPlanningService:
         self,
         planner: CandidatePlanner,
         *,
-        planner_config: object,
+        planner_config: PlannerConfig,
         coordinator: PlanningCoordinator,
         store: LayeredRoutePlanLatestStore,
         switch_gate: RouteSwitchGate,
@@ -93,7 +104,7 @@ class FourLayerPlanningService:
     ) -> FourLayerPlanningOutcome:
         self._validate_risk_context(request)
         if request.maximum_elapsed is None:
-            raise RuntimeError("maximum_elapsed was not resolved")
+            raise ContractError("maximum_elapsed was not resolved")
         if request.maximum_elapsed > timedelta(hours=self.planner_config.max_search_hours):
             raise ValueError("requested horizon exceeds planner safety ceiling")
 
@@ -134,21 +145,24 @@ class FourLayerPlanningService:
         layer_specs = (
             (
                 PlanLayer.MAIN_CORRIDOR,
-                timedelta(hours=72),
-                min(request.start_time + timedelta(hours=24), full_end),
-                min(request.start_time + timedelta(hours=72), full_end),
+                timedelta(hours=MAIN_CORRIDOR_HOURS),
+                min(
+                    request.start_time + timedelta(hours=MAIN_CORRIDOR_START_OFFSET_HOURS),
+                    full_end,
+                ),
+                min(request.start_time + timedelta(hours=MAIN_CORRIDOR_HOURS), full_end),
             ),
             (
                 PlanLayer.ROLLING,
-                timedelta(hours=24),
+                timedelta(hours=ROLLING_HOURS),
                 request.start_time,
-                min(request.start_time + timedelta(hours=24), full_end),
+                min(request.start_time + timedelta(hours=ROLLING_HOURS), full_end),
             ),
             (
                 PlanLayer.EXECUTABLE,
-                timedelta(hours=6),
+                timedelta(hours=EXECUTABLE_HOURS),
                 request.start_time,
-                min(request.start_time + timedelta(hours=6), full_end),
+                min(request.start_time + timedelta(hours=EXECUTABLE_HOURS), full_end),
             ),
         )
         bundles = [full_bundle]
@@ -189,7 +203,7 @@ class FourLayerPlanningService:
 
         self.coordinator.require_current(handle)
         provisional = FourLayerRoutePlanSet(
-            schema_version="cd.four-layer-route-plan-set.v3",
+            schema_version=FOUR_LAYER_ROUTE_PLAN_SET_V3_SCHEMA_VERSION,
             layer_set_id=placeholder_set_id,
             run_id=request.run_context.run_id,
             scenario_id=request.scenario.scenario_id,
@@ -229,6 +243,8 @@ class FourLayerPlanningService:
             layers=finalized_bundles,
         )
 
+        selection_rationale = self._build_rationale(plan_set)
+
         current = self.store.snapshot(
             run_id=request.run_context.run_id,
             scenario_id=request.scenario.scenario_id,
@@ -252,6 +268,7 @@ class FourLayerPlanningService:
                     ),
                     published=False,
                     switch_decision=switch_decision,
+                    selection_rationale=selection_rationale,
                 )
         self.coordinator.require_current(handle)
         try:
@@ -263,6 +280,7 @@ class FourLayerPlanningService:
             snapshot=snapshot,
             published=True,
             switch_decision=switch_decision,
+            selection_rationale=selection_rationale,
         )
 
     def replan_if_needed(
@@ -303,6 +321,7 @@ class FourLayerPlanningService:
             maximum_elapsed=maximum_elapsed,
             maximum_risk=request.maximum_risk,
             cancel_check=lambda: handle.cancelled,
+            progress_interval_seconds=progress_interval_from_env(),
         )
         results = self.planner.plan_candidates(core_request, tuple(ObjectiveMode))
         self.coordinator.require_current(handle)
@@ -384,6 +403,24 @@ class FourLayerPlanningService:
             raise ValueError("service clock must return timezone-aware UTC")
         return value.astimezone(UTC)
 
+    @staticmethod
+    def _build_rationale(
+        plan_set: FourLayerRoutePlanSet,
+    ) -> SelectionRationale | None:
+        """Derive the selection rationale from the full-voyage layer."""
+
+        try:
+            bundle = plan_set.bundle_for(PlanLayer.FULL_VOYAGE)
+        except StopIteration:
+            return None
+        selected_v3 = bundle.recommended
+        baseline_v3 = bundle.plans.get(ObjectiveMode.FASTEST)
+        if baseline_v3 is None or selected_v3.plan_id == baseline_v3.plan_id:
+            return None
+        selected_v2 = _v3_to_v2_plan(selected_v3)
+        baseline_v2 = _v3_to_v2_plan(baseline_v3)
+        return build_selection_rationale(selected_v2, baseline_v2)
+
 
 def _anchor_at_or_before(result: PlanningResult, cutoff: datetime) -> tuple[int, int]:
     if not result.steps:
@@ -455,7 +492,7 @@ def _to_v3_plan(
         objective_cost=result.total_cost_hours,
     )
     provisional = RoutePlanV3(
-        schema_version="cd.route-plan.v3",
+        schema_version=ROUTE_PLAN_V3_SCHEMA_VERSION,
         run_id=request.run_context.run_id,
         scenario_id=request.scenario.scenario_id,
         corridor_id=request.corridor.corridor_id,
@@ -490,6 +527,54 @@ def _to_v3_plan(
     return replace(
         provisional,
         plan_id=f"route-v3-sha256-{route_plan_v3_semantic_digest(provisional)}",
+    )
+
+
+_V3_ONLY_FIELDS = frozenset(
+    (
+        "planning_layer",
+        "layer_set_id",
+        "focus_start_time",
+        "focus_end_time",
+        "reference_plan_id",
+        "layer_goal_reached",
+    )
+)
+
+
+def _v3_to_v2_plan(plan_v3: RoutePlanV3) -> RoutePlan:
+    """Project a v3 route plan back to a v2 route plan for rationale derivation.
+
+    Only the shared identity and metrics fields are needed by
+    ``build_selection_rationale``; the extra v3 layer fields are dropped.
+    """
+
+    return RoutePlan(
+        schema_version=ROUTE_PLAN_SCHEMA_VERSION,
+        run_id=plan_v3.run_id,
+        scenario_id=plan_v3.scenario_id,
+        corridor_id=plan_v3.corridor_id,
+        vessel_profile_id=plan_v3.vessel_profile_id,
+        config_digest=plan_v3.config_digest,
+        model_config_digest=plan_v3.model_config_digest,
+        planner_config_digest=plan_v3.planner_config_digest,
+        provenance=plan_v3.provenance,
+        generation_id=plan_v3.generation_id,
+        plan_id=plan_v3.plan_id,
+        plan_version=plan_v3.plan_version,
+        planning_request_id=plan_v3.planning_request_id,
+        input_revision=plan_v3.input_revision,
+        generated_at=plan_v3.generated_at,
+        as_of_time=plan_v3.as_of_time,
+        start_time=plan_v3.start_time,
+        objective_mode=plan_v3.objective_mode,
+        plan_kind=plan_v3.plan_kind,
+        waypoints=plan_v3.waypoints,
+        metrics=plan_v3.metrics,
+        replan_reasons=plan_v3.replan_reasons,
+        source_risk_ids=plan_v3.source_risk_ids,
+        planner_version=plan_v3.planner_version,
+        destination_reached=plan_v3.destination_reached,
     )
 
 

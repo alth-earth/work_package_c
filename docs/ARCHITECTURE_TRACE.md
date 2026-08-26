@@ -3,7 +3,7 @@
 >
 > - 文件角色：工作包 C 的需求/决策到实现证据追踪表。
 > - 改造时间：2026-08-14（Asia/Shanghai）。
-> - 原文件去向：`ARCHITECTURE_TRACE.archive-20260814-pre-governance.md`。
+> - 原文件去向：`docs/archive/ARCHITECTURE_TRACE.archive-20260814-pre-governance.md`。
 > - 改造原因：移除对混合历史指南和冲刺日历的依赖，只保留可复核的当前证据。
 
 # 工作包 C 架构追踪

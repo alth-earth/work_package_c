@@ -2,6 +2,7 @@
 
 from arctic_route_planning.errors import (
     NoRouteError,
+    PlanningCancelled,
     PlanningCancelledError,
     PlanningError,
 )
@@ -10,6 +11,7 @@ __all__ = [
     "EndpointBlockedError",
     "NoRouteError",
     "PlanningCancelled",
+    "PlanningCancelledError",
     "PlanningError",
     "PlanningHorizonExceeded",
 ]
@@ -21,7 +23,3 @@ class EndpointBlockedError(NoRouteError):
 
 class PlanningHorizonExceeded(NoRouteError):
     """Raised when every remaining route would leave the risk coverage window."""
-
-
-class PlanningCancelled(PlanningCancelledError):
-    """Raised promptly after the caller's cancellation predicate becomes true."""

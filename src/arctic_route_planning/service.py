@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
@@ -25,10 +26,15 @@ from arctic_route_planning.domain import (
     VesselModelConfig,
     VesselProfile,
 )
-from arctic_route_planning.errors import ContextMismatchError
+from arctic_route_planning.errors import ContextMismatchError, ContractError
 from arctic_route_planning.grid import Node
 from arctic_route_planning.planners import PlanningRequest, PlanningResult
-from arctic_route_planning.publishing import CDStoreSnapshot
+from arctic_route_planning.publishing import (
+    ROUTE_PLAN_SCHEMA_VERSION,
+    CDStoreSnapshot,
+    SelectionRationale,
+    build_selection_rationale,
+)
 from arctic_route_planning.replanning import (
     PlanningCoordinator,
     ReplanDecision,
@@ -40,6 +46,22 @@ from arctic_route_planning.replanning import (
 
 KNOT_TO_METRES_PER_SECOND = 0.5144444444444445
 DEFAULT_PLANNER_VERSION = "time-dependent-a-star.v1"
+
+
+def progress_interval_from_env() -> float | None:
+    """Resolve the optional A* progress cadence once per planning request.
+
+    The planner core no longer reads environment variables; the application
+    layer translates ``C_ASTAR_PROGRESS_SECONDS`` into an explicit
+    ``progress_interval_seconds`` on the planning request.
+    """
+
+    raw = os.environ.get("C_ASTAR_PROGRESS_SECONDS", "0") or "0"
+    try:
+        value = float(raw)
+    except ValueError:
+        return None
+    return value if value > 0 else None
 
 
 class CandidatePlanner(Protocol):
@@ -127,6 +149,7 @@ class PlanningBatch:
     snapshot: CDStoreSnapshot
     published: bool
     switch_decision: SwitchDecision | None = None
+    selection_rationale: SelectionRationale | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,7 +197,7 @@ class PlanningService:
         self._validate_risk_context(request)
 
         if request.maximum_elapsed is None:  # guarded by ServicePlanningRequest
-            raise RuntimeError("maximum_elapsed was not resolved")
+            raise ContractError("maximum_elapsed was not resolved")
         planner_ceiling = timedelta(hours=self.planner_config.max_search_hours)
         if request.maximum_elapsed > planner_ceiling:
             raise ValueError("requested scenario horizon exceeds the active planner safety ceiling")
@@ -198,6 +221,7 @@ class PlanningService:
             maximum_elapsed=request.maximum_elapsed,
             maximum_risk=request.maximum_risk,
             cancel_check=lambda: handle.cancelled,
+            progress_interval_seconds=progress_interval_from_env(),
         )
         objectives = tuple(ObjectiveMode)
         results = self.planner.plan_candidates(core_request, objectives)
@@ -232,6 +256,8 @@ class PlanningService:
             if objective is not ObjectiveMode.RECOMMENDED
         )
 
+        selection_rationale = self._build_rationale(plans)
+
         current = self.coordinator.store.snapshot(
             run_id=request.run_context.run_id,
             scenario_id=request.scenario.scenario_id,
@@ -256,6 +282,7 @@ class PlanningService:
                     ),
                     published=False,
                     switch_decision=switch_decision,
+                    selection_rationale=selection_rationale,
                 )
 
         snapshot = self.coordinator.publish(handle, selected, candidates)
@@ -265,6 +292,7 @@ class PlanningService:
             snapshot=snapshot,
             published=True,
             switch_decision=switch_decision,
+            selection_rationale=selection_rationale,
         )
 
     def _validate_risk_context(self, request: ServicePlanningRequest) -> None:
@@ -365,7 +393,7 @@ class PlanningService:
             objective_cost=result.total_cost_hours,
         )
         return RoutePlan(
-            schema_version="cd.route-plan.v2",
+            schema_version=ROUTE_PLAN_SCHEMA_VERSION,
             run_id=request.run_context.run_id,
             scenario_id=request.scenario.scenario_id,
             corridor_id=request.scenario.corridor_id,
@@ -392,11 +420,25 @@ class PlanningService:
             destination_reached=True,
         )
 
+    @staticmethod
+    def _build_rationale(
+        plans: Mapping[ObjectiveMode, RoutePlan],
+    ) -> SelectionRationale | None:
+        """Derive the selection rationale when a fastest baseline exists."""
+
+        selected = plans.get(ObjectiveMode.RECOMMENDED)
+        baseline = plans.get(ObjectiveMode.FASTEST)
+        if selected is None or baseline is None:
+            return None
+        if selected.plan_id == baseline.plan_id:
+            return None
+        return build_selection_rationale(selected, baseline)
 
 __all__ = [
     "CandidatePlanner",
     "PlanningBatch",
     "PlanningService",
     "ReplanningOutcome",
+    "SelectionRationale",
     "ServicePlanningRequest",
 ]

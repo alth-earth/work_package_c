@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from arctic_route_planning.contracts.layered import (
+    ROUTE_PLAN_V3_SCHEMA_VERSION,
     FourLayerRoutePlanSet,
     LayerRouteBundle,
     PlanLayer,
@@ -16,6 +17,7 @@ from arctic_route_planning.contracts.layered import (
 from arctic_route_planning.contracts.models import ProvenanceKind, RoutePlan
 from arctic_route_planning.domain.models import ObjectiveMode, PlanKind, ReplanReason
 
+from .models import ROUTE_PLAN_SCHEMA_VERSION
 from .serialization import (
     _format_time,
     _parse_time,
@@ -105,7 +107,7 @@ def route_plan_v3_to_dict(plan: RoutePlanV3) -> dict[str, Any]:
     document = route_plan_to_dict(_as_v2(plan))
     document.update(
         {
-            "schema_version": "cd.route-plan.v3",
+            "schema_version": ROUTE_PLAN_V3_SCHEMA_VERSION,
             "planning_layer": plan.planning_layer.value,
             "layer_set_id": plan.layer_set_id,
             "focus_start_time": _format_time(plan.focus_start_time),
@@ -119,8 +121,8 @@ def route_plan_v3_to_dict(plan: RoutePlanV3) -> dict[str, Any]:
 
 def route_plan_v3_from_dict(value: Mapping[str, Any]) -> RoutePlanV3:
     _require_exact_fields(value, _ROUTE_FIELDS, name="RoutePlanV3")
-    if value["schema_version"] != "cd.route-plan.v3":
-        raise ValueError("RoutePlanV3 schema_version must be cd.route-plan.v3")
+    if value["schema_version"] != ROUTE_PLAN_V3_SCHEMA_VERSION:
+        raise ValueError(f"RoutePlanV3 schema_version must be {ROUTE_PLAN_V3_SCHEMA_VERSION}")
     _require_plain_int(value["generation_id"], name="generation_id")
     _require_plain_int(value["input_revision"], name="input_revision")
     _require_bool(value["destination_reached"], name="destination_reached")
@@ -162,11 +164,11 @@ def route_plan_v3_from_dict(value: Mapping[str, Any]) -> RoutePlanV3:
         _require_exact_fields(waypoint, _WAYPOINT_FIELDS, name=f"waypoints[{index}]")
 
     v2_document = {key: item for key, item in value.items() if key not in _V3_ONLY_FIELDS}
-    v2_document["schema_version"] = "cd.route-plan.v2"
+    v2_document["schema_version"] = ROUTE_PLAN_SCHEMA_VERSION
     base = route_plan_from_dict(v2_document)
     plan = RoutePlanV3(
         **{field: getattr(base, field) for field in _ROUTE_BASE_FIELDS},
-        schema_version="cd.route-plan.v3",
+        schema_version=ROUTE_PLAN_V3_SCHEMA_VERSION,
         planning_layer=PlanLayer(str(value["planning_layer"])),
         layer_set_id=str(value["layer_set_id"]),
         focus_start_time=_parse_time(value["focus_start_time"], "focus_start_time"),
@@ -406,7 +408,7 @@ def four_layer_route_plan_set_semantic_digest(plan_set: FourLayerRoutePlanSet) -
 def _as_v2(plan: RoutePlanV3) -> RoutePlan:
     return RoutePlan(
         **{field: getattr(plan, field) for field in _ROUTE_BASE_FIELDS},
-        schema_version="cd.route-plan.v2",
+        schema_version=ROUTE_PLAN_SCHEMA_VERSION,
     )
 
 

@@ -2,7 +2,7 @@
 > **文档治理声明**
 > - 文件角色：工作包 C 当前稳定架构、挑战杯定位和参数治理决策真源。
 > - 改造时间：2026-08-15（Asia/Shanghai）。
-> - 原文件去向：[DECISIONS_归档_20260815.md](DECISIONS_归档_20260815.md)。
+> - 原文件去向：[DECISIONS_归档_20260815.md](archive/DECISIONS_归档_20260815.md)。
 > - 改造原因：补入项目负责人已定的工程演示优先、参数来源和权责口径。
 
 # 工作包 C 决策记录
@@ -35,7 +35,7 @@
     强制后备；任何主线运行必须完整原子发布，不能发布不完整 v3。
 15. 当前无等待动作；引入等待或非 FIFO 成本时必须升级算法和合同。
 
-补充技术决策（源自：DECISIONS_归档_20260815.md）：
+补充技术决策（源自：[DECISIONS_归档_20260815.md](archive/DECISIONS_归档_20260815.md)）：
 
 - 公共 `config_digest` 绑定共享 Scenario/Corridor/Vessel 和 A DatasetBundle；B 发布
   `model_config_digest`；C 发布 `planner_config_digest`；`generation_id` 不进入 digest；
@@ -63,7 +63,7 @@
 20. 实验 B 仅在真实主线稳定后做 I001、lock、Mamba 和 `make check`，不接入 C。
 21. 其余风险与决策本轮只记录，不自动扩展开发范围。
 
-运行时事实与延期边界（源自：DECISIONS_归档_20260815.md）：
+运行时事实与延期边界（源自：[DECISIONS_归档_20260815.md](archive/DECISIONS_归档_20260815.md)）：
 
 - 共享 `nordic_odyssey_reference_v1` 是事实参考，不等于 C 性能模型已校准；C 的航速、操舵、
   转弯、净空和阈值仍为 `demo_unvalidated`；
@@ -72,4 +72,4 @@
 - 真实数据验收、真船校准、D 消费、0–2/2–4/4–6 h 科学可信度分级、等待、D* Lite 和 MPC
   均不属于 0.4.0 已验收范围。
 
-系统级完整依据见 [ARCTIC_ROUTE_SYSTEM.md](../../ARCTIC_ROUTE_SYSTEM.md)。
+系统级完整依据见 [ARCTIC_ROUTE_SYSTEM.md](../../arctic_route_governance/current/architecture/ARCTIC_ROUTE_SYSTEM.md)。

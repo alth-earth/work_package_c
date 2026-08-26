@@ -18,6 +18,10 @@ from arctic_route_planning.planners import (
     RouteStep,
     SearchMetrics,
 )
+from arctic_route_planning.publishing import (
+    SELECTION_RATIONALE_SCHEMA_VERSION,
+    SelectionRationale,
+)
 from arctic_route_planning.replanning import (
     ReplanningPolicy,
     ReplanObservation,
@@ -140,6 +144,59 @@ def test_service_executes_three_modes_and_publishes_recommended() -> None:
     assert batch.selected.provenance is ProvenanceKind.SYNTHETIC
     assert batch.selected.waypoints[0].recommended_speed_mps > 0
     assert planner.requests[0].cancel_check is not None
+
+
+def test_service_attaches_selection_rationale_with_quantified_tradeoffs() -> None:
+    configuration = load_configuration(CONFIG_ROOT, "tromso_isfjorden_july_2026_retrospective_v1")
+    planner = FakeCandidatePlanner(configuration.planner)
+    ids = iter(("plan-fast", "plan-risk", "plan-rec"))
+    service = PlanningService(
+        planner,
+        planner_config=configuration.planner,
+        clock=lambda: NOW + timedelta(minutes=1),
+        plan_id_factory=lambda _mode: next(ids),
+    )
+
+    batch = service.execute(request_for(configuration))
+
+    assert isinstance(batch.selection_rationale, SelectionRationale)
+    rationale = batch.selection_rationale
+    assert rationale.schema_version == SELECTION_RATIONALE_SCHEMA_VERSION
+    assert rationale.selected_plan_id == batch.plans[ObjectiveMode.RECOMMENDED].plan_id
+    assert rationale.baseline_plan_id == batch.plans[ObjectiveMode.FASTEST].plan_id
+    assert rationale.selected_objective is ObjectiveMode.RECOMMENDED
+    assert rationale.baseline_objective is ObjectiveMode.FASTEST
+    assert rationale.summary_text
+    sm, bm = (
+        batch.plans[ObjectiveMode.RECOMMENDED].metrics,
+        batch.plans[ObjectiveMode.FASTEST].metrics,
+    )
+    assert rationale.tradeoffs.delta_eta_hours == pytest.approx(sm.eta_hours - bm.eta_hours)
+    assert rationale.tradeoffs.delta_avg_risk == pytest.approx(sm.avg_risk - bm.avg_risk)
+
+
+def test_service_skips_rationale_when_recommended_is_identical_to_fastest() -> None:
+    configuration = load_configuration(CONFIG_ROOT, "tromso_isfjorden_july_2026_retrospective_v1")
+    # Force recommended and fastest to share the same plan_id, simulating the
+    # case where the recommended route is identical to the fastest route.
+    shared_ids = {
+        "fastest": "shared-plan-id",
+        "low_risk": "low-plan-id",
+        "recommended": "shared-plan-id",
+    }
+    service = PlanningService(
+        FakeCandidatePlanner(configuration.planner),
+        planner_config=configuration.planner,
+        clock=lambda: NOW + timedelta(minutes=1),
+        plan_id_factory=lambda mode: shared_ids[mode.value],
+    )
+
+    batch = service.execute(request_for(configuration))
+
+    recommended = batch.plans[ObjectiveMode.RECOMMENDED]
+    fastest = batch.plans[ObjectiveMode.FASTEST]
+    assert recommended.plan_id == fastest.plan_id
+    assert batch.selection_rationale is None
 
 
 def test_service_event_replan_is_published_and_records_reason() -> None:

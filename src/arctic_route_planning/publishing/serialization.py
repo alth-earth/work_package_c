@@ -19,7 +19,9 @@ from arctic_route_planning.contracts.models import (
 )
 from arctic_route_planning.domain.models import ObjectiveMode, PlanKind, ReplanReason
 
-from .models import ROUTE_PLAN_SCHEMA_VERSION
+from .models import (
+    SelectionRationale,
+)
 
 
 def _format_time(value: datetime) -> str:
@@ -121,7 +123,7 @@ def route_plan_from_dict(value: Mapping[str, Any]) -> RoutePlan:
         if not isinstance(destination_reached, bool):
             raise ValueError("destination_reached must be a boolean")
         return RoutePlan(
-            schema_version=str(value.get("schema_version", ROUTE_PLAN_SCHEMA_VERSION)),
+            schema_version=str(value["schema_version"]),
             run_id=str(value["run_id"]),
             scenario_id=str(value["scenario_id"]),
             corridor_id=str(value["corridor_id"]),
@@ -271,3 +273,87 @@ def write_route_plan_json(path: str | Path, plan: RoutePlan) -> Path:
 
 def write_route_plan_geojson(path: str | Path, plan: RoutePlan) -> Path:
     return atomic_write_json(path, route_plan_to_geojson(plan))
+
+
+def selection_rationale_to_dict(rationale: SelectionRationale) -> dict[str, Any]:
+    """Return the canonical JSON representation of a selection rationale."""
+
+    t = rationale.tradeoffs
+    return {
+        "schema_version": rationale.schema_version,
+        "run_id": rationale.run_id,
+        "scenario_id": rationale.scenario_id,
+        "corridor_id": rationale.corridor_id,
+        "vessel_profile_id": rationale.vessel_profile_id,
+        "config_digest": rationale.config_digest,
+        "model_config_digest": rationale.model_config_digest,
+        "planner_config_digest": rationale.planner_config_digest,
+        "provenance": rationale.provenance,
+        "generation_id": rationale.generation_id,
+        "planning_request_id": rationale.planning_request_id,
+        "input_revision": rationale.input_revision,
+        "selected_plan_id": rationale.selected_plan_id,
+        "baseline_plan_id": rationale.baseline_plan_id,
+        "selected_objective": rationale.selected_objective.value,
+        "baseline_objective": rationale.baseline_objective.value,
+        "tradeoffs": {
+            "delta_distance_km": t.delta_distance_km,
+            "delta_eta_hours": t.delta_eta_hours,
+            "delta_avg_risk": t.delta_avg_risk,
+            "delta_max_risk": t.delta_max_risk,
+            "delta_integrated_risk_hours": t.delta_integrated_risk_hours,
+            "avg_risk_reduction_pct": t.avg_risk_reduction_pct,
+            "max_risk_reduction_pct": t.max_risk_reduction_pct,
+        },
+        "summary_text": rationale.summary_text,
+    }
+
+
+def selection_rationale_from_dict(value: Mapping[str, Any]) -> SelectionRationale:
+    """Parse and validate the canonical JSON selection rationale."""
+
+    try:
+        tradeoffs_value = value["tradeoffs"]
+        if not isinstance(tradeoffs_value, Mapping):
+            raise ValueError("tradeoffs must be an object")
+        from arctic_route_planning.publishing.models import TradeoffDeltas
+
+        tradeoffs = TradeoffDeltas(
+            delta_distance_km=float(tradeoffs_value["delta_distance_km"]),
+            delta_eta_hours=float(tradeoffs_value["delta_eta_hours"]),
+            delta_avg_risk=float(tradeoffs_value["delta_avg_risk"]),
+            delta_max_risk=float(tradeoffs_value["delta_max_risk"]),
+            delta_integrated_risk_hours=float(
+                tradeoffs_value["delta_integrated_risk_hours"]
+            ),
+            avg_risk_reduction_pct=float(tradeoffs_value["avg_risk_reduction_pct"]),
+            max_risk_reduction_pct=float(tradeoffs_value["max_risk_reduction_pct"]),
+        )
+        return SelectionRationale(
+            schema_version=str(value["schema_version"]),
+            run_id=str(value["run_id"]),
+            scenario_id=str(value["scenario_id"]),
+            corridor_id=str(value["corridor_id"]),
+            vessel_profile_id=str(value["vessel_profile_id"]),
+            config_digest=str(value["config_digest"]),
+            model_config_digest=str(value["model_config_digest"]),
+            planner_config_digest=str(value["planner_config_digest"]),
+            provenance=str(value["provenance"]),
+            generation_id=int(value["generation_id"]),
+            planning_request_id=str(value["planning_request_id"]),
+            input_revision=int(value["input_revision"]),
+            selected_plan_id=str(value["selected_plan_id"]),
+            baseline_plan_id=str(value["baseline_plan_id"]),
+            selected_objective=ObjectiveMode(str(value["selected_objective"])),
+            baseline_objective=ObjectiveMode(str(value["baseline_objective"])),
+            tradeoffs=tradeoffs,
+            summary_text=str(value["summary_text"]),
+        )
+    except (KeyError, TypeError) as exc:
+        raise ValueError(
+            f"invalid selection rationale document: missing or malformed {exc}"
+        ) from exc
+
+
+def write_selection_rationale_json(path: str | Path, rationale: SelectionRationale) -> Path:
+    return atomic_write_json(path, selection_rationale_to_dict(rationale))

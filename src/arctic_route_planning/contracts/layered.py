@@ -22,6 +22,18 @@ from arctic_route_planning.timeutils import ensure_utc
 _ROUTE_V3_ID = re.compile(r"^route-v3-sha256-[0-9a-f]{64}$")
 _LAYER_SET_ID = re.compile(r"^layer-set-sha256-[0-9a-f]{64}$")
 
+ROUTE_PLAN_V3_SCHEMA_VERSION = "cd.route-plan.v3"
+FOUR_LAYER_ROUTE_PLAN_SET_V3_SCHEMA_VERSION = "cd.four-layer-route-plan-set.v3"
+
+# Formal layer focus/cutoff windows in hours, counted from the request start
+# time.  These are v3 contract architecture values shared by the four-layer
+# orchestration and this module's semantic validation -- not planner tuning
+# knobs, so they must never drift between the two consumers.
+MAIN_CORRIDOR_START_OFFSET_HOURS = 24
+MAIN_CORRIDOR_HOURS = 72
+ROLLING_HOURS = 24
+EXECUTABLE_HOURS = 6
+
 
 class PlanLayer(StrEnum):
     FULL_VOYAGE = "full_voyage"
@@ -67,8 +79,10 @@ class RoutePlanV3:
     destination_reached: bool = True
 
     def __post_init__(self) -> None:
-        if self.schema_version != "cd.route-plan.v3":
-            raise ContractError("RoutePlanV3.schema_version 必须是 cd.route-plan.v3")
+        if self.schema_version != ROUTE_PLAN_V3_SCHEMA_VERSION:
+            raise ContractError(
+                f"RoutePlanV3.schema_version 必须是 {ROUTE_PLAN_V3_SCHEMA_VERSION}"
+            )
         try:
             layer = PlanLayer(self.planning_layer)
         except (TypeError, ValueError) as exc:
@@ -192,7 +206,7 @@ class FourLayerRoutePlanSet:
     layers: tuple[LayerRouteBundle, ...]
 
     def __post_init__(self) -> None:
-        if self.schema_version != "cd.four-layer-route-plan-set.v3":
+        if self.schema_version != FOUR_LAYER_ROUTE_PLAN_SET_V3_SCHEMA_VERSION:
             raise ContractError("FourLayerRoutePlanSet.schema_version 不合法")
         if _LAYER_SET_ID.fullmatch(self.layer_set_id) is None:
             raise ContractError("FourLayerRoutePlanSet.layer_set_id 必须是规范整组身份")
@@ -298,16 +312,23 @@ def _validate_layer_semantics(plan_set: FourLayerRoutePlanSet) -> None:
     expected_windows = {
         PlanLayer.FULL_VOYAGE: (plan_set.start_time, reference_end),
         PlanLayer.MAIN_CORRIDOR: (
-            min(plan_set.start_time + timedelta(hours=24), reference_end),
-            min(plan_set.start_time + timedelta(hours=72), reference_end),
+            min(
+                plan_set.start_time
+                + timedelta(hours=MAIN_CORRIDOR_START_OFFSET_HOURS),
+                reference_end,
+            ),
+            min(
+                plan_set.start_time + timedelta(hours=MAIN_CORRIDOR_HOURS),
+                reference_end,
+            ),
         ),
         PlanLayer.ROLLING: (
             plan_set.start_time,
-            min(plan_set.start_time + timedelta(hours=24), reference_end),
+            min(plan_set.start_time + timedelta(hours=ROLLING_HOURS), reference_end),
         ),
         PlanLayer.EXECUTABLE: (
             plan_set.start_time,
-            min(plan_set.start_time + timedelta(hours=6), reference_end),
+            min(plan_set.start_time + timedelta(hours=EXECUTABLE_HOURS), reference_end),
         ),
     }
     for bundle in plan_set.layers:
@@ -320,9 +341,9 @@ def _validate_layer_semantics(plan_set: FourLayerRoutePlanSet) -> None:
                 raise ContractError("分层关注时间窗与正式 24/72/6 h 语义不一致")
 
     for layer, cutoff in (
-        (PlanLayer.MAIN_CORRIDOR, timedelta(hours=72)),
-        (PlanLayer.ROLLING, timedelta(hours=24)),
-        (PlanLayer.EXECUTABLE, timedelta(hours=6)),
+        (PlanLayer.MAIN_CORRIDOR, timedelta(hours=MAIN_CORRIDOR_HOURS)),
+        (PlanLayer.ROLLING, timedelta(hours=ROLLING_HOURS)),
+        (PlanLayer.EXECUTABLE, timedelta(hours=EXECUTABLE_HOURS)),
     ):
         anchor = _reference_anchor(reference, plan_set.start_time + cutoff)
         expected_location = (anchor.longitude, anchor.latitude)
@@ -359,6 +380,12 @@ def _reference_anchor(reference: RoutePlanV3, cutoff: datetime) -> Waypoint:
 
 
 __all__ = [
+    "EXECUTABLE_HOURS",
+    "FOUR_LAYER_ROUTE_PLAN_SET_V3_SCHEMA_VERSION",
+    "MAIN_CORRIDOR_HOURS",
+    "MAIN_CORRIDOR_START_OFFSET_HOURS",
+    "ROLLING_HOURS",
+    "ROUTE_PLAN_V3_SCHEMA_VERSION",
     "FourLayerRoutePlanSet",
     "LayerRouteBundle",
     "PlanLayer",

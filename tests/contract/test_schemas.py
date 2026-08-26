@@ -166,3 +166,76 @@ def test_route_plan_schema_accepts_contract_shape() -> None:
     del document["provenance"]
     with pytest.raises(ValidationError):
         _validator("route-plan-v2.schema.json").validate(document)
+
+
+def _selection_rationale_document() -> dict[str, object]:
+    return {
+        "schema_version": "selection-rationale.v1",
+        "run_id": "run-1",
+        "scenario_id": "scenario-1",
+        "corridor_id": "corridor-1",
+        "vessel_profile_id": "demo_bulk_carrier_v1",
+        "config_digest": "c" * 64,
+        "model_config_digest": "d" * 64,
+        "planner_config_digest": "e" * 64,
+        "provenance": "synthetic",
+        "generation_id": 0,
+        "planning_request_id": "request-1",
+        "input_revision": 0,
+        "selected_plan_id": "recommended-1",
+        "baseline_plan_id": "fastest-1",
+        "selected_objective": "recommended",
+        "baseline_objective": "fastest",
+        "tradeoffs": {
+            "delta_distance_km": -10.5,
+            "delta_eta_hours": 0.75,
+            "delta_avg_risk": -0.04,
+            "delta_max_risk": 0.02,
+            "delta_integrated_risk_hours": -2.6,
+            "avg_risk_reduction_pct": 8.0,
+            "max_risk_reduction_pct": -4.0,
+        },
+        "summary_text": "相比最快路线，推荐路线平均风险减少 8.0%",
+    }
+
+
+def test_selection_rationale_schema_accepts_canonical_shape() -> None:
+    _validator("selection-rationale-v1.schema.json").validate(
+        _selection_rationale_document()
+    )
+
+
+def test_selection_rationale_schema_rejects_non_fastest_baseline() -> None:
+    document = deepcopy(_selection_rationale_document())
+    document["baseline_objective"] = "low_risk"
+
+    with pytest.raises(ValidationError):
+        _validator("selection-rationale-v1.schema.json").validate(document)
+
+
+def test_selection_rationale_schema_rejects_unknown_top_level_field() -> None:
+    document = deepcopy(_selection_rationale_document())
+    document["unexpected"] = True
+
+    with pytest.raises(ValidationError):
+        _validator("selection-rationale-v1.schema.json").validate(document)
+
+
+@pytest.mark.parametrize(
+    "field",
+    (
+        "selected_plan_id",
+        "baseline_plan_id",
+        "tradeoffs",
+        "summary_text",
+        "selected_objective",
+    ),
+)
+def test_selection_rationale_schema_rejects_missing_required_fields(
+    field: str,
+) -> None:
+    document = deepcopy(_selection_rationale_document())
+    del document[field]  # type: ignore[index]
+
+    with pytest.raises(ValidationError):
+        _validator("selection-rationale-v1.schema.json").validate(document)

@@ -6,7 +6,7 @@ Content Status:
 Document Role: SUPPORTING
 Scope: work package C change history
 Branch: research-validation-system
-Last Verified: 2026-08-23
+Last Verified: 2026-08-25
 ---
 
 # 工作包 C 变更记录
@@ -14,6 +14,122 @@ Last Verified: 2026-08-23
 本文件记录工作包 C 的可见功能、跨包合同、兼容性和验证状态变化。项目用途、运行方法
 与当前架构请先阅读 [README.md](README.md)；长期设计取舍见
 [决策记录](docs/DECISIONS.md)。
+
+## Unreleased — P2.1 control-trace equivalence（2026-08-25 02:32 +08:00）
+
+- 新增内部 `control_trace_reuse.py` 与 `TimeDependentAStar._plan_traced()`：默认 `plan()` 不变；仅显式
+  shadow 记录首次 goal pop 前成功写入的 rolling digest 与保守 elapsed/risk envelope。
+- 复用只接受同 start/goal/departure/objective/input/config/model/evaluator identity 下收紧
+  `maximum_elapsed`/`maximum_risk` 的查询；termination、取消、篡改、放宽、identity mismatch 与
+  transient-label 越界均 fail-closed，不产生 `OPTIMAL` 声明。
+- ingress 与 Winter runner 增加默认关闭、非发布的 `control_trace` 模式；只对 full→main 同 goal
+  尝试真实 hit，其余 layer cold control，sidecar 区分 hit/miss/fallback/zero-search。
+- clean M0 首批 r5 为 40/40 语义通过，但 5×7、R=4 trace overhead `5.98%` 超限；预声明增加
+  20 次确认后，pooled 30 样本四个单元 overhead 为 `1.95%–4.93%`、total median 改善
+  `46.67%–78.85%`。首批失败保留，不由确认批覆盖。
+- clean M1 r4 为 10/10 通过；16×7 与 31×11 本地 B-grid profile 的 paired improvement median
+  为 `48.86%/49.87%`，median RSS ratio 为 `1.000/0.989`。
+- Winter runner 增加正式 ingress、单轨 scratch/非发布证明、隔离 worker timeout/RSS/swap、12-route
+  跨算法业务 digest、trace overhead、零搜索 HIT 和真实证书门禁。screening r1 因正式 digest 保留算法
+  标签产生假阴性，修复提交 `03479058` 后 r2 为 2/2 `PASS`；旧 r1 原样保留。后续 `3097271`
+  将新 experiment identity 绑定 runner/C 实现 SHA 与两仓 commit，旧 artifacts 不重写。
+- Winter formal r1 的 4/4 case、48/48 路线语义、确定性、复用矩阵、RSS/swap 和 trace overhead 均
+  通过，总 wall-time median 改善 `47.86%`；但 `rolling_0_24h × fastest` median 回归
+  `5.94% > 5%`，故 M2 总 verdict 严格为 `FAIL`，候选继续默认关闭、非发布。
+- 明确保留并排除错误证据：M0 r1 为 trace 热路径 overhead FAIL；M1 r1 为 `CostBreakdown`
+  序列化 harness FAIL；M1 r2 含 control-only RSS polling 计时不对称。未运行 P3、2.2.2 或默认启用，
+  未修改 B/C、C/D 合同、正式 latest 或 frozen artifact。
+
+## Unreleased — P2 monotonic certificate reuse and P4a shadow（2026-08-25 00:42 +08:00）
+
+- 新增未公开导出的内部 `temporal_reuse.py`：从终态 session 独立重算 `U/LB/epsilon`、
+  `OPEN_BOUND/OPEN_EMPTY`、state/route/certificate digest；只允许同一完整身份下收紧
+  `maximum_elapsed` 和/或 `maximum_risk`，命中不推进搜索。
+- 结果状态明确区分 `HIT_EXACT`、`HIT_MONOTONIC`、`MISS_INCOMPATIBLE`、
+  `COLD_CANDIDATE` 和实际运行独立 control 后的 `FALLBACK_CONTROL`；取消直接传播，当前未定义的
+  cumulative-risk 约束 fail-closed。
+- `PreparedRiskPlanning.execute_four_layer_temporal_shadow()` 在同一 committed-window lease 内运行
+  两套 scratch planner/coordinator/store，并明确 `production_published=false`；正式 `execute*()`、
+  session baseline、latest、C→D schema/digest 与 frozen artifact 均不改变。
+- Orchestrator 新增独立 `scripts/winter_p2_shadow.py`，正式 Winter runner 默认行为不变；shadow 只向
+  新 experiment 目录写 control/candidate、certificate/reuse、integrity 和 comparison sidecar。
+- `scripts/validate_temporal_semantics.py --p2-exact-goal-reuse` 的 10 次 synthetic 验证全部通过语义、
+  证书、命中零搜索和显式 control fallback，但 candidate cold median 约 `722.410 ms`，control cold
+  median 约 `135.373 ms`，未通过 M0 性能门禁。
+- Winter 正式输入 prepare-only 通过；有效 paired shadow 在约 `674.463 s` 后因候选 queue 达到
+  `50,000` 硬上限失败关闭，峰值 RSS `229176 KiB`，未生成或发布候选四层结果。因此 P2 仅为
+  `UNIT_PASS`，P4a 工具为 `IMPLEMENTED` 但 M2 未通过，不声明性能优势或默认启用。
+- 完整 C 检查为 258 项通过；Orchestrator 非 integration/real-artifact 测试为 98 项通过。
+
+## Unreleased — P1 resumable temporal sessions（2026-08-24 23:33 +08:00）
+
+- 新增未公开导出的内部 `TemporalSession`：每个 objective 独立保存 exact-arrival labels、OPEN、
+  前驱、incumbent、启发式缓存和累计诊断；状态限定为 `READY`、`PAUSED` 与四类终态。
+- 新增完整 session identity fence，绑定当前 sampler 内容、可选 committed-window 内容寻址身份、
+  generation/input revision、风险/planner/model/config、请求、网格、ETA policy、搜索限制和
+  edge evaluator；恢复会重新计算当前 planner/request 身份，拒绝过期或伪造 identity。
+- checkpoint 使用不可变 tuple/frozen value，保留 stale heap entry 和微秒级 ETA，清除进程本地
+  cancel callback，并校验 state digest；所有终态不可恢复，四类资源上限跨暂停/恢复累计。
+- `TemporalLabelAStar.plan()` 改为 session 兼容包装，并提供内部 per-objective bundle；正式
+  `TimeDependentAStar`、ingress/service、B/C 与 C/D 合同和 frozen artifact 均未接入或改变。
+- `scripts/validate_temporal_semantics.py` 新增显式 `--session-slice-expansions` P1 模式，对 control、
+  one-shot candidate 和逐片 checkpoint/restore candidate 做串行语义比较；默认 P0 行为保持不变。
+- 聚焦 P0/P1 回归 63 项通过，完整 `UV_OFFLINE=1 make check` 为 238 项通过。P1 仍仅为
+  `UNIT_PASS`，不宣称性能优势、正式集成或冻结基线。
+
+## Unreleased — P0 temporal semantics validation（2026-08-24 22:27 +08:00）
+
+- 新增 fail-closed `damped_fixed_point_v1` ETA 精化器：最多 12 次、1 秒/`1e-6` 容差、
+  0.5 阻尼、周期/超迭代/终值不一致检测，并按最终 ETA 重采样。
+- 新增未公开导出、未接 ingress/service 的 `TemporalLabelAStar` 实验候选：标签身份为
+  `(node, heading, exact UTC arrival_time)`，禁止跨时间支配，使用 goal incumbent/OPEN 下界终止，
+  并对 expansions/labels/queue/edge evaluations 设置显式硬上限。
+- 新增 test-only、零启发式 exact-time Dijkstra oracle；其实现不导入生产规划器。静态三方差分、
+  非 FIFO、同桶多 ETA、exact-state replacement、ETA failure 与资源上限均有聚焦回归。
+- 新增 `scripts/validate_temporal_semantics.py`：在 5×7×7 synthetic 静态 fixture 上串行运行
+  当前 `TimeDependentAStar` control 与实验性 `TemporalLabelAStar` candidate；默认重复 10 次，
+  通过 `--repetitions` 参数化，并将 manifest/cases 写入调用方指定目录。
+- 验证入口记录 Git SHA、`uv.lock` SHA256、Python/platform、ETA/搜索策略、离散搜索结果和耗时；
+  不导入 test-only oracle、不接正式 ingress、不覆盖已有 `manifest.json`/`cases.jsonl`，也不写冻结构件。
+- 新增 `tests/unit/test_validate_temporal_semantics.py`，覆盖 2 次重复运行的结构、确定性（忽略耗时）
+  及构件覆盖保护。
+- 干净基线的 10 次 P0 static 运行 semantic digest 全部一致，但 candidate median wall time 约比
+  control 慢 50.0%；当前状态仅为正确性 `UNIT_PASS`，不宣称性能优势，不改变正式规划器或跨包合同。
+
+## Unreleased — Version clutter cleanup（2026-08-24）
+
+依据 `arctic_route_governance/reports/audits/C_D_VERSION_CLUTTER_AUDIT_AND_CLEANUP_PLAN_20260824.md` 执行版本/合同/旧文件清理，**不触及代码逻辑与 C→D 合约**：
+
+- **文档归档收敛**：14 个 pre-governance / 2026-08-15 归档文件（`*.archive-20260814-pre-governance.md`、`*_归档_20260815.md`）从根目录与 `docs/` 移入 `docs/archive/`；5 份历史性能报告（C_OPTIMIZATION_PROPOSAL / C_PERFORMANCE_PROFILE / C_RISK_SAMPLE_CACHE_EXPERIMENT / BC_COUPLING_PERFORMANCE_REPORT / bench_cprofile_96.0h.pstats）移入 `docs/archive/performance/`。
+- **链接更新**：11 个当前文档（README、handoff、STATUS_AND_TODO、ACCEPTANCE、DECISIONS、ARCHITECTURE_TRACE、CD_CONTRACT、ARCHITECTURE_AND_DECISIONS、PROJECT_OVERVIEW、DEVELOPMENT_GUIDE、SHARED_CONTEXT_MIGRATION）中的归档文件引用全部更新为 `docs/archive/...` 路径，按治理标准"目标：规范链接失效数 = 0"。
+- **死 Schema 删除**：`schemas/route-plan-v1.schema.json` 无任何代码/测试引用，直接删除（`risk-frame-v1.schema.json` 仍被 legacy 适配器使用，保留）。
+- **历史产物清理**：删除 `output/legacy-smoke/`。
+- **保留项**：v2 路线 schema（selection-rationale 基准 + v3 投影后备）、v3 四层 schema、selection-rationale schema、legacy CLI 与适配器（仍服役）。
+
+## Unreleased — Core algorithm audit fixes（2026-08-24）
+
+依据 `docs/CORE_ALGORITHM_IMPROVEMENT_PLAN.md` 14 问题清单完成内部质量修复，**不触及 C→D 合约**（schema 文件、序列化格式、digest 语义、selection-rationale sidecar 均不变）：
+
+- **P0 性能**：`_Counters` 改可变（去 `frozen`），A\* 热循环消除每迭代 15+ 次 `dataclasses.replace` 重建，循环结束仍快照为不可变 `SearchMetrics`。
+- **P1 观测剥离**：`planners/time_dependent_astar.py` 移除顶层 `import os`/`import resource`；env 解析 `C_ASTAR_PROGRESS_SECONDS` 移至 `service.progress_interval_from_env()` 经 `PlanningRequest.progress_interval_seconds` 注入；28 行进度打印提取为 `_emit_progress`，RSS 采样 lazy import（非 Unix 输出 `rss=na`）。
+- **P1 SSOT 收敛**：新增 `ROUTE_PLAN_V3_SCHEMA_VERSION` / `FOUR_LAYER_ROUTE_PLAN_SET_V3_SCHEMA_VERSION` 常量（`contracts/layered.py`），替换 7 处裸串；`service.py`/`layered.py` 的 v2 裸串收敛为已有 `ROUTE_PLAN_SCHEMA_VERSION`；层时间窗 72/24/6h 提取为 `MAIN_CORRIDOR_HOURS` 等命名常量（不加 `PlannerConfig` 字段以保护 digest）。
+- **P2 异常统一与类型收紧**：`PlanningCancelled` 唯一定义于 `errors.py`，`planners/errors.py` 与 `replanning/coordinator.py` 改 re-export（两条导入路径零破坏）；`ingress.py` 两处 `assert isinstance` 改 `TypeError`；三处 `RuntimeError("maximum_elapsed was not resolved")` 改 `ContractError`；`layered.py` `planner_config: object` 收紧为 `PlannerConfig`；`1e-12` 与 `range(2)` 提取为 `_COST_EPSILON`/`_EDGE_REFINEMENT_ROUNDS` 常量。
+- **P2 性能**：`grid/regular.py` `snap_to_navigable` 改 numpy 矢量化（meshgrid + 矢量 haversine + `np.lexsort`），tie-break `(distance, row, col)` 语义与原实现一致。
+- **P3 健壮性/清理**：`ingress._sessions` 改 `OrderedDict` LRU + `_MAX_SESSIONS = 64`；`replanning/policy.py` UTC 校验统一为 `timedelta(0)`；`risk/sampler.py` `risk_score=1.0` 加保守占位注释；`publishing/serialization.py` 两处 `from_dict` 的 `schema_version` 缺失由静默回退改严格 `KeyError→ValueError`。
+- 配套测试：`tests/unit/test_publishing.py` 加 2 个缺 `schema_version` 负例；`tests/unit/test_ingress_lru.py` 新增 LRU 驱逐与重用提升测试。
+
+## Unreleased — Selection rationale sidecar（2026-08-24）
+
+- 新增可选 `selection-rationale` sidecar（SelectionRationale 模型 + `selection-rationale.v1` Schema），
+  解释推荐路线相对最快基线的权衡（距离/ETA/风险 delta 与风险降低百分比）。
+  v2 `PlanningBatch` 与 v3 `FourLayerPlanningOutcome` 增加可选 `selection_rationale` 字段；
+  CLI 输出 `selection-rationale.json` 并在 `run-summary.json` 增加摘要段。
+- 跨包合约变更提案：`docs/CD_CONTRACT_SELECTION_RATIONALE_PROPOSAL.md`（DRAFT）；
+  CD_CONTRACT.md 同步 selection-rationale 语义（可选 sidecar，不进入路线 digest）。
+- 配套测试：`tests/contract/test_schemas.py`（schema 验证）、`tests/unit/test_publishing.py`、
+  `tests/integration/test_service.py`、`tests/unit/test_layered_planning.py`。
+- 跨包落地：提案升 APPROVED（C/D 负责方批准）；D 侧 `load_selection_rationale` 消费 +
+  真实 synthetic-demo 产物 fixture 跨包回归 PASS（D 全量 100 passed / 3 skipped）。
 
 ## Unreleased — B-C coupling evidence（2026-08-22 01:11 +08:00）
 

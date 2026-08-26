@@ -329,6 +329,9 @@ class RiskSampler:
                 raise RiskSamplingError(
                     "unknown risk at a navigable point cannot be treated as safe"
                 )
+            # The point is hard-blocked, so any edge through it will be
+            # rejected by hard_mask before this risk_score is read.  1.0 is
+            # a conservative placeholder rather than a measured value.
             risk_score = 1.0
         else:
             risk_score = sum(value * weight for value, weight in risk_values)

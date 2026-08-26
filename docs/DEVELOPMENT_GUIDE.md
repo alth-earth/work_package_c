@@ -1,10 +1,22 @@
+---
+Overall Status: ACTIVE
+Content Status:
+  - COMPLETED
+  - IN_PROGRESS
+Document Role: CANONICAL
+Scope: work package C local development and verification workflow
+Canonical For: how to continue developing and verifying work package C
+Branch: research-validation-system
+Last Verified: 2026-08-25
+---
+
 > [!NOTE]
 > **文档治理声明**
 >
 > - 文件角色：工作包 C 的继续开发与本地操作手册。
 > - 改造时间：2026-08-14（Asia/Shanghai）。
 > - 原文件去向：旧综合指南已归档为
->   `../工作包C项目整体认识与继续开发指南.archive-20260814-pre-governance.md`。
+>   `docs/archive/工作包C项目整体认识与继续开发指南.archive-20260814-pre-governance.md`。
 > - 改造原因：把环境、运行、修改和验收步骤从历史状态/架构长文中独立出来，便于人和 AI
 >   在不误用 synthetic/legacy 的前提下继续开发。
 
@@ -16,7 +28,8 @@
 2. [`../work_package_c_handoff.md`](../work_package_c_handoff.md)：状态、缺口和依赖；
 3. [`DECISIONS.md`](DECISIONS.md)：不可破坏的不变量；
 4. [`BC_CONTRACT.md`](BC_CONTRACT.md) 与 [`CD_CONTRACT.md`](CD_CONTRACT.md)：接口；
-5. [`ACCEPTANCE.md`](ACCEPTANCE.md)：完成证据。
+5. [`ACCEPTANCE.md`](ACCEPTANCE.md)：完成证据；
+6. [`CORE_ALGORITHM_IMPROVEMENT_PLAN.md`](CORE_ALGORITHM_IMPROVEMENT_PLAN.md)：核心算法现状、下一轮计划和门禁（唯一 SSOT）。
 
 跨包修改前再读 `../arctic_route_contracts/` 和 orchestrator 的当前 handoff。不要从归档综合
 指南复制旧 v1 字段、旧 B 状态或旧测试数。
@@ -33,8 +46,9 @@ make sync
 UV_OFFLINE=1 make check
 ```
 
-`make check` 依次验证 Ruff、pytest、`uv lock --check`、`uv sync --check` 和 CLI help。当前
-基线为 `138 passed`。已退役旧 B `交付包.zip` 的硬编码外部回归，不再要求本机存在该文件。
+`make check` 依次验证 Ruff、pytest、`uv lock --check`、`uv sync --check` 和 CLI help。当前 P2.1
+算法实现提交 `9ab88298059b2da5ce3f08c8aed995fcff8e4bd8`，
+`UV_OFFLINE=1 make check` 为 `274 passed`。P2.1 仍是默认关闭、非发布的研究 shadow，Winter M2 总 verdict 为 `FAIL`；不得把其约 48% 总耗时改善单独解释为生产验收通过。已退役旧 B `交付包.zip` 的硬编码外部回归，不再要求本机存在该文件。
 
 只改文档时至少运行：
 
@@ -150,7 +164,7 @@ run/context/commit/plan 身份。C 单包测试不能替代系统级实源验收
 
 - `README.md` 只保留短入口；详细交接更新 `work_package_c_handoff.md`。
 - 稳定架构/决策更新本目录相应文档；进度只更新 `STATUS_AND_TODO.md`。
-- 日历、人员和跨包总计划只更新 `../../ABC_10_DAY_SPRINT.md`。
-- 系统级模块/数据流变更同步 `../../ARCTIC_ROUTE_SYSTEM.md`。
+- 日历、人员和跨包总计划只更新 `../../arctic_route_governance/current/CURRENT_ROADMAP.md`。
+- 系统级模块/数据流变更同步 `../../arctic_route_governance/current/architecture/ARCTIC_ROUTE_SYSTEM.md`。
 - 归档文件只用于审计，不编辑其标记后的原正文，也不重新成为现状入口。
 - 新增或重命名文档后，检查所有相对链接；不得留下指向旧综合指南的活动链接。

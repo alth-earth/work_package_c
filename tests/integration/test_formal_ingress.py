@@ -68,6 +68,65 @@ def _formal_frame(frame, *, longitude_step: float = 0.001):
     return replace(draft, risk_id=canonical_risk_id(draft))
 
 
+def _prepared_temporal_shadow_case(
+    *,
+    goal: tuple[int, int] = (0, 1),
+    maximum_elapsed: timedelta = timedelta(hours=2),
+):
+    configuration = load_configuration(
+        CONFIG_ROOT, "tromso_isfjorden_july_2026_retrospective_v1"
+    )
+    run_context = create_development_run_context(configuration, source_kind="formal")
+    fixture = FixtureRiskSource(
+        scenario=configuration.scenario,
+        corridor=configuration.corridor,
+        vessel=configuration.vessel,
+        run_context=run_context,
+        generation_id=7,
+        as_of_time=configuration.scenario.simulation_start,
+        frame_count=3,
+        shape=(3, 3),
+    )
+    frames = tuple(_formal_frame(frame) for frame in fixture.frames)
+    store = InMemoryRiskSource()
+    for frame in frames:
+        store.publish(frame)
+    query = RiskWindowQuery(
+        start=frames[0].valid_time,
+        end=frames[-1].valid_time,
+        interval=timedelta(hours=1),
+        run_id=frames[0].run_id,
+        scenario_id=frames[0].scenario_id,
+        corridor_id=frames[0].corridor_id,
+        generation_id=frames[0].generation_id,
+        vessel_profile_id=frames[0].vessel_profile_id,
+        config_digest=frames[0].config_digest,
+        model_config_digest=frames[0].model_config_digest,
+        as_of=frames[0].as_of_time,
+    )
+    store.commit_window(query)
+    recording = RecordingCommittedSource(store)
+    request = ServicePlanningRequest(
+        run_context=run_context,
+        scenario=configuration.scenario,
+        corridor=configuration.corridor,
+        vessel=configuration.vessel,
+        vessel_model=configuration.vessel_model,
+        model_config_digest=frames[0].model_config_digest,
+        planner_config_digest=configuration.planner_config_digest,
+        risk_provenance=ProvenanceKind.FORMAL,
+        generation_id=7,
+        input_revision=1,
+        as_of_time=frames[0].as_of_time,
+        start_time=frames[0].valid_time,
+        start=(0, 0),
+        goal=goal,
+        maximum_elapsed=maximum_elapsed,
+    )
+    ingress = RiskSourcePlanningIngress(recording, configuration=configuration)
+    return ingress.prepare(request), recording, query, request
+
+
 def test_formal_ingress_queries_full_exact_commit_and_executes_existing_planner() -> None:
     configuration = load_configuration(
         CONFIG_ROOT, "tromso_isfjorden_july_2026_retrospective_v1"
@@ -222,6 +281,259 @@ def test_formal_ingress_executes_one_atomic_four_layer_set_under_the_lease() -> 
         for bundle in outcome.plan_set.layers
         for plan in bundle.plans.values()
     )
+
+
+def test_temporal_shadow_isolated_from_formal_latest_and_uses_two_scratch_runs() -> None:
+    prepared, recording, query, request = _prepared_temporal_shadow_case()
+
+    assert prepared.coordinator.store.latest(
+        run_id=request.run_context.run_id,
+        scenario_id=request.scenario.scenario_id,
+        generation_id=request.generation_id,
+    ) is None
+    assert prepared.session.layered_store.latest(
+        run_id=request.run_context.run_id,
+        scenario_id=request.scenario.scenario_id,
+        generation_id=request.generation_id,
+    ) is None
+    shadow = prepared.execute_four_layer_temporal_shadow()
+
+    assert shadow.production_published is False
+    assert shadow.risk_window_commit_id == prepared.window.commit_id
+    assert shadow.risk_window_content_digest == prepared.window.content_digest
+    assert shadow.control.status == "SUCCEEDED"
+    assert shadow.candidate.status == "SUCCEEDED"
+    assert shadow.control.scratch_published is True
+    assert shadow.candidate.scratch_published is True
+    assert shadow.control.outcome is not None
+    assert shadow.candidate.outcome is not None
+    assert shadow.control.outcome.published is False
+    assert shadow.candidate.outcome.published is False
+    assert shadow.control.snapshot is not None
+    assert shadow.candidate.snapshot is not None
+    assert shadow.control.snapshot.token != shadow.candidate.snapshot.token
+    assert len(shadow.candidate.goal_certificates) == 3
+    assert shadow.trace_observations == ()
+    assert any(record.reused for record in shadow.reuse_outcomes), shadow.reuse_outcomes
+    # Neither scratch publication may appear in the persistent formal store.
+    assert prepared.coordinator.store.latest(
+        run_id=request.run_context.run_id,
+        scenario_id=request.scenario.scenario_id,
+        generation_id=request.generation_id,
+    ) is None
+    assert prepared.session.layered_store.latest(
+        run_id=request.run_context.run_id,
+        scenario_id=request.scenario.scenario_id,
+        generation_id=request.generation_id,
+    ) is None
+    assert prepared.session.trigger_evaluator._last_replan_at is None
+    assert prepared.session.trigger_evaluator._baseline_avg_risk is None
+    assert prepared.session.trigger_evaluator._baseline_max_risk is None
+    assert recording.queries == [query, query]
+
+
+def test_control_trace_shadow_reuses_only_full_to_main_and_cold_controls_other_layers() -> None:
+    prepared, recording, query, request = _prepared_temporal_shadow_case()
+
+    shadow = prepared.execute_four_layer_temporal_shadow(candidate_mode="control_trace")
+
+    assert shadow.candidate_mode == "control_trace"
+    assert shadow.production_published is False
+    assert shadow.control.status == "SUCCEEDED"
+    assert shadow.candidate.status == "SUCCEEDED"
+    assert shadow.control.outcome is not None
+    assert shadow.candidate.outcome is not None
+    assert shadow.control.outcome.published is False
+    assert shadow.candidate.outcome.published is False
+    assert len(shadow.candidate.goal_certificates) == 0
+    assert len(shadow.trace_observations) == 3
+    assert all(item.status == "TRACE_CAPTURED" for item in shadow.trace_observations)
+    assert all(item.digest and item.identity_digest for item in shadow.trace_observations)
+
+    reused = [record for record in shadow.reuse_outcomes if record.reused]
+    assert len(reused) == 3
+    assert all(record.mode == "control_trace" for record in shadow.reuse_outcomes)
+    assert all(record.target_goal == request.goal for record in reused)
+    assert all(record.trace_digest and record.trace_write_count for record in reused)
+    cold_control = [
+        record for record in shadow.reuse_outcomes if record.status == "COLD_CONTROL"
+    ]
+    assert len(cold_control) == 6
+    assert all(record.used_search for record in cold_control)
+
+    # The shadow's scratch publication and its replan state must not leak into
+    # the formal coordinator/store or the prepared session baseline.
+    assert prepared.coordinator.store.latest(
+        run_id=request.run_context.run_id,
+        scenario_id=request.scenario.scenario_id,
+        generation_id=request.generation_id,
+    ) is None
+    assert prepared.session.layered_store.latest(
+        run_id=request.run_context.run_id,
+        scenario_id=request.scenario.scenario_id,
+        generation_id=request.generation_id,
+    ) is None
+    assert prepared.session.trigger_evaluator._last_replan_at is None
+    assert prepared.session.trigger_evaluator._baseline_avg_risk is None
+    assert prepared.session.trigger_evaluator._baseline_max_risk is None
+    assert recording.queries == [query, query]
+
+
+def test_control_trace_candidate_keeps_one_planner_and_audits_cache_progression(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepared, _, _, _ = _prepared_temporal_shadow_case()
+    original_factory = type(prepared)._private_planner
+    created: list[object] = []
+
+    def record_factory(owner, current):
+        planner = original_factory(owner, current)
+        created.append(planner)
+        return planner
+
+    monkeypatch.setattr(type(prepared), "_private_planner", record_factory)
+    result = prepared.execute_four_layer_temporal_shadow_track(
+        track="candidate",
+        candidate_mode="control_trace",
+    )
+
+    assert result.status == "SUCCEEDED"
+    assert len(created) == 1
+    assert len(result.timings) == 12
+    for previous, current in zip(result.timings, result.timings[1:], strict=False):
+        assert current.edge_geometry_cache_before == previous.edge_geometry_cache_after
+    for timing in result.timings:
+        before = timing.edge_geometry_cache_before
+        after = timing.edge_geometry_cache_after
+        delta = timing.edge_geometry_cache_delta
+        assert set(before) == set(after) == set(delta) == {"entries", "hits", "misses"}
+        assert all(after[name] >= before[name] for name in before)
+        assert all(delta[name] == after[name] - before[name] for name in before)
+    assert all(
+        timing.edge_geometry_cache_delta == {"entries": 0, "hits": 0, "misses": 0}
+        for timing in result.timings[3:6]
+    )
+
+
+def test_control_trace_candidate_failure_is_captured_without_formal_publication(
+    monkeypatch,
+) -> None:
+    prepared, recording, query, request = _prepared_temporal_shadow_case()
+
+    from arctic_route_planning import ingress as ingress_module
+
+    def fail_candidate(*_args, **_kwargs):
+        raise RuntimeError("synthetic candidate failure")
+
+    monkeypatch.setattr(
+        ingress_module._TemporalShadowCandidatePlanner,
+        "plan_candidates",
+        fail_candidate,
+    )
+
+    shadow = prepared.execute_four_layer_temporal_shadow(candidate_mode="control_trace")
+
+    assert shadow.candidate_mode == "control_trace"
+    assert shadow.production_published is False
+    assert shadow.control.status == "SUCCEEDED"
+    assert shadow.candidate.status == "FAILED"
+    assert shadow.candidate.outcome is None
+    assert shadow.candidate.error_type == "RuntimeError"
+    assert shadow.candidate.error_message == "synthetic candidate failure"
+    assert prepared.coordinator.store.latest(
+        run_id=request.run_context.run_id,
+        scenario_id=request.scenario.scenario_id,
+        generation_id=request.generation_id,
+    ) is None
+    assert prepared.session.layered_store.latest(
+        run_id=request.run_context.run_id,
+        scenario_id=request.scenario.scenario_id,
+        generation_id=request.generation_id,
+    ) is None
+    assert recording.queries == [query, query]
+
+
+def test_single_shadow_track_reports_twelve_rows_and_preserves_formal_state() -> None:
+    prepared, recording, query, request = _prepared_temporal_shadow_case()
+    formal_layered_before = prepared.session.layered_store.snapshot(
+        run_id=request.run_context.run_id,
+        scenario_id=request.scenario.scenario_id,
+        generation_id=request.generation_id,
+    )
+    formal_generation_before = prepared.session.generation_id
+
+    control = prepared.execute_four_layer_temporal_shadow_track(track="control")
+    candidate = prepared.execute_four_layer_temporal_shadow_track(
+        track="candidate",
+        candidate_mode="control_trace",
+    )
+
+    for result in (control, candidate):
+        assert result.status == "SUCCEEDED"
+        assert result.outcome is not None
+        assert result.outcome.published is False
+        assert result.production_published is False
+        assert result.scratch_published is True
+        assert result.route_integrity is True
+        assert result.plan_set_digest
+        assert len(result.timings) == 12
+        assert all(item.wall_ms >= 0 for item in result.timings)
+        assert all(
+            item.pre_ms >= 0 and item.planner_ms >= 0 and item.post_ms >= 0
+            for item in result.timings
+        )
+        assert all(
+            item.pre_ms + item.planner_ms + item.post_ms
+            <= item.wall_ms + 1e-6
+            for item in result.timings
+        )
+        assert all(item.expanded >= 0 and item.edge >= 0 for item in result.timings)
+        assert all(item.identity_digest for item in result.timings)
+        assert all(item.state_counts["expanded_labels"] >= 0 for item in result.timings)
+        assert result.scratch_proof.production_published is False
+        assert result.scratch_proof.production_store_unchanged is True
+        assert result.scratch_proof.production_session_unchanged is True
+        assert result.scratch_proof.scratch_store_isolated is True
+
+    assert [item.reuse_status for item in candidate.timings[:3]] == [
+        "TRACE_CAPTURED"
+    ] * 3
+    assert [item.reuse_status for item in candidate.timings[3:6]] == [
+        "HIT_EXACT"
+    ] * 3
+    assert all(item.search_used is False for item in candidate.timings[3:6])
+    assert all(item.expanded == 0 and item.edge == 0 for item in candidate.timings[3:6])
+    assert all(item.trace_context_present for item in candidate.timings[3:])
+    assert all(item.trace_reuse_used for item in candidate.timings[3:6])
+    assert all(not item.trace_reuse_used for item in candidate.timings[6:])
+    assert candidate.status_counts == {
+        "TRACE_CAPTURED": 3,
+        "HIT_EXACT": 3,
+        "COLD_CONTROL": 6,
+    }
+    assert all(
+        item.reuse_status == "COLD_CONTROL" and item.search_used
+        for item in candidate.timings[6:]
+    )
+    assert prepared.session.generation_id == formal_generation_before
+    assert prepared.session.layered_store.snapshot(
+        run_id=request.run_context.run_id,
+        scenario_id=request.scenario.scenario_id,
+        generation_id=request.generation_id,
+    ) == formal_layered_before
+    assert recording.queries == [query, query, query]
+
+
+def test_single_shadow_track_plan_set_digest_is_repeatable() -> None:
+    prepared, _, _, _ = _prepared_temporal_shadow_case()
+    first = prepared.execute_four_layer_temporal_shadow_track(track="control")
+    second = prepared.execute_four_layer_temporal_shadow_track(track="control")
+    assert first.status == second.status == "SUCCEEDED"
+    assert first.route_integrity is second.route_integrity is True
+    assert first.plan_set_digest == second.plan_set_digest
+    assert [item.route_digest for item in first.timings] == [
+        item.route_digest for item in second.timings
+    ]
 
 
 def test_formal_four_layer_replan_uses_six_hour_suffix_and_new_revision() -> None:
