@@ -340,7 +340,7 @@ M0 r1 暴露 JSON/SHA 热路径 overhead 15%–20%，随后改为固定网络字
 3. 上一版 2.2.2 自适应/非均匀网格方向保留但暂缓，只有固定网格瓶颈和合同必要性均有证据时才启动。
 4. 所有性能结论必须来自同输入、同边评估器、重复运行的 paired benchmark；单次 Winter wall time 只能称为工程观察。
 5. 重大算法选择、跨包合同变化和默认开关变化，需要在本文档记录决定、证据、owner、commit 和回滚方式；跨包事项同时走正式提案。
-6. P2.1 Winter M2 已完成并因一个 cold 单元回归 `5.94% > 5%` 判 `FAIL`；候选保持默认关闭。下一轮只允许先做轻量 cold-path 诊断，P3、2.2.2 和 P5 继续延期。
+6. P2.1 Winter M2 已完成并因一个 cold 单元回归 `5.94% > 5%` 判 `FAIL`；后续 M2E 已完成 cold-path 对称化，M2F 虽通过 clean smoke，但在正式 screening 首个 worker 期间触发 host swap 增量而按 G3 停止，候选保持默认关闭。下一次必须先获得连续零 host swap 与完整资源证据，才可重新开始 screening；P3、2.2.2 和 P5 继续延期。
 
 **开放问题：** 非 FIFO 情形是否进一步采用 label-correcting；ETA 迭代的保守误差模型；P3 anchor 证书的浮点容差；P2.1 cold control 旁路是否残留稳定开销，以及 `rolling_0_24h × fastest` 的 `5.94%` 回归能否在不放宽门禁的前提下由实现性诊断解释和消除。Winter 已证明每次自然产生 3 个 full→main 零搜索 hit，并确认约 48% 总 wall-time 改善，但单元硬门禁失败意味着不能宣称生产级稳定加速。独立 FIFO 分类器和 exact 标签安全支配仍是后续候选。任何资源或标签语义变更必须先记录新的实验身份与正确性回归，不能用“全局最优”“稳定加速”或“生产级优势”代替证据。
 
@@ -405,3 +405,19 @@ M0 r1 暴露 JSON/SHA 热路径 overhead 15%–20%，随后改为固定网络字
 **数据与错误中间物。** 两个 total-current bundle、A→B→C 输出、旧失败证据和清理 ledger 均保留；此前一次将 `recommended` 请求误标为 `fastest` 的两对诊断目录已移入系统回收站，不作为证据。detided 不重新引入。
 
 **当前结论与下一步。** 代码层面的 cache 生命周期不对称已消除，冷路径的 route/search 工作量始终一致；但尚未证明所有正式单元在冻结5%门禁下稳定通过。因此 P2.1 M2 仍为 `FAIL/未重入`，P3、2.2.2、P5 继续延期。下一次执行必须先获得 clean/frozen 的相关代码与输入 identity、连续零 swap 证据，再按 holdout→development 顺序各做2次 screening；screening 双窗口均通过后，才允许各窗口4次交替正式重复。
+
+### P2.1-M2F 门禁加固与 screening 停止记录（2026-08-26 15:42 +08:00）
+
+本轮按上一节条件式方案执行了“门禁加固 → smoke → screening”阶段；由于 screening 首个窗口即触发冻结资源门禁，未进入 development screening 或 formal M2。旧正式 M2 `FAIL`、旧失败构件和 candidate 默认关闭状态均保持不变。
+
+**门禁实现与冻结身份。** Orchestrator 新增本地提交 `a9b59a7c0ea66e4a95454bb6f0e27a1aefed4fae`（swap/CPU/cache 证据门禁）和 `93e61b48f5f1555c83b86c297125e946a5ee94fc`（诊断 experiment identity 绑定实现 SHA）；C 保持 `df77e57fe108f9f7545be4dad407676a6ae889a7`，A 保持 `4c30ace90935fec9371ca02f654b7ab1554183fa`，B 保持 `c861be96c56e80520c7416e0e77c417ebd239fdd`。运行前 C、Orchestrator、A、B 工作树均 clean；C `uv.lock` SHA256 为 `8893cb8387825ca4890ed808f4a98b02ba938337752971dacc3e77f859164f22`，Orchestrator `uv.lock` SHA256 为 `0fc5cdbc4e94799d1ecb945c16a92b7d12f532d2447f69bae4e4578d0019ce01`。本地提交未 push。
+
+门禁现在要求：host `pswpin/pswpout` 两项完整可测且前后不回退、进程 `VmSwap` 增量为0；worker 成功固定到单一 CPU 且 control/candidate affinity 一致；cache before/after/delta 必须存在并可验证，缺失值不能按相等处理。诊断 manifest 的 experiment ID 同时绑定脚本与 runner 实现 SHA，避免不同实现复用同一身份。
+
+**验证结果。** C `UV_OFFLINE=1 make check` 为 `275 passed`；Orchestrator 相关测试为 runner 专项 `24 passed`，排除既有大型 formal fixture 后为 `117 passed, 1 warning`；Ruff、py_compile、`git diff --check` 均通过。完整 Orchestrator 测试中的 `tests/integration/test_formal_run.py::test_formal_archive_to_b_to_c_and_six_hour_replan` 单项运行超过 `779.01 s` 仍未结束，因其为既有重型 fixture 被人工中断，不能记为全量 PASS，也未发现本轮门禁代码错误。
+
+clean smoke 构件 `/root/my_project/.runtime/experiments/winter-c-p21-m2e-gate-smoke-20260826-r3/` 使用 holdout 含潮总流输入，单目标单重复 `rolling_0_24h × fastest` 通过：route/expanded/edge/cache 均一致，CPU affinity 一致，swap 完整可测且零增量，candidate wall-time 回归 `-0.63%`；manifest 为 `PASS`、`diagnostic_only=true`、`formal_gate_verdict=NOT_APPLICABLE`，未写 formal/latest/frozen/production。
+
+**screening 停止。** 空闲20秒预检的 host swap 增量为0；随后启动 holdout screening（2次、alternate、isolated、4×3）。第一个 control worker 执行期间 host `pswpin` 从 `1190563` 增至 `1190572`，停止后为 `1190583`，违反 G3 的零增量要求。构件 `/root/my_project/.runtime/experiments/winter-c-p21-m2e-screening-holdout-20260826-r1/` 保留为 `status=PREPARED` 的中止证据，`cases.jsonl` 为空，未发生任何正式或生产发布；不计入 screening 样本，也不覆盖历史结果。由于冻结停止条件已触发，development screening、formal M2 和任何择优重跑均未执行。
+
+**数据与后续门禁。** 本轮未下载或修改 A/B 输入；两个 `total_with_tide` Winter bundle、B risk-store、RunContext、ExecutionSpec、旧正式失败证据和清理 ledger 均保留，未重新引入 detided。下一次只有在可证明连续零 host swap、进程 swap 为0且 CPU/cache 证据完整的环境中，才可从 holdout screening 重新开始；若资源环境仍无法满足，应改用独立无 swap/资源隔离执行环境，而不是放宽阈值。P3、原方案2.2.2、自适应网格和 P5 继续延期。
