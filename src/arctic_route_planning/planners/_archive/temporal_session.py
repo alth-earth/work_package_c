@@ -232,6 +232,7 @@ class TemporalSessionIdentity:
     eta_policy_digest: str = ""
     search_limits_digest: str = ""
     edge_evaluator_digest: str = ""
+    dominance_policy_digest: str = ""
     algorithm_version: str = _ALGORITHM_VERSION
 
     @classmethod
@@ -304,6 +305,11 @@ class TemporalSessionIdentity:
             eta_policy_digest=_digest(planner.eta_policy),
             search_limits_digest=_digest(planner.limits),
             edge_evaluator_digest=edge_evaluator_digest,
+            dominance_policy_digest=getattr(
+                planner,
+                "dominance_policy_digest",
+                "temporal-dominance-disabled",
+            ),
         )
 
     @property
@@ -331,6 +337,7 @@ class TemporalSessionIdentity:
             self.eta_policy_digest,
             self.search_limits_digest,
             self.edge_evaluator_digest,
+            self.dominance_policy_digest,
         )
         if (
             self.objective is None
@@ -459,6 +466,11 @@ class TemporalSession:
         self.identity = identity
         self.state = TemporalSessionState.READY
         self.context = planner._new_execution_context()
+        self.context.dominance_scope = planner.temporal_scope(
+            request,
+            input_revision=identity.input_revision,
+        )
+        planner._authorize_dominance(self.context, request)
         planner._check_cancelled(request)
         planner._validate_request_nodes(request)
         self.start_sample = planner._sample_node(request.start, request.departure_time)
@@ -608,6 +620,17 @@ class TemporalSession:
                     heading_code = (neighbor[0] - node[0], neighbor[1] - node[1])
                     next_state = (neighbor, heading_code, traversal.arrival_time)
                     tentative_cost = current_cost + traversal.cost.total_equivalent_hours
+                    if self.planner._dominance_maybe_applicable(
+                        next_state,
+                        context=self.context,
+                    ) and self.planner._should_prune_dominated_label(
+                        next_state,
+                        tentative_cost,
+                        self.labels,
+                        self.request,
+                        context=self.context,
+                    ):
+                        continue
                     previous = self.labels.get(next_state)
                     if previous is not None and tentative_cost >= previous - 1e-12:
                         continue
@@ -617,6 +640,11 @@ class TemporalSession:
                         self.context.diagnostics.exact_state_replacements += 1
                     self.labels[next_state] = tentative_cost
                     self.predecessors[next_state] = (state, traversal)
+                    self.planner._register_temporal_label(
+                        next_state,
+                        tentative_cost,
+                        context=self.context,
+                    )
                     priority = self.planner._priority(
                         neighbor, self.request.goal, self.request, self.cost_model, tentative_cost,
                         context=self.context,
@@ -840,17 +868,21 @@ def restore_session(
     session.identity = checkpoint.identity
     session.state = checkpoint.state
     session.context = planner._new_execution_context()
+    session.context.dominance_scope = planner.temporal_scope(
+        restored_request,
+        input_revision=checkpoint.identity.input_revision,
+    )
+    planner._authorize_dominance(session.context, restored_request)
     from arctic_route_planning.planners.temporal_label_astar import _MutableDiagnostics
 
     session.context.diagnostics = _MutableDiagnostics(
         **{
             field.name: (
                 dict(getattr(checkpoint.diagnostics, field.name))
-                if field.name == "rejection_reasons"
+                if field.name in {"rejection_reasons", "dominance_rejection_reasons"}
                 else getattr(checkpoint.diagnostics, field.name)
             )
             for field in fields(checkpoint.diagnostics)
-            if field.name != "fifo_status"
         }
     )
     session.context.heuristic_distances = dict(checkpoint.heuristic_distances)

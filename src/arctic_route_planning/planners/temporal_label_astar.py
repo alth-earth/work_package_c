@@ -8,12 +8,14 @@ planner and is intentionally left untouched.
 The important distinction from the control planner is the identity of a label:
 ``(node, incoming heading, exact UTC arrival time)``.  Two labels which arrive
 at the same node in the same time bucket are therefore still independent labels
-when their exact arrival instants differ.  This candidate makes no FIFO claim
-and performs no cross-arrival dominance pruning.
+when their exact arrival instants differ.  The default policy makes no FIFO
+claim and performs no cross-arrival dominance pruning; an explicitly supplied,
+scope-matched certificate may enable the conservative research-only rule.
 """
 
 from __future__ import annotations
 
+from bisect import bisect_right
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -40,6 +42,11 @@ from .eta_refinement import (
     EtaRefinementError,
     EtaRefinementPolicy,
     refine_eta,
+)
+from .temporal_qualification import (
+    TemporalDominancePolicy,
+    TemporalScope,
+    temporal_scope_from_planner,
 )
 from .time_dependent_astar import (
     PlanningRequest,
@@ -152,6 +159,13 @@ class TemporalDiagnostics:
     rejected_non_increasing_edges: int = 0
     rejection_reasons: tuple[tuple[str, int], ...] = ()
     fifo_status: str = "FIFO_UNCERTAIN"
+    dominance_policy: str = "none"
+    dominance_certificate_digest: str | None = None
+    dominance_scope_match: bool = False
+    dominance_checks: int = 0
+    dominance_pruned: int = 0
+    dominance_rejected: int = 0
+    dominance_rejection_reasons: tuple[tuple[str, int], ...] = ()
 
     @property
     def labels_peak(self) -> int:
@@ -201,6 +215,14 @@ class _MutableDiagnostics:
     rejected_eta_edges: int = 0
     rejected_non_increasing_edges: int = 0
     rejection_reasons: dict[str, int] = field(default_factory=dict)
+    fifo_status: str = "FIFO_UNCERTAIN"
+    dominance_policy: str = "none"
+    dominance_certificate_digest: str | None = None
+    dominance_scope_match: bool = False
+    dominance_checks: int = 0
+    dominance_pruned: int = 0
+    dominance_rejected: int = 0
+    dominance_rejection_reasons: dict[str, int] = field(default_factory=dict)
 
     def reject(self, reason: str) -> None:
         self.rejection_reasons[reason] = self.rejection_reasons.get(reason, 0) + 1
@@ -217,7 +239,13 @@ class _MutableDiagnostics:
         elif reason == "non_increasing_arrival":
             self.rejected_non_increasing_edges += 1
 
-    def freeze(self, *, fifo_status: str = "FIFO_UNCERTAIN") -> TemporalDiagnostics:
+    def reject_dominance(self, reason: str) -> None:
+        self.dominance_rejected += 1
+        self.dominance_rejection_reasons[reason] = (
+            self.dominance_rejection_reasons.get(reason, 0) + 1
+        )
+
+    def freeze(self, *, fifo_status: str | None = None) -> TemporalDiagnostics:
         return TemporalDiagnostics(
             expanded_labels=self.expanded_labels,
             generated_labels=self.generated_labels,
@@ -240,7 +268,16 @@ class _MutableDiagnostics:
             rejected_eta_edges=self.rejected_eta_edges,
             rejected_non_increasing_edges=self.rejected_non_increasing_edges,
             rejection_reasons=tuple(sorted(self.rejection_reasons.items())),
-            fifo_status=fifo_status,
+            fifo_status=self.fifo_status if fifo_status is None else fifo_status,
+            dominance_policy=self.dominance_policy,
+            dominance_certificate_digest=self.dominance_certificate_digest,
+            dominance_scope_match=self.dominance_scope_match,
+            dominance_checks=self.dominance_checks,
+            dominance_pruned=self.dominance_pruned,
+            dominance_rejected=self.dominance_rejected,
+            dominance_rejection_reasons=tuple(
+                sorted(self.dominance_rejection_reasons.items())
+            ),
         )
 
 
@@ -257,6 +294,14 @@ class _TemporalExecutionContext:
     heuristic_distances: dict[Node, float]
     calm_speed: Any
     edge_evaluator: EdgeEvaluator | None
+    dominance_scope: TemporalScope | None = None
+    dominance_frontier: dict[tuple[Node, HeadingCode], list[tuple[datetime, float]]] | None = None
+    dominance_envelopes: dict[
+        tuple[Node, HeadingCode], list[tuple[datetime, float]]
+    ] | None = None
+    dominance_authorized: bool | None = None
+    dominance_tolerance_seconds: float = 0.0
+    dominance_policy: TemporalDominancePolicy | None = None
 
 
 class _RejectedEdge(Exception):
@@ -285,6 +330,7 @@ class TemporalLabelAStar(TimeDependentAStar):
         limits: TemporalSearchLimits | None = None,
         eta_policy: EtaRefinementPolicy | None = None,
         edge_evaluator: EdgeEvaluator | None = None,
+        dominance_policy: TemporalDominancePolicy | None = None,
     ) -> None:
         super().__init__(
             grid,
@@ -297,6 +343,31 @@ class TemporalLabelAStar(TimeDependentAStar):
         self.limits = limits or TemporalSearchLimits()
         self.eta_policy = eta_policy or EtaRefinementPolicy()
         self._injected_edge_evaluator = edge_evaluator
+        self.dominance_policy = dominance_policy or TemporalDominancePolicy.disabled()
+
+    @property
+    def dominance_policy_digest(self) -> str:
+        """Identity fence for the optional, default-off dominance policy."""
+
+        return self.dominance_policy.digest
+
+    def temporal_scope(
+        self,
+        request: PlanningRequest,
+        *,
+        input_revision: int = 0,
+        edge_ids: Iterable[Any] | None = None,
+        probe_times: Iterable[datetime] | None = None,
+    ) -> TemporalScope:
+        """Return the finite input/configuration scope for one request."""
+
+        return temporal_scope_from_planner(
+            self,
+            request,
+            input_revision=input_revision,
+            edge_ids=edge_ids,
+            probe_times=probe_times,
+        )
 
     def solve(self, request: PlanningRequest) -> TemporalCandidateResult:
         """Solve one request and return the result with P0 diagnostics."""
@@ -546,12 +617,159 @@ class TemporalLabelAStar(TimeDependentAStar):
     def _new_execution_context(self) -> _TemporalExecutionContext:
         """Create the private mutable context captured by one session."""
 
-        return _TemporalExecutionContext(
+        context = _TemporalExecutionContext(
             diagnostics=_MutableDiagnostics(),
             heuristic_distances={},
             calm_speed=self.vessel_model.effective_speed(1.0),
             edge_evaluator=self._injected_edge_evaluator,
         )
+        context.diagnostics.dominance_policy = self.dominance_policy.mode.value
+        context.diagnostics.dominance_certificate_digest = (
+            self.dominance_policy.certificate_digest
+        )
+        certificate = self.dominance_policy.certificate
+        if certificate is not None:
+            context.diagnostics.fifo_status = certificate.fifo_certificate.status.value
+        context.dominance_policy = self.dominance_policy
+        return context
+
+    def _should_prune_dominated_label(
+        self,
+        candidate_state: TemporalState,
+        candidate_cost: float,
+        labels: Mapping[TemporalState, float],
+        request: PlanningRequest,
+        *,
+        context: _TemporalExecutionContext,
+    ) -> bool:
+        """Apply only a scope-matched, certified exact-label dominance rule.
+
+        The search deliberately only discards a newly generated label.  An
+        already-expanded label is never removed, so its descendants cannot
+        leave dangling predecessor chains in a resumable session.
+        """
+
+        if not self._authorize_dominance(context, request):
+            return False
+        diagnostics = context.diagnostics
+        diagnostics.dominance_checks += 1
+        tolerance = timedelta(seconds=context.dominance_tolerance_seconds)
+        if context.dominance_frontier is None:
+            context.dominance_frontier = {}
+            for state, existing_cost in labels.items():
+                existing_node, existing_heading, existing_arrival = state
+                context.dominance_frontier.setdefault(
+                    (existing_node, existing_heading), []
+                ).append((existing_arrival, existing_cost))
+            context.dominance_envelopes = {
+                key: _cost_envelope(values)
+                for key, values in context.dominance_frontier.items()
+            }
+        node, heading, arrival = candidate_state
+        envelope = (context.dominance_envelopes or {}).get((node, heading), ())
+        if envelope:
+            index = bisect_right(envelope, (arrival + tolerance, float("inf"))) - 1
+            if index >= 0:
+                minimum_cost = envelope[index][1]
+                strictly_better = minimum_cost < candidate_cost - _COST_EPSILON or (
+                    index > 0 or envelope[index][0] < arrival - tolerance
+                )
+                if minimum_cost <= candidate_cost + _COST_EPSILON and strictly_better:
+                    diagnostics.dominance_pruned += 1
+                    return True
+        return False
+
+    def _authorize_dominance(
+        self,
+        context: _TemporalExecutionContext,
+        request: PlanningRequest,
+    ) -> bool:
+        """Evaluate the certificate fence once per search session."""
+
+        policy = context.dominance_policy or self.dominance_policy
+        if not policy.enabled:
+            return False
+        if context.dominance_authorized is None:
+            if context.dominance_scope is None:
+                context.dominance_scope = self.temporal_scope(request)
+            context.dominance_authorized = policy.permits(
+                context.dominance_scope
+            )
+            if context.dominance_authorized:
+                context.diagnostics.dominance_scope_match = True
+                certificate = policy.certificate
+                context.dominance_tolerance_seconds = (
+                    certificate.fifo_certificate.tolerance_seconds
+                    if certificate is not None
+                    else 0.0
+                )
+            else:
+                context.diagnostics.reject_dominance(
+                    self._dominance_rejection_reason(policy, context.dominance_scope)
+                )
+        return context.dominance_authorized
+
+    @staticmethod
+    def _dominance_rejection_reason(
+        policy: TemporalDominancePolicy,
+        scope: TemporalScope,
+    ) -> str:
+        """Return a stable, actionable reason for a fail-closed decision."""
+
+        certificate = policy.certificate
+        if certificate is None:
+            return "missing_certificate"
+        if not certificate.fifo_certificate.scope.evaluator_identity_known:
+            return "unknown_evaluator"
+        if not certificate.scope.evaluator_identity_known or not scope.evaluator_identity_known:
+            return "unknown_evaluator"
+        fifo = certificate.fifo_certificate
+        if fifo.status.value != "FIFO_CERTIFIED":
+            return f"fifo_status:{fifo.status.value}"
+        if not fifo.usable:
+            return f"fifo_unusable:{fifo.reason or 'incomplete'}"
+        if not certificate.suffix_monotone:
+            return "suffix_not_monotone"
+        if not certificate.coverage_complete:
+            return "coverage_incomplete"
+        if not certificate.scope.matches(scope):
+            return "scope_mismatch"
+        return "certificate_scope_or_status"
+
+    def _dominance_maybe_applicable(
+        self,
+        state: TemporalState,
+        *,
+        context: _TemporalExecutionContext,
+    ) -> bool:
+        """Fast path for labels whose node/heading has no prior frontier."""
+
+        policy = context.dominance_policy or self.dominance_policy
+        if not policy.enabled or context.dominance_authorized is False:
+            return False
+        if context.dominance_frontier is None:
+            return True
+        node, heading, _ = state
+        return (node, heading) in context.dominance_frontier
+
+    @staticmethod
+    def _register_temporal_label(
+        state: TemporalState,
+        cost: float,
+        *,
+        context: _TemporalExecutionContext,
+    ) -> None:
+        """Add an accepted label to the local dominance lookup index."""
+
+        if context.dominance_frontier is None:
+            return
+        node, heading, arrival = state
+        key = (node, heading)
+        values = context.dominance_frontier.setdefault(key, [])
+        values.append((arrival, cost))
+        if context.dominance_envelopes is None:
+            context.dominance_envelopes = {}
+        context.dominance_envelopes[key] = _cost_envelope(values)
 
     def _previous_heading(self, node: Node, heading_code: HeadingCode) -> float | None:
         if heading_code is None:
@@ -758,6 +976,22 @@ class TemporalLabelAStar(TimeDependentAStar):
 def _with_fractions(points: tuple[Any, ...]) -> Iterable[tuple[Any, float]]:
     denominator = len(points) - 1
     return ((point, index / denominator) for index, point in enumerate(points))
+
+
+def _cost_envelope(values: Iterable[tuple[datetime, float]]) -> list[tuple[datetime, float]]:
+    """Return prefix-minimum costs ordered by exact arrival time."""
+
+    by_arrival: dict[datetime, float] = {}
+    for arrival, cost in values:
+        previous = by_arrival.get(arrival)
+        if previous is None or cost < previous:
+            by_arrival[arrival] = cost
+    envelope: list[tuple[datetime, float]] = []
+    minimum = float("inf")
+    for arrival in sorted(by_arrival):
+        minimum = min(minimum, by_arrival[arrival])
+        envelope.append((arrival, minimum))
+    return envelope
 
 
 def _eta_tolerance_seconds(policy: EtaRefinementPolicy, travel_hours: float) -> float:
