@@ -176,6 +176,44 @@ class TestSmoAstarCacheStatistics:
         assert first.metrics.traversal_cache_hits == 0
         assert first.metrics.traversal_cache_misses > 0
 
+    def test_opt_in_diagnostics_classify_exact_keys_and_objectives(self) -> None:
+        zero = np.zeros((3, 4), dtype=np.float32)
+        planner = _planner(_risk_window((zero, zero, zero)))
+        planner.plan_candidates(
+            _base_request(),
+            shared_edge_evaluation=True,
+            traversal_cache_diagnostics=True,
+        )
+
+        diagnostics = planner.traversal_cache_diagnostics
+        assert diagnostics["enabled"] is True
+        assert diagnostics["exact_key_lookups"] == (
+            diagnostics["exact_key_hits"] + diagnostics["exact_key_misses"]
+        )
+        assert diagnostics["unique_exact_keys"] > 0
+        assert diagnostics["unique_physical_edges"] > 0
+        assert diagnostics["physical_edge_reuse_lookups"] > 0
+        assert diagnostics["estimated_shallow_bytes"] > 0
+        assert diagnostics["peak_estimated_shallow_bytes"] >= diagnostics[
+            "estimated_shallow_bytes"
+        ]
+        objective = diagnostics["objective"]
+        assert set(objective) == {mode.value for mode in ObjectiveMode}
+        assert all(values["lookups"] > 0 for values in objective.values())
+
+    def test_diagnostics_are_disabled_by_default_and_on_control(self) -> None:
+        zero = np.zeros((3, 4), dtype=np.float32)
+        planner = _planner(_risk_window((zero, zero, zero)))
+        planner.plan_candidates(_base_request(), shared_edge_evaluation=True)
+        assert planner.traversal_cache_diagnostics["enabled"] is False
+
+        planner.plan_candidates(
+            _base_request(),
+            shared_edge_evaluation=False,
+            traversal_cache_diagnostics=True,
+        )
+        assert planner.traversal_cache_diagnostics["enabled"] is False
+
 
 # --- 3. Rejected-edge caching ---
 

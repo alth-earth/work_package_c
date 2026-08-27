@@ -35,6 +35,7 @@ from arctic_route_planning.profiling import SyntheticProfileConfig
 from arctic_route_planning.risk import RiskSampler
 
 SCHEMA_VERSION = "c.p3.2-smo-benchmark.v1"
+DIAGNOSTIC_SCHEMA_VERSION = "c.p3.3-smo-diagnostic.v1"
 OBJECTIVES = tuple(ObjectiveMode)
 MEMORY_LIMIT_BYTES = 4 * 1024 * 1024 * 1024
 SYNTHETIC_PROFILES = {
@@ -364,6 +365,7 @@ def _worker(args: argparse.Namespace) -> int:
         request,
         objectives=order,
         shared_edge_evaluation=args.mode == "shared",
+        traversal_cache_diagnostics=args.diagnostic,
     )
     elapsed = time.perf_counter() - started
     resources_after = _resource_snapshot()
@@ -377,6 +379,7 @@ def _worker(args: argparse.Namespace) -> int:
         "resources_after": resources_after,
         "routes": routes,
         "traversal_cache": planner.traversal_cache_stats,
+        "traversal_cache_diagnostics": planner.traversal_cache_diagnostics,
         "input_identity": input_identity,
         "risk_identity": _jsonable(planner.risk_identity),
         "request": {
@@ -437,6 +440,8 @@ def _run_worker(
         "--objective-order",
         *args.objective_order,
     ]
+    if args.diagnostic:
+        command.append("--diagnostic")
     try:
         completed = subprocess.run(
             command,
@@ -703,6 +708,74 @@ def _load_completed_runs(
     return baseline_runs, shared_runs
 
 
+def _summarize_cache_diagnostics(
+    shared_runs: list[dict[str, object]],
+) -> dict[str, object]:
+    """Aggregate opt-in exact-key diagnostics without treating them as a gate."""
+
+    records = [
+        run.get("traversal_cache_diagnostics")
+        for run in shared_runs
+        if isinstance(run.get("traversal_cache_diagnostics"), dict)
+    ]
+    if not records or not all(record.get("enabled") is True for record in records):
+        return {
+            "enabled": False,
+            "runs": len(records),
+            "reason": "worker diagnostics were not enabled",
+        }
+
+    def total(name: str) -> int:
+        return sum(int(record.get(name, 0)) for record in records)
+
+    def median(name: str) -> float:
+        values = [float(record.get(name, 0)) for record in records]
+        return statistics.median(values) if values else 0.0
+
+    exact_lookups = total("exact_key_lookups")
+    exact_hits = total("exact_key_hits")
+    objective: dict[str, dict[str, float | int]] = {}
+    for mode in OBJECTIVES:
+        name = mode.value
+        lookups = sum(
+            int((record.get("objective") or {}).get(name, {}).get("lookups", 0))
+            for record in records
+        )
+        hits = sum(
+            int((record.get("objective") or {}).get(name, {}).get("hits", 0))
+            for record in records
+        )
+        misses = sum(
+            int((record.get("objective") or {}).get(name, {}).get("misses", 0))
+            for record in records
+        )
+        objective[name] = {
+            "lookups": lookups,
+            "hits": hits,
+            "misses": misses,
+            "hit_rate_pct": (hits / lookups * 100.0) if lookups else 0.0,
+        }
+    return {
+        "enabled": True,
+        "runs": len(records),
+        "exact_key_lookups_total": exact_lookups,
+        "exact_key_hits_total": exact_hits,
+        "exact_key_misses_total": total("exact_key_misses"),
+        "exact_key_hit_rate_pct": (
+            exact_hits / exact_lookups * 100.0 if exact_lookups else 0.0
+        ),
+        "unique_exact_keys_median": median("unique_exact_keys"),
+        "unique_physical_edges_median": median("unique_physical_edges"),
+        "physical_edge_reuse_lookups_total": total("physical_edge_reuse_lookups"),
+        "time_variant_exact_misses_total": total("time_variant_exact_misses"),
+        "time_variant_unique_keys_median": median("time_variant_unique_keys"),
+        "estimated_shallow_bytes_median": median("estimated_shallow_bytes"),
+        "peak_estimated_shallow_bytes_median": median("peak_estimated_shallow_bytes"),
+        "objective": objective,
+        "per_run": records,
+    }
+
+
 def _summarize_runs(
     baseline_runs: list[dict[str, object]],
     shared_runs: list[dict[str, object]],
@@ -756,8 +829,14 @@ def _summarize_runs(
                 "cache_hit_rate_ge_50pct": hit_rate >= 50.0,
             }
         )
+    elif gate_profile == "diagnostic":
+        # Diagnostic runs are evidence-bearing only for semantic/resource
+        # integrity.  Their timing, hit-rate, and RSS values are explanatory
+        # observations and do not silently become a promotion gate.
+        checks.pop("rss_ratio_le_1_10")
     else:  # pragma: no cover - argparse and validation fence this.
         raise ValueError(f"unsupported gate profile: {gate_profile}")
+    cache_diagnostics = _summarize_cache_diagnostics(shared_runs)
     return {
         "status": "COMPLETED",
         "gate_profile": gate_profile,
@@ -775,6 +854,7 @@ def _summarize_runs(
         "cache_misses_total": total_misses,
         "route_identity": "PASS",
         "resource_failures": resource_failures,
+        "cache_diagnostics": cache_diagnostics,
         "baseline_runs": baseline_runs,
         "shared_runs": shared_runs,
     }
@@ -809,8 +889,11 @@ def _frozen_identity(args: argparse.Namespace, repo_root: Path) -> dict[str, obj
         "max_expansions": args.max_expansions,
     }
     identity = {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": (
+            DIAGNOSTIC_SCHEMA_VERSION if args.diagnostic else SCHEMA_VERSION
+        ),
         "algorithm": "smo-astar",
+        "run_kind": "diagnostic" if args.diagnostic else "benchmark",
         "git": git,
         "input": input_identity,
         "config_root": str(args.config_root.resolve()),
@@ -838,9 +921,14 @@ def _validate_resume_identity(
 
 def _manifest_document(identity: dict[str, object]) -> dict[str, object]:
     suffix = str(identity["identity_sha256"])[:12]
+    diagnostic = identity.get("run_kind") == "diagnostic"
     return {
-        "schema_version": SCHEMA_VERSION,
-        "experiment_id": f"c-p3.2-smo-{suffix}",
+        "schema_version": identity["schema_version"],
+        "experiment_id": (
+            f"c-p3.3-smo-diagnostic-{suffix}"
+            if diagnostic
+            else f"c-p3.2-smo-{suffix}"
+        ),
         "status": "PREPARED",
         "identity": identity,
         "completed_warmup_pairs": 0,
@@ -1043,6 +1131,12 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise ValueError("commit input requires --start, --goal, and --departure")
     if args.output_dir is not None and args.gate_profile is None:
         raise ValueError("evidence mode requires --gate-profile")
+    if args.diagnostic and args.output_dir is None:
+        raise ValueError("--diagnostic requires evidence mode with --output-dir")
+    if args.diagnostic and args.gate_profile != "diagnostic":
+        raise ValueError("--diagnostic requires --gate-profile diagnostic")
+    if args.gate_profile == "diagnostic" and not args.diagnostic:
+        raise ValueError("diagnostic gate profile requires --diagnostic")
     if args.output_dir is None and args.output is None and not args.worker:
         raise ValueError("parent mode requires --output-dir or --output")
 
@@ -1071,11 +1165,16 @@ def _parser() -> argparse.ArgumentParser:
         choices=tuple(mode.value for mode in OBJECTIVES),
         default=[mode.value for mode in OBJECTIVES],
     )
-    parser.add_argument("--gate-profile", choices=("m0", "m1"))
+    parser.add_argument("--gate-profile", choices=("m0", "m1", "diagnostic"))
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--strict-resources", action="store_true")
     parser.add_argument("--output", type=Path, help="legacy one-shot summary path")
+    parser.add_argument(
+        "--diagnostic",
+        action="store_true",
+        help="enable P3.3 synthetic exact-key diagnostics (evidence mode only)",
+    )
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--mode", choices=("baseline", "shared"), help=argparse.SUPPRESS)
     parser.add_argument("--worker-output", type=Path, help=argparse.SUPPRESS)

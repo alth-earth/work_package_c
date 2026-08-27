@@ -37,14 +37,18 @@ def _run(
     peak_rss_kib: int,
     hits: int = 0,
     misses: int = 0,
+    diagnostics: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    return {
+    payload = {
         "wall_seconds": wall_seconds,
         "peak_rss_kib": peak_rss_kib,
         "traversal_cache": {"hits": hits, "misses": misses},
         "resources_before": _resource_snapshot(),
         "resources_after": _resource_snapshot(),
     }
+    if diagnostics is not None:
+        payload["traversal_cache_diagnostics"] = diagnostics
+    return payload
 
 
 def test_pair_order_alternates_control_and_candidate() -> None:
@@ -127,3 +131,74 @@ def test_m1_gate_requires_speed_hit_rate_and_memory_together() -> None:
     assert failed["gate_verdict"] == "FAIL"
     assert failed["gate_checks"]["cache_hit_rate_ge_50pct"] is False
     assert failed["gate_checks"]["rss_ratio_le_1_10"] is False
+
+
+def test_diagnostic_summary_keeps_observations_out_of_promotion_gate() -> None:
+    diagnostic = {
+        "enabled": True,
+        "exact_key_lookups": 100,
+        "exact_key_hits": 40,
+        "exact_key_misses": 60,
+        "unique_exact_keys": 60,
+        "unique_physical_edges": 20,
+        "physical_edge_reuse_lookups": 80,
+        "time_variant_exact_misses": 15,
+        "time_variant_unique_keys": 10,
+        "estimated_shallow_bytes": 1000,
+        "peak_estimated_shallow_bytes": 1100,
+        "objective": {
+            "fastest": {"lookups": 30, "hits": 0, "misses": 30},
+            "low_risk": {"lookups": 35, "hits": 20, "misses": 15},
+            "recommended": {"lookups": 35, "hits": 20, "misses": 15},
+        },
+    }
+    baseline = [_run(10.0, peak_rss_kib=100, diagnostics=diagnostic) for _ in range(3)]
+    shared = [
+        _run(20.0, peak_rss_kib=300, hits=40, misses=60, diagnostics=diagnostic)
+        for _ in range(3)
+    ]
+
+    summary = _SCRIPT._summarize_runs(
+        baseline,
+        shared,
+        gate_profile="diagnostic",
+        repetitions=3,
+        strict_resources=True,
+    )
+
+    assert summary["gate_verdict"] == "PASS"
+    assert "rss_ratio_le_1_10" not in summary["gate_checks"]
+    assert summary["cache_diagnostics"]["exact_key_hit_rate_pct"] == 40.0
+    assert summary["cache_diagnostics"]["time_variant_exact_misses_total"] == 45
+    assert summary["cache_diagnostics"]["objective"]["low_risk"]["hit_rate_pct"] == pytest.approx(
+        20 / 35 * 100
+    )
+
+
+def test_diagnostic_cli_requires_the_diagnostic_gate_profile() -> None:
+    args = _SCRIPT._parser().parse_args(
+        [
+            "--synthetic-profile",
+            "small",
+            "--output-dir",
+            "diagnostic-output",
+            "--gate-profile",
+            "diagnostic",
+            "--diagnostic",
+        ]
+    )
+    _SCRIPT._validate_args(args)
+
+    invalid = _SCRIPT._parser().parse_args(
+        [
+            "--synthetic-profile",
+            "small",
+            "--output-dir",
+            "diagnostic-output",
+            "--gate-profile",
+            "m0",
+            "--diagnostic",
+        ]
+    )
+    with pytest.raises(ValueError, match="requires --gate-profile diagnostic"):
+        _SCRIPT._validate_args(invalid)

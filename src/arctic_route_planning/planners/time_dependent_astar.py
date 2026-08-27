@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from heapq import heappop, heappush
 from itertools import count
@@ -197,6 +197,41 @@ class _CachedRejection:
     detail: str
 
 
+def _cache_entry_shallow_size(
+    key: tuple[Node, Node, datetime, HeadingCode],
+    value: _EdgeTraversalData | _CachedRejection,
+) -> int:
+    """Estimate cache footprint without traversing shared object graphs.
+
+    The diagnostic is deliberately a lower-bound estimate: it includes the
+    dictionary key/value containers and their immediate scalar/tuple members,
+    but not allocator or dictionary-table overhead.  It is only collected by
+    the explicit research diagnostic mode and is never used as a production
+    resource limit.
+    """
+
+    size = sys.getsizeof(key) + sum(sys.getsizeof(item) for item in key)
+    size += sys.getsizeof(value)
+    if isinstance(value, _EdgeTraversalData):
+        members = (
+            value.arrival_time,
+            value.heading_degrees,
+            value.speed_knots,
+            value.distance_km,
+            value.travel_hours,
+            value.risk_score,
+            value.maximum_risk,
+            value.confidence,
+            value.heading_change_degrees,
+            value.source_risk_ids,
+        )
+        size += sum(sys.getsizeof(item) for item in members)
+        size += sum(sys.getsizeof(item) for item in value.source_risk_ids)
+    else:
+        size += sys.getsizeof(value.kind) + sys.getsizeof(value.detail)
+    return size
+
+
 @dataclass(slots=True)
 class _TraversalCacheStats:
     """Per-call observational statistics for the shared traversal cache."""
@@ -210,6 +245,81 @@ class _TraversalCacheStats:
     entries: int = 0
     peak_entries: int = 0
     rejected_entries: int = 0
+    diagnostics_enabled: bool = False
+    exact_key_lookups: int = 0
+    exact_key_hits: int = 0
+    exact_key_misses: int = 0
+    physical_edge_reuse_lookups: int = 0
+    time_variant_exact_misses: int = 0
+    estimated_shallow_bytes: int = 0
+    peak_estimated_shallow_bytes: int = 0
+    objective_lookups: dict[str, int] = field(default_factory=dict)
+    objective_hits: dict[str, int] = field(default_factory=dict)
+    objective_misses: dict[str, int] = field(default_factory=dict)
+    _seen_exact_keys: set[tuple[Node, Node, datetime, HeadingCode]] = field(
+        default_factory=set,
+        repr=False,
+    )
+    _physical_departures: dict[tuple[Node, Node, HeadingCode], set[datetime]] = field(
+        default_factory=dict,
+        repr=False,
+    )
+    _time_variant_keys: set[tuple[Node, Node, datetime, HeadingCode]] = field(
+        default_factory=set,
+        repr=False,
+    )
+
+    def record_lookup(
+        self,
+        key: tuple[Node, Node, datetime, HeadingCode],
+        objective: ObjectiveMode,
+        *,
+        hit: bool,
+    ) -> None:
+        """Record opt-in exact-key and physical-edge reuse diagnostics."""
+
+        if not self.diagnostics_enabled:
+            return
+        self.exact_key_lookups += 1
+        if hit:
+            self.exact_key_hits += 1
+        else:
+            self.exact_key_misses += 1
+        objective_name = objective.value
+        self.objective_lookups[objective_name] = (
+            self.objective_lookups.get(objective_name, 0) + 1
+        )
+        objective_counts = self.objective_hits if hit else self.objective_misses
+        objective_counts[objective_name] = objective_counts.get(objective_name, 0) + 1
+
+        start, end, departure_time, incoming_code = key
+        physical_key = (start, end, incoming_code)
+        departures = self._physical_departures.get(physical_key)
+        if departures is None:
+            departures = set()
+            self._physical_departures[physical_key] = departures
+        elif key not in self._seen_exact_keys:
+            self.time_variant_exact_misses += 1
+            self._time_variant_keys.add(key)
+        if departures:
+            self.physical_edge_reuse_lookups += 1
+        departures.add(departure_time)
+        self._seen_exact_keys.add(key)
+
+    def record_entry(
+        self,
+        key: tuple[Node, Node, datetime, HeadingCode],
+        value: _EdgeTraversalData | _CachedRejection,
+    ) -> None:
+        """Record a lower-bound entry-size estimate for an inserted key."""
+
+        if not self.diagnostics_enabled:
+            return
+        self.estimated_shallow_bytes += _cache_entry_shallow_size(key, value)
+        self.peak_estimated_shallow_bytes = max(
+            self.peak_estimated_shallow_bytes,
+            self.estimated_shallow_bytes,
+        )
 
 
 @dataclass(slots=True)
@@ -316,6 +426,54 @@ class TimeDependentAStar:
             "entries": stats.entries,
             "peak_entries": stats.peak_entries,
             "rejected_entries": stats.rejected_entries,
+        }
+
+    @property
+    def traversal_cache_diagnostics(self) -> dict[str, object]:
+        """Return opt-in exact-key diagnostics from the last candidate call.
+
+        The private sets used to classify physical-edge/time variants are
+        intentionally exposed only as aggregate counters.  A normal planner
+        call returns ``enabled=False`` and does not retain diagnostic keys.
+        """
+
+        stats = self._last_traversal_cache_stats
+        if not stats.diagnostics_enabled:
+            return {
+                "enabled": False,
+                "exact_key_lookups": 0,
+                "exact_key_hits": 0,
+                "exact_key_misses": 0,
+                "unique_exact_keys": 0,
+                "unique_physical_edges": 0,
+                "physical_edge_reuse_lookups": 0,
+                "time_variant_exact_misses": 0,
+                "time_variant_unique_keys": 0,
+                "estimated_shallow_bytes": 0,
+                "peak_estimated_shallow_bytes": 0,
+                "objective": {},
+            }
+        objective = {
+            name: {
+                "lookups": stats.objective_lookups.get(name, 0),
+                "hits": stats.objective_hits.get(name, 0),
+                "misses": stats.objective_misses.get(name, 0),
+            }
+            for name in (mode.value for mode in ObjectiveMode)
+        }
+        return {
+            "enabled": True,
+            "exact_key_lookups": stats.exact_key_lookups,
+            "exact_key_hits": stats.exact_key_hits,
+            "exact_key_misses": stats.exact_key_misses,
+            "unique_exact_keys": len(stats._seen_exact_keys),
+            "unique_physical_edges": len(stats._physical_departures),
+            "physical_edge_reuse_lookups": stats.physical_edge_reuse_lookups,
+            "time_variant_exact_misses": stats.time_variant_exact_misses,
+            "time_variant_unique_keys": len(stats._time_variant_keys),
+            "estimated_shallow_bytes": stats.estimated_shallow_bytes,
+            "peak_estimated_shallow_bytes": stats.peak_estimated_shallow_bytes,
+            "objective": objective,
         }
 
     def plan(self, request: PlanningRequest) -> PlanningResult:
@@ -535,6 +693,7 @@ class TimeDependentAStar:
         objectives: Iterable[ObjectiveMode | str] = tuple(ObjectiveMode),
         *,
         shared_edge_evaluation: bool = False,
+        traversal_cache_diagnostics: bool = False,
     ) -> dict[ObjectiveMode, PlanningResult]:
         """Plan the same request under multiple objective policies.
 
@@ -544,6 +703,9 @@ class TimeDependentAStar:
         (start, end, departure_time, incoming_code) tuple.  Each
         objective still maintains independent labels, predecessors and open
         sets, so the returned routes are identical to the non-shared path.
+        ``traversal_cache_diagnostics`` is an internal research switch; when
+        enabled it records aggregate exact-key and physical-edge reuse
+        counters without exposing cache keys or changing search behavior.
         """
 
         modes = tuple(ObjectiveMode(raw_mode) for raw_mode in objectives)
@@ -554,7 +716,9 @@ class TimeDependentAStar:
                 for mode in modes
             }
         traversal_cache: dict = {}
-        cache_stats = _TraversalCacheStats()
+        cache_stats = _TraversalCacheStats(
+            diagnostics_enabled=traversal_cache_diagnostics,
+        )
         self._last_traversal_cache_stats = cache_stats
         results: dict[ObjectiveMode, PlanningResult] = {}
         for index, mode in enumerate(modes):
@@ -703,6 +867,12 @@ class TimeDependentAStar:
         if traversal_cache is not None:
             cache_key = (start, end, departure_time, incoming_code)
             cached = traversal_cache.get(cache_key, _CACHE_MISS)
+            if cache_stats is not None:
+                cache_stats.record_lookup(
+                    cache_key,
+                    request.objective,
+                    hit=cached is not _CACHE_MISS,
+                )
             if cached is not _CACHE_MISS:
                 counters.cache_hits += 1
                 if cache_stats is not None:
@@ -731,6 +901,7 @@ class TimeDependentAStar:
                 cached_rejection = self._cache_rejection(exc)
                 traversal_cache[cache_key] = cached_rejection
                 if cache_stats is not None:
+                    cache_stats.record_entry(cache_key, cached_rejection)
                     cache_stats.rejected_entries += 1
                     cache_stats.entries = len(traversal_cache)
                     cache_stats.peak_entries = max(
@@ -743,6 +914,7 @@ class TimeDependentAStar:
         if traversal_cache is not None and cache_write:
             traversal_cache[cache_key] = data
             if cache_stats is not None:
+                cache_stats.record_entry(cache_key, data)
                 cache_stats.entries = len(traversal_cache)
                 cache_stats.peak_entries = max(
                     cache_stats.peak_entries, cache_stats.entries
