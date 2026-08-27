@@ -22,7 +22,7 @@ Related Canonical Docs:
 
 # 工作包 C 核心算法现状、改进方案与实施计划
 
-> 本文档将“工作包 C 核心算法实现审计报告”与后续改进方案合并为一个持续维护的计划文档。当前正式基线是带风险、速度和 ETA 耦合的时间依赖 A*。P2.1 控制轨迹复用在同 goal 收紧查询上仍保留约 48% 总耗时改善这一工程观察，但 Winter M2 的冻结门禁没有改变：M2K 对称预热诊断两档均因 order-gap 失败，P2.1 当前收口为 `MEASUREMENT_INCONCLUSIVE / FORMAL_M2_FAIL_UNCHANGED`，candidate 继续默认关闭。P3 SMO-A* 与 ARA* 保持 `DEFERRED/RETIRED`、`M0_FAIL/DEFERRED`；不再启动 Winter 重型复测。P0.1 已在 clean 本地提交上通过 small/medium Synthetic M0，当前为 `M0_PASS_READY_FOR_M1_PLAN`，但仍是 C 内部、默认关闭、未接入 Winter/ingress 的研究路径。所有候选继续默认关闭、非发布，尚不能声明生产级稳定优势或全局最优。
+> 本文档将“工作包 C 核心算法实现审计报告”与后续改进方案合并为一个持续维护的计划文档。当前正式基线是带风险、速度和 ETA 耦合的时间依赖 A*。P2.1 控制轨迹复用在同 goal 收紧查询上仍保留约 48% 总耗时改善这一工程观察，但 Winter M2 的冻结门禁没有改变：M2K 对称预热诊断两档均因 order-gap 失败，P2.1 当前收口为 `MEASUREMENT_INCONCLUSIVE / FORMAL_M2_FAIL_UNCHANGED`，candidate 继续默认关闭。P3 SMO-A* 与 ARA* 保持 `DEFERRED/RETIRED`、`M0_FAIL/DEFERRED`；不再启动 Winter 重型复测。P0.1 已在 clean 本地提交上通过 small/medium/stress Synthetic M1，当前为 `M1_PASS_READY_FOR_SEPARATE_REAL_INPUT_PLAN`，但仍是 C 内部、默认关闭、未接入 Winter/ingress 的研究路径。所有候选继续默认关闭、非发布，尚不能声明生产级稳定优势或全局最优。
 
 ## 1. 文档定位与更新规则（2026-08-24 20:52 +08:00）
 
@@ -85,6 +85,7 @@ RiskSourcePlanningIngress.execute
 | C→D 路线合同 | `FROZEN_BASELINE` | route v2 / four-layer v3 schema、digest 和来源字段保持冻结 |
 | 单元/合同回归 | `UNIT_PASS` | 历史 P0/P2.1 基线分别为 `215/274 passed`；本轮 `UV_OFFLINE=1 make check` 为 `294 passed`，Ruff、lock/sync、CLI 通过 |
 | 当前 A* 的全局最优性 | `NOT_IMPLEMENTED`（未证明） | 时间桶合并、FIFO、ETA 迭代和连续时间误差均无通用证明 |
+| P0.1 FIFO 资格与 exact-arrival 安全支配 | `M1_PASS_READY_FOR_SEPARATE_REAL_INPUT_PLAN` | small/medium/stress M1 语义、oracle、fail-closed、确定性和资源门通过；仅 C 内部、默认关闭 |
 | P2.1 相对独立 cold control 的受限重复查询优势 | `EXPERIMENTAL_PASS` | clean M0/M1 与 Winter formal 均观测到约 47%–79% 总耗时改善；只适用于同 goal 收紧查询，不等于跨 workload 稳定优势 |
 | 相对于传统算法的生产级稳定性能优势 | `NOT_IMPLEMENTED`（未证明） | P2.1 Winter M2 因 `rolling_0_24h × fastest` 中位回归 `5.94% > 5%` 失败；M2J/M2K 复测显示候选真实回归≈0（`5.94%` 为测量伪影、n=2 统计效力不足），但测量协议信噪比不足以晋级，P2.1 收口 `MEASUREMENT_INCONCLUSIVE`；候选未默认启用 |
 | P3 SMO-A* 共享记忆化多目标搜索 | `DEFERRED/RETIRED` | 语义/诊断回归通过；P3.2 holdout/development M1 分别因 hit rate `14.27%/19.19%`、RSS ratio `3.367/3.380` 失败；P3.3 synthetic medium exact-key hit `47.87%`，主要为 objective 路径差异，未形成安全修复路径 |
@@ -189,7 +190,7 @@ target.maximum_risk    >= R_trace
 |---|---|---|---|
 | P0 正确性语义 | `TemporalLabel`/时间展开 reference oracle；FIFO 与非 FIFO fixture；ETA 残差、最大迭代、周期检测和最终重采样 | 反例全部命中预期；control 与 oracle 在小图上路线/代价一致；不收敛显式失败 | `UNIT_PASS` |
 | P1 会话骨架 | 在 C 内实现 per-objective 可恢复 session、OPEN/前驱/标签快照和 input/config/model digest fence | 不跨目标/代际复用；取消、generation、revision、fail-closed 回归通过 | `UNIT_PASS` |
-| P0.1 有限域 FIFO 与 exact-arrival 支配 | `qualify_fifo`、完整 `TemporalScope`、证书化安全支配和独立 M0 runner | small/medium 语义与 oracle 一致；FIFO/scope/determinism/resource 完整；真实 pruning；compute median ≤5% 回归、RSS ≤1.10 | `M0_PASS_READY_FOR_M1_PLAN`；仅 C 内部、默认关闭 |
+| P0.1 有限域 FIFO 与 exact-arrival 支配 | `qualify_fifo`、完整 `TemporalScope`、证书化安全支配和独立 M1 runner | small/medium/stress 语义与 oracle 一致；FIFO/scope/fail-closed/determinism/resource 完整；真实 pruning；compute median/P95 ≤5% 回归、RSS ≤1.10 | `M1_PASS_READY_FOR_SEPARATE_REAL_INPUT_PLAN`；仅 C 内部、默认关闭 |
 | P2 same-goal monotonic reuse | 实现同一目标、同一输入下 exact hit 与收紧时域/风险约束的证书迁移，保留 baseline 回退 | M0/M1 与 control 语义一致；证书可重算；命中零搜索扩展；失败自动回退 | `UNIT_PASS`（M0 性能 FAIL） |
 | P2.1 control trace reuse | 为正式 control 增加默认关闭的历史写入轨迹证书；只在同 goal 收紧约束保持整段执行轨迹时复用 | transient-label 反例 fail-closed；M0 总耗时至少改善 20%；M1 两规模 median 至少改善 15% | `EXPERIMENTAL_PASS`（M0/M1）；Winter M2 `FAIL`；M2K 对称预热诊断仍有 order-gap 失败，当前为 `MEASUREMENT_INCONCLUSIVE / FORMAL_M2_FAIL_UNCHANGED`，candidate 默认关闭 |
 | P3 SMO-A* / full-anchor reuse | SMO-A* 共享记忆化已实现但 P3.3 诊断后延期退出；full-anchor `U_A/LB_A` 证书复用暂不独立推进 | SMO-A*: 路线一致 PASS、cache hit rate >= 50%、wall >= 15%；full-anchor: M1 >= 5 次 paired | SMO-A* `DEFERRED/RETIRED`；ARA* `M0_FAIL/DEFERRED`；full-anchor parked，等待 P0.1 证书语义 |
@@ -675,10 +676,26 @@ small 的浅层缓存条目估计中位数为 `27,204` bytes，medium 为 `166,6
 
 **P3/ARA* 冻结。** SMO-A* 保持 `DEFERRED/RETIRED`，ARA* 保持 `M0_FAIL/DEFERRED`；full-anchor reuse 不再作为独立 P3 分支推进，暂存为 P0.1 证书语义通过后的下游候选。旧实验目录和原始 manifest 原样保留，不写入 formal latest、replanning baseline 或 frozen artifact。
 
-**P0.1 当前状态。** `temporal_qualification.py` 已提供有限域 `FIFO_CERTIFIED/FIFO_VIOLATED/FIFO_UNCERTAIN`、探测覆盖、容差和反例；`TemporalScope` 绑定 RiskFrame/config/grid/model/request/evaluator identity；`TemporalDominanceCertificate` 对 FIFO、suffix monotone、coverage 和 scope 做 fail-closed 校验；`TemporalDominancePolicy.disabled()` 为默认值，`certified_only(...)` 仅供 C 内部研究调用；session identity/checkpoint 已绑定 dominance policy digest。`benchmark_temporal_dominance.py` 已具备 small `5×7×7`、medium `9×13×13`、三目标、独立 worker、warmup/repetition、语义/确定性/资源/真实 pruning 门禁。
+**P0.1 当前实现。** `temporal_qualification.py` 已提供有限域 `FIFO_CERTIFIED/FIFO_VIOLATED/FIFO_UNCERTAIN`、探测覆盖、容差和反例；`TemporalScope` 绑定 RiskFrame/config/grid/model/request/evaluator identity；`TemporalDominanceCertificate` 对 FIFO、suffix monotone、coverage 和 scope 做 fail-closed 校验；`TemporalDominancePolicy.disabled()` 为默认值，`certified_only(...)` 仅供 C 内部研究调用；session identity/checkpoint 已绑定 dominance policy digest。`benchmark_temporal_dominance.py` 已具备 small `5×7×7`、medium `9×13×13`、stress `13×19×19`、三目标、独立 worker、warmup/repetition、fail-closed audit、语义/确定性/资源/真实 pruning 和 median/P95 compute 门禁。
 
 **P0.1 M0 结果。** 在 clean 本地提交 `eeb0d0a` 上，small 构件 `/root/my_project/.runtime/experiments/c-p01-temporal-dominance-m0-small-20260827-r3/` 与 medium 构件 `/root/my_project/.runtime/experiments/c-p01-temporal-dominance-m0-medium-20260827-r3/` 均为 `PASS`，实现摘要为 `5f7c6234…`。每个 profile 均为 30 个 paired case（3 objectives × 10 repetitions，warmup 1），路线/业务字段与 reference oracle 一致，FIFO certificate、scope match、确定性、CPU affinity、RSS/swap/OOM/timeout 证据完整，并观察到 60 次 certified label pruning。small 的 `compute_ms` 中位回归 `-58.22%`、RSS median ratio `1.0000`；medium 分别为 `-76.52%`、`1.0003`；三目标及 P95 均未超过 5% 回归门禁。
 
-P0.1 当前标记为 `M0_PASS_READY_FOR_M1_PLAN`，只表示可以另立、另审计 M1 计划，不表示进入 Winter、启用 candidate 或接入 ingress/service。M1 前仍需冻结真实/更大状态域的非 FIFO 覆盖策略、独立输入 identity 和资源预算。
+P0.1 M0 已收口为 `M0_PASS_READY_FOR_M1_PLAN`；该历史标记只表示当时可以另立、另审计 M1 计划，不表示进入 Winter、启用 candidate 或接入 ingress/service。随后 M1 已按独立 identity、固定资源预算和 fail-closed 矩阵完成，详见下节。
 
-**架构前置项已完成。** commit `eeb0d0a` 已将 temporal session 内核迁入活跃的 C 内部命名空间 `planners/temporal_session.py`，`planners/_archive/temporal_session.py` 仅保留兼容转发；session identity、checkpoint、正式合同和默认关闭策略未改变。M1 仍需把该迁移后的实现重新绑定到独立实验 identity（本次 r3 已完成）。
+**架构前置项已完成。** commit `eeb0d0a` 已将 temporal session 内核迁入活跃的 C 内部命名空间 `planners/temporal_session.py`，`planners/_archive/temporal_session.py` 仅保留兼容转发；session identity、checkpoint、正式合同和默认关闭策略未改变。M1 已在后续 clean 提交 `0c0e8a1` 上重新绑定独立实验 identity。
+
+### 【2026-08-27 | COMPLETED】P0.1-M1 证书化时间域验证与规模扩展
+
+本轮从 clean 本地提交 `0c0e8a1` 运行，未触碰 orchestrator、M2J/M2K 构件、正式 latest、replanning baseline 或 frozen artifact。runner identity 显式标记为 `M1`，实现摘要为 `bead3c7319907568e5c8fa8f9a7d7c1fd37d0f60261e90e859e3b18fe104c499`；固定 `warmup_runs=1`、10 次重复、三目标、每 strategy/objective/repetition 独立 worker、交替顺序，性能门使用 `compute_ms`，wall time 仅作过程启动开销诊断。
+
+**M1 构件与结果：**
+
+| profile | 构件 | paired cases | compute median 回归 | compute P95 回归 | RSS median ratio | pruning | gate |
+|---|---|---:|---:|---:|---:|---:|---|
+| small `5×7×7` | [`c-p01-temporal-dominance-m1-small-20260827-r1`](/root/my_project/.runtime/experiments/c-p01-temporal-dominance-m1-small-20260827-r1/) | 30 | `-55.01%` | `-36.78%` | `1.0000` | 60 | `PASS` |
+| medium `9×13×13` | [`c-p01-temporal-dominance-m1-medium-20260827-r1`](/root/my_project/.runtime/experiments/c-p01-temporal-dominance-m1-medium-20260827-r1/) | 30 | `-75.32%` | `-67.20%` | `1.0000` | 60 | `PASS` |
+| stress `13×19×19` | [`c-p01-temporal-dominance-m1-stress-20260827-r1`](/root/my_project/.runtime/experiments/c-p01-temporal-dominance-m1-stress-20260827-r1/) | 30 | `-83.98%` | `-78.21%` | `1.0001` | 60 | `PASS` |
+
+每个 profile 的 7 项资格审计均通过：`FIFO_CERTIFIED` 允许 pruning；`FIFO_VIOLATED`、`FIFO_UNCERTAIN`、suffix 非单调、coverage 不完整、scope mismatch 和 unknown evaluator 均拒绝授权且 pruning 为零。所有 paired case 的路线、ETA、速度、风险、成本、confidence、source IDs、失败语义与 zero-heuristic exact-arrival oracle 一致，离散语义确定，CPU affinity、RSS、swap、OOM、timeout 证据完整。
+
+**决策。** P0.1 晋级为 `M1_PASS_READY_FOR_SEPARATE_REAL_INPUT_PLAN`。这只证明在当前 C 内部合成状态域上的证书资格和受控性能门通过，不证明 Winter/连续海洋问题的全局最优性，不启用 candidate，不接入 ingress/service。下一轮若继续，必须另立并绑定独立真实/更大输入 identity、资源预算和非 FIFO/ETA 策略；在此之前保持正式 control 和 candidate 默认关闭。
