@@ -86,7 +86,7 @@ RiskSourcePlanningIngress.execute
 | 单元/合同回归 | `UNIT_PASS` | 历史 P0/P2.1 基线分别为 `215/274 passed`；本轮 `UV_OFFLINE=1 make check` 为 `294 passed`，Ruff、lock/sync、CLI 通过 |
 | 当前 A* 的全局最优性 | `NOT_IMPLEMENTED`（未证明） | 时间桶合并、FIFO、ETA 迭代和连续时间误差均无通用证明 |
 | P2.1 相对独立 cold control 的受限重复查询优势 | `EXPERIMENTAL_PASS` | clean M0/M1 与 Winter formal 均观测到约 47%–79% 总耗时改善；只适用于同 goal 收紧查询，不等于跨 workload 稳定优势 |
-| 相对于传统算法的生产级稳定性能优势 | `NOT_IMPLEMENTED`（未证明） | P2.1 Winter M2 因 `rolling_0_24h × fastest` 中位回归 `5.94% > 5%` 失败；候选未默认启用 |
+| 相对于传统算法的生产级稳定性能优势 | `NOT_IMPLEMENTED`（未证明） | P2.1 Winter M2 因 `rolling_0_24h × fastest` 中位回归 `5.94% > 5%` 失败；M2J/M2K 复测显示候选真实回归≈0（`5.94%` 为测量伪影、n=2 统计效力不足），但测量协议信噪比不足以晋级，P2.1 收口 `MEASUREMENT_INCONCLUSIVE`；候选未默认启用 |
 | P3 SMO-A* 共享记忆化多目标搜索 | `DEFERRED/RETIRED` | 语义/诊断回归通过；P3.2 holdout/development M1 分别因 hit rate `14.27%/19.19%`、RSS ratio `3.367/3.380` 失败；P3.3 synthetic medium exact-key hit `47.87%`，主要为 objective 路径差异，未形成安全修复路径 |
 | ARA* anytime 备选 | `M0_FAIL/DEFERRED` | small profile fastest/recommended 首解改善 `4.14%/4.19%`，未达到每目标 `20%` 门禁；不进入 Winter |
 | bounded LRU 风险采样缓存 | `EXPERIMENTAL` | direct medium 实验约 14.77% median 改善，但增加约 38.6 MiB RSS，未通过正式 12 路线门禁 |
@@ -348,9 +348,9 @@ M0 r1 暴露 JSON/SHA 热路径 overhead 15%–20%，随后改为固定网络字
 6. P2.1 原始 Winter M2 因 `rolling_0_24h × fastest` 回归 `5.94% > 5%` 判 `FAIL`；M2E 完成 cold-path 对称化，M2F/M2G 因 host swap 证据不足停止。M2H 在连续零 host swap 的受控环境中完成双窗口 screening：holdout 正式 M2 `PASS`，development 正式 M2 因 `executable_0_6h × low_risk` 与三个 rolling 单元超过 5% 门禁而 `FAIL`，故 P2.1 总体仍 `FAIL`，candidate 保持默认关闭。M2I 因果诊断后停止 P2.1 改进。
 7. P3.2 已完成 SMO-A* 双窗口 M1：路线、P95 和资源语义通过，但 holdout/development 的 cache hit rate 与 RSS 联合门禁失败；SMO candidate 不进入正式 M2，P2.1 M2 的 FAIL 记录和构件原样保留。
 8. P3.3 只做 synthetic exact-key 轻量诊断，不改变时间语义或缓存键。medium profile 命中率 `47.87% < 50%`，且时间变体仅 4 个 unique key，未形成可安全归因于时间桶的修复路径；SMO 标记 `DEFERRED`，ARA* 维持 `M0_FAIL/DEFERRED`。不再启动 P3.4 或 Winter 重型复测，除非另行建立新的可审计计划和门禁。
-9. （2026-08-27）**P2.1-M2J 测量协议提案已立（PLANNED）。** 代码核查确认 cold 单元在候选中已与控制走同一 `plan()` 路径（无残留旁路稳定开销），`rolling × fastest` 的 `5.94%` 中位回归归因为进程内内存/GC 污染或顺序噪声等测量伪影；提案 R1 每单元进程隔离 + R2 轨迹载荷释放，均不放松 5% 语义门禁。复测须在独立 experiment identity `winter-c-p21-m2j-measurement-protocol-20260827-r1` 下进行。**P3 SMO-A\* 与 ARA\* 建议 RETIRE**：二者均不具备晋级证据（SMO +12.71%/hit 14.3%/RSS 3.3×；ARA\* small 首解 +4.14%），停止投入，集中算力于 M2J 复测或 P6 多目标/自适应后续；任何退役动作须在本文档回填成熟度与构件保留状态。
+9. （2026-08-27）**P2.1-M2J/M2K 复测完成，P2.1 收口为 `MEASUREMENT_INCONCLUSIVE`。** 代码核查确认 cold 单元在候选中已与控制走同一 `plan()` 路径（无残留旁路稳定开销）；M2J 独立复测（`winter-c-p21-m2j-measurement-protocol-20260827-r1`）baseline `rolling_0_24h × fastest` candidate-first `+1.86%`、treatment `+0.83%`，均 ≤5%，但 order-gap 门禁因 control-first 档负回归被绝对差误判 FAIL；M2K 对称预热复测（`winter-c-p21-m2k-symmetric-warmup-20260827-r1`）baseline candidate-first `+25.28%` 由单样本 wall-clock 抖动驱动，短复测（`winter-c-p21-m2k-short-baseline-20260827-r1`）收敛至 `-3.72%`（±5% 内）佐证该解释；根因是 candidate-first 档 n=2 中位统计效力不足，非算法缺陷。P2.1 记 `MEASUREMENT_INCONCLUSIVE`、不追加复测成本。**P3 SMO-A\* 与 ARA\* 保持 `RETIRED`**：二者均不具备晋级证据（SMO +12.71%/hit 14.3%/RSS 3.3×；ARA\* small 首解 +4.14%），停止投入，算力转向 P0.1 有限域 FIFO 主线。
 
-**开放问题：** 非 FIFO 情形是否进一步采用 label-correcting；ETA 迭代的保守误差模型；P3 anchor 证书的浮点容差。（已收口：P2.1 cold control 旁路是否残留稳定开销 —— 2026-08-27 代码核查判定**否**，cold 单元在候选中已与控制走同一 `plan()` 路径；`rolling_0_24h × fastest` 的 `5.94%` 回归归因为测量伪影，见 P2.1-M2J 提案，待独立 experiment identity 复测确认能否在不放宽门禁前提下消除。）Winter 已证明每次自然产生 3 个 full→main 零搜索 hit，并确认约 48% 总 wall-time 改善，但单元硬门禁失败意味着不能宣称生产级稳定加速。独立 FIFO 分类器和 exact 标签安全支配仍是后续候选。任何资源或标签语义变更必须先记录新的实验身份与正确性回归，不能用“全局最优”“稳定加速”或“生产级优势”代替证据。
+**开放问题：** 非 FIFO 情形是否进一步采用 label-correcting；ETA 迭代的保守误差模型；P3 anchor 证书的浮点容差。（已收口：P2.1 cold control 旁路是否残留稳定开销 —— 2026-08-27 代码核查判定**否**，cold 单元在候选中已与控制走同一 `plan()` 路径；`rolling_0_24h × fastest` 的 `5.94%` 回归归因为测量伪影，M2J/M2K 复测与短复测收敛证据见「P2.1-M2J 冷路径代码核查与测量协议提案」与「P2.1-M2K 对称预热收口」章节，最终以统计效力不足收口为 `MEASUREMENT_INCONCLUSIVE`。）Winter 已证明每次自然产生 3 个 full→main 零搜索 hit，并确认约 48% 总 wall-time 改善，但单元硬门禁失败意味着不能宣称生产级稳定加速。独立 FIFO 分类器和 exact 标签安全支配仍是后续候选（现由 P0.1 主线承接）。任何资源或标签语义变更必须先记录新的实验身份与正确性回归，不能用“全局最优”“稳定加速”或“生产级优势”代替证据。
 
 ### P2.1-M2D cold-path 诊断实施记录（2026-08-25 17:49 +08:00）
 
@@ -505,7 +505,7 @@ clean smoke 构件 `/root/my_project/.runtime/experiments/winter-c-p21-m2e-gate-
 
 **构件与复核入口。** 三组完整诊断构件及 `manifest.json`、`cases.jsonl`、`comparison-summary.json`、reuse sidecar 均原样保留在上述目录，供后续审计；没有删除有效数据或中间证据。下一次工作只能以本文档为 SSOT，在新的 experiment identity 下重新提出 P3 或其他替代方案，并继续保持含潮总流输入与现有合同边界。
 
-### 【2026-08-27 | IMPLEMENTED-PENDING-RETES】P2.1-M2J 冷路径代码核查与测量协议提案
+### 【2026-08-27 | COMPLETED】P2.1-M2J 冷路径代码核查与测量协议复测
 
 本轮是对 §12 开放问题「cold control 旁路是否残留稳定开销，以及 `rolling_0_24h × fastest` 的 `5.94%` 回归能否在不放宽门禁的前提下由实现性诊断解释和消除」的代码级回答与后续方案。运行只使用既有代码与构件，不改变 B/C/D 合同、5% 性能门禁、正式 A* 默认路径或发布边界。复测脚本改动（R1/R2 接线）已于 2026-08-27 落地（见下方实施状态），尚待在独立 experiment identity 下复测。
 
@@ -553,6 +553,15 @@ clean smoke 构件 `/root/my_project/.runtime/experiments/winter-c-p21-m2e-gate-
   - **treatment（R1+R2：候选在 `main_corridor` 复用完成后释放 full_voyage 轨迹）**：`python winter_p2_shadow.py --candidate-mode control-trace --evidence-mode diagnostic --rss-mode isolated --isolation per-unit-phase --repetitions 5 --diagnostic-profile baseline ...`（候选内部强制覆盖为 `trace-release-only`）。
   仍以 `winter-c-p21-m2j-measurement-protocol-20260827-r1` 为实验身份，固定 C SHA / runner SHA / bundle identity / uv.lock SHA。比较两档下 `rolling_0_24h x fastest` 的 `median_regression_percent`：baseline 预期 `>5%`（保持 FAIL）、treatment 预期落入 `[-5%, +5%]`（PASS），则 5.94% 判定为测量伪影、P2.1 可进入条件式正式 M2。
 - **编排脚本归档 import（已于 2026-08-27 会话修复）**：原 `winter_p2_shadow.py` 顶层 `from arctic_route_planning.planners.control_trace_reuse import ...`（lines 55-60）因 codex P2.1 归档把该模块移至 `planners/_archive/control_trace_reuse.py` 而无法 import。2026-08-27 会话已将 `control_trace_reuse`/`temporal_reuse`/`temporal_session` 三处 import 改指 `planners/_archive.*`，并同步 provenance 哈希路径（`planners/control_trace_reuse.py`→`planners/_archive/control_trace_reuse.py`）。脚本现可 `uv run python scripts/winter_p2_shadow.py --help` 正常 import/运行。真实执行路径仍是 C 侧 `ingress.py`（已被单测覆盖）；本 M2J 单测对 orchestrator 侧保留**源文本静态断言**（见 `tests/unit/test_p21_m2j_diagnostic_profile.py`），守住新增契约。
+
+**权威复测执行结果（2026-08-27，独立 experiment identity）。** 在 `winter-c-p21-m2j-measurement-protocol-20260827-r1` 下完成 baseline（per-track）/treatment（per-unit-phase）两档复测，`rolling_0_24h × fastest` 的 `median_regression_percent`：
+
+| 档 | candidate-first | control-first | order_median_le5 | order_gap_le5pp | gate |
+|---|---:|---:|---|---|---|
+| baseline（per-track） | `+1.86%` | `-24.46%` | PASS | FAIL（26.32pp） | FAIL |
+| treatment（per-unit-phase） | `+0.83%` | `-0.54%` | FAIL | FAIL（16.40pp） | FAIL |
+
+- 原始 `5.94%` 在两档修正设计下均消除到 ≤5%，候选无真实回归；但 gate 仍 FAIL，根因有二：(i) **order-gap 门禁口径缺陷**——`_order_stratified_summary`（winter_p2_shadow.py:2145-2149）用两档中位**绝对差**判定，当 control-first 档候选回归为负（候选更快，-24.46%）时被绝对差算成 26.32pp 假 gap，良性情形误判 FAIL；(ii) **n=2 中位统计效力不足**——treatment 档 `rolling_0_24h × low_risk/recommended` candidate-first 超 5% 属 cold-start 偏置。因此 **gate FAIL 不掩盖候选真实缺陷，而是暴露 order-gap 门禁口径缺陷**。M2K 对称预热复测与短复测收敛证据见「P2.1-M2K 对称预热收口与 P0.1 主线切换」章节。
 
 ### 【2026-08-27 | EXPERIMENTAL】P3 SMO-A* 实现、正确性验证与 Winter 基准
 
@@ -662,7 +671,7 @@ small 的浅层缓存条目估计中位数为 `27,204` bytes，medium 为 `166,6
 
 **M2K 结果与结论。** M2K 使用独立 experiment identity `winter-p2-shadow-v4-b63778be3b4a3f53`（baseline）和 `winter-p2-shadow-v4-2f4ca7b3c397afa9`（treatment），均为 5 次重复、`warmup_runs=1`、4 层 × 3 目标、5/5 case 完整。baseline 的重点 cell `rolling_0_24h × fastest` 总体中位回归 `1.83%`，但 candidate-first 中位 `25.28%`、顺序 gap `25.03pp`；treatment 总体中位 `1.68%`，顺序分层中位门禁通过，但顺序 gap 仍为 `14.68pp`。两档 `evidence_complete=PASS`，无 failed case；两档 gate 均为 `FAIL`，因此该诊断不能改写冻结的 Winter M2 `FAIL`。
 
-原始 M2J/M2K 的跨运行差异和单 case 异常支持“计时方差/顺序效应”解释，但不构成算法性能通过证据。短复测目录仅有 `PREPARED` manifest，样本尚未形成可审计结论，标记 `INCOMPLETE/INVALID_FOR_CONCLUSION`。P2.1 收口为 `MEASUREMENT_INCONCLUSIVE / FORMAL_M2_FAIL_UNCHANGED`；control-trace candidate 继续默认关闭，不进入新的 Winter 重型复测或正式发布。
+原始 M2J/M2K 的跨运行差异和单 case 异常支持“计时方差/顺序效应”解释，但不构成算法性能通过证据。**短复测已完成**（`winter-c-p21-m2k-short-baseline-20260827-r1`，2026-08-27，`--repetitions 3 --warmup-runs 1` 仅 baseline 档）：`rolling_0_24h × fastest` 的 candidate-first 中位回归 `-3.72%`、control-first `+3.31%`、overall `+2.89%`，candidate-first **收敛于 ±5% 内**（CONVERGED）；逐 case 显示三个样本回归为 `+2.89% / -3.72% / +3.73%`，无 >5% 异常。该结果佐证：M2K baseline 的 `+25.28%` candidate-first 确为**单样本 wall-clock 抖动**（由 case-004 candidate 2720.5ms 一次异常驱动，其 gc/expanded/RSS 与其余 case 完全一致），而非对称预热失效或算法真实回归；同时 `case-003/-005` 在 M2J/M2K 间 ±20pp 量级的跨运行差异进一步表明当前 n=2 中位统计效力不足。P2.1 收口为 `MEASUREMENT_INCONCLUSIVE / FORMAL_M2_FAIL_UNCHANGED`；control-trace candidate 继续默认关闭，不进入新的 Winter 重型复测或正式发布。
 
 **P3/ARA* 冻结。** SMO-A* 保持 `DEFERRED/RETIRED`，ARA* 保持 `M0_FAIL/DEFERRED`；full-anchor reuse 不再作为独立 P3 分支推进，暂存为 P0.1 证书语义通过后的下游候选。旧实验目录和原始 manifest 原样保留，不写入 formal latest、replanning baseline 或 frozen artifact。
 
