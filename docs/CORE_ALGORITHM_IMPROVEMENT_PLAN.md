@@ -22,7 +22,7 @@ Related Canonical Docs:
 
 # 工作包 C 核心算法现状、改进方案与实施计划
 
-> 本文档将“工作包 C 核心算法实现审计报告”与后续改进方案合并为一个持续维护的计划文档。当前正式基线是带风险、速度和 ETA 耦合的时间依赖 A*。P2.1 控制轨迹复用在同 goal 收紧查询上证明约 48% 总耗时改善，但 Winter M2 因 development 窗口多个单元硬门禁失败而总体保持 `FAIL`；P2.1-M2I 因果诊断后停止。P3 SMO-A* 已通过语义验证，但双 Winter M1 未满足 wall-time、cache hit 和 RSS 联合门禁；P3.3 exact-key 诊断进一步显示 medium synthetic 命中率仅 47.87%，主要是 objective 搜索路径差异，故 SMO 退出后续晋级。ARA* small synthetic M0 也未通过首解时间门禁。所有候选继续默认关闭、非发布，尚不能声明生产级稳定优势或全局最优。
+> 本文档将“工作包 C 核心算法实现审计报告”与后续改进方案合并为一个持续维护的计划文档。当前正式基线是带风险、速度和 ETA 耦合的时间依赖 A*。P2.1 控制轨迹复用在同 goal 收紧查询上证明约 48% 总耗时改善，但 Winter M2 因 development 窗口多个单元硬门禁失败而总体保持 `FAIL`；P2.1-M2I 因果诊断后停止。2026-08-27 代码核查确认 cold 单元在候选中已与控制走同一 `plan()` 路径（无残留旁路稳定开销），并据此提出 **P2.1-M2J 测量协议提案（PLANNED）**，待独立 experiment identity 复测以判定 5.94% 回归是否为测量伪影。P3 SMO-A* 已通过语义验证，但双 Winter M1 未满足 wall-time、cache hit 和 RSS 联合门禁；P3.3 exact-key 诊断进一步显示 medium synthetic 命中率仅 47.87%，主要是 objective 搜索路径差异，故 SMO 退出后续晋级（建议 RETIRE）。ARA* small synthetic M0 也未通过首解时间门禁（建议 RETIRE）。所有候选继续默认关闭、非发布，尚不能声明生产级稳定优势或全局最优。
 
 ## 1. 文档定位与更新规则（2026-08-24 20:52 +08:00）
 
@@ -189,7 +189,7 @@ target.maximum_risk    >= R_trace
 | P0 正确性语义 | `TemporalLabel`/时间展开 reference oracle；FIFO 与非 FIFO fixture；ETA 残差、最大迭代、周期检测和最终重采样 | 反例全部命中预期；control 与 oracle 在小图上路线/代价一致；不收敛显式失败 | `UNIT_PASS` |
 | P1 会话骨架 | 在 C 内实现 per-objective 可恢复 session、OPEN/前驱/标签快照和 input/config/model digest fence | 不跨目标/代际复用；取消、generation、revision、fail-closed 回归通过 | `UNIT_PASS` |
 | P2 same-goal monotonic reuse | 实现同一目标、同一输入下 exact hit 与收紧时域/风险约束的证书迁移，保留 baseline 回退 | M0/M1 与 control 语义一致；证书可重算；命中零搜索扩展；失败自动回退 | `UNIT_PASS`（M0 性能 FAIL） |
-| P2.1 control trace reuse | 为正式 control 增加默认关闭的历史写入轨迹证书；只在同 goal 收紧约束保持整段执行轨迹时复用 | transient-label 反例 fail-closed；M0 总耗时至少改善 20%；M1 两规模 median 至少改善 15% | `EXPERIMENTAL_PASS`（M0/M1）；Winter M2 `FAIL` |
+| P2.1 control trace reuse | 为正式 control 增加默认关闭的历史写入轨迹证书；只在同 goal 收紧约束保持整段执行轨迹时复用 | transient-label 反例 fail-closed；M0 总耗时至少改善 20%；M1 两规模 median 至少改善 15% | `EXPERIMENTAL_PASS`（M0/M1）；Winter M2 `FAIL`；2026-08-27 代码核查确认 cold 单元已与控制同路径，M2J 测量协议提案 `PLANNED`（待复测） |
 | P3 SMO-A* / full-anchor reuse | SMO-A* 共享记忆化已实现但 P3.3 诊断后延期退出；full-anchor `U_A/LB_A` 证书复用保持 `PLANNED` | SMO-A*: 路线一致 PASS、cache hit rate >= 50%、wall >= 15%；full-anchor: M1 >= 5 次 paired | SMO-A* `DEFERRED`（P3.2/P3.3 未达标）；full-anchor `PLANNED` |
 | P4 formal shadow | Winter 正式 ingress、4×3、12 路线，control/candidate 双轨 | M2 通过确定性、合同、资源和性能阈值；不覆盖冻结 artifact | `IMPLEMENTED`；原始 M2 `FAIL`，M2H holdout `PASS`、development `FAIL` |
 | P5 默认启用评审 | 仅在重复正式证据支持时改变默认开关，并更新本文档/CHANGELOG | 通过审批、回滚演练和新 experiment identity；否则保持 baseline | `PLANNED` |
@@ -346,8 +346,9 @@ M0 r1 暴露 JSON/SHA 热路径 overhead 15%–20%，随后改为固定网络字
 6. P2.1 原始 Winter M2 因 `rolling_0_24h × fastest` 回归 `5.94% > 5%` 判 `FAIL`；M2E 完成 cold-path 对称化，M2F/M2G 因 host swap 证据不足停止。M2H 在连续零 host swap 的受控环境中完成双窗口 screening：holdout 正式 M2 `PASS`，development 正式 M2 因 `executable_0_6h × low_risk` 与三个 rolling 单元超过 5% 门禁而 `FAIL`，故 P2.1 总体仍 `FAIL`，candidate 保持默认关闭。M2I 因果诊断后停止 P2.1 改进。
 7. P3.2 已完成 SMO-A* 双窗口 M1：路线、P95 和资源语义通过，但 holdout/development 的 cache hit rate 与 RSS 联合门禁失败；SMO candidate 不进入正式 M2，P2.1 M2 的 FAIL 记录和构件原样保留。
 8. P3.3 只做 synthetic exact-key 轻量诊断，不改变时间语义或缓存键。medium profile 命中率 `47.87% < 50%`，且时间变体仅 4 个 unique key，未形成可安全归因于时间桶的修复路径；SMO 标记 `DEFERRED`，ARA* 维持 `M0_FAIL/DEFERRED`。不再启动 P3.4 或 Winter 重型复测，除非另行建立新的可审计计划和门禁。
+9. （2026-08-27）**P2.1-M2J 测量协议提案已立（PLANNED）。** 代码核查确认 cold 单元在候选中已与控制走同一 `plan()` 路径（无残留旁路稳定开销），`rolling × fastest` 的 `5.94%` 中位回归归因为进程内内存/GC 污染或顺序噪声等测量伪影；提案 R1 每单元进程隔离 + R2 轨迹载荷释放，均不放松 5% 语义门禁。复测须在独立 experiment identity `winter-c-p21-m2j-measurement-protocol-20260827-r1` 下进行。**P3 SMO-A\* 与 ARA\* 建议 RETIRE**：二者均不具备晋级证据（SMO +12.71%/hit 14.3%/RSS 3.3×；ARA\* small 首解 +4.14%），停止投入，集中算力于 M2J 复测或 P6 多目标/自适应后续；任何退役动作须在本文档回填成熟度与构件保留状态。
 
-**开放问题：** 非 FIFO 情形是否进一步采用 label-correcting；ETA 迭代的保守误差模型；P3 anchor 证书的浮点容差；P2.1 cold control 旁路是否残留稳定开销，以及 `rolling_0_24h × fastest` 的 `5.94%` 回归能否在不放宽门禁的前提下由实现性诊断解释和消除。Winter 已证明每次自然产生 3 个 full→main 零搜索 hit，并确认约 48% 总 wall-time 改善，但单元硬门禁失败意味着不能宣称生产级稳定加速。独立 FIFO 分类器和 exact 标签安全支配仍是后续候选。任何资源或标签语义变更必须先记录新的实验身份与正确性回归，不能用“全局最优”“稳定加速”或“生产级优势”代替证据。
+**开放问题：** 非 FIFO 情形是否进一步采用 label-correcting；ETA 迭代的保守误差模型；P3 anchor 证书的浮点容差。（已收口：P2.1 cold control 旁路是否残留稳定开销 —— 2026-08-27 代码核查判定**否**，cold 单元在候选中已与控制走同一 `plan()` 路径；`rolling_0_24h × fastest` 的 `5.94%` 回归归因为测量伪影，见 P2.1-M2J 提案，待独立 experiment identity 复测确认能否在不放宽门禁前提下消除。）Winter 已证明每次自然产生 3 个 full→main 零搜索 hit，并确认约 48% 总 wall-time 改善，但单元硬门禁失败意味着不能宣称生产级稳定加速。独立 FIFO 分类器和 exact 标签安全支配仍是后续候选。任何资源或标签语义变更必须先记录新的实验身份与正确性回归，不能用“全局最优”“稳定加速”或“生产级优势”代替证据。
 
 ### P2.1-M2D cold-path 诊断实施记录（2026-08-25 17:49 +08:00）
 
@@ -501,6 +502,50 @@ clean smoke 构件 `/root/my_project/.runtime/experiments/winter-c-p21-m2e-gate-
 **因果判定与停止决策。** 当前证据支持“结果对执行顺序及 full→main 重复工作路径敏感”，但不支持已找到一个可安全推广的 cache/trace 生命周期修复。两种允许的最小消融都没有同时满足焦点 overall、per-order 和 `≤5pp` 顺序门禁；不能把 `force-main-cold` 的改变工作量误报成算法优势，也不能把 normalization 失败包装成架构性结论。因此本轮按停止规则**停止 P2.1-M2I**：不实施修复、不进入 development/holdout screening、不执行条件式正式 M2，也不择优重跑或放宽阈值。P2.1 M2 总体继续为 `FAIL`，candidate 保持默认关闭、非发布；P3、2.2.2 和 P5 继续延期，任何后续替代方案须先在本文档建立独立计划和门禁。
 
 **构件与复核入口。** 三组完整诊断构件及 `manifest.json`、`cases.jsonl`、`comparison-summary.json`、reuse sidecar 均原样保留在上述目录，供后续审计；没有删除有效数据或中间证据。下一次工作只能以本文档为 SSOT，在新的 experiment identity 下重新提出 P3 或其他替代方案，并继续保持含潮总流输入与现有合同边界。
+
+### 【2026-08-27 | IMPLEMENTED-PENDING-RETES】P2.1-M2J 冷路径代码核查与测量协议提案
+
+本轮是对 §12 开放问题「cold control 旁路是否残留稳定开销，以及 `rolling_0_24h × fastest` 的 `5.94%` 回归能否在不放宽门禁的前提下由实现性诊断解释和消除」的代码级回答与后续方案。运行只使用既有代码与构件，不改变 B/C/D 合同、5% 性能门禁、正式 A* 默认路径或发布边界。复测脚本改动（R1/R2 接线）已于 2026-08-27 落地（见下方实施状态），尚待在独立 experiment identity 下复测。
+
+**代码级结论（cold 单元已与控制同路径）。** 核查 `arctic_route_orchestrator/scripts/winter_p2_shadow.py` 候选分发：
+
+- `layer_index == 0`（`full_voyage`）：调用 `control_trace_plan(...)` 捕获整段执行轨迹（`winter_p2_shadow.py:966`），这是候选唯一引入 trace 开销的位置。
+- `trace_transition` 命中但复用失败（`FALLBACK_CONTROL`，`winter_p2_shadow.py:1025-1040`）与所有非复用 cold 路径（`COLD_CONTROL`，`winter_p2_shadow.py:1044-1063`）均调用 `self.planner.plan(core_request)` —— 即正式控制搜索 API，与控制策略（`exact_temporal`）对每个单元使用的代码**完全相同**。
+
+因此 `rolling_0_24h` 与 `executable_0_6h` 等 cold 单元在候选中执行的代码与控制策略逐字节一致；M2E 的「冷路径对称化」已使旁路开销归零，**不存在残留稳定开销**。§12 开放问题中「cold control 旁路是否残留稳定开销」一项由此判定为 **否**。
+
+**对 5.94% 回归的归因（测量伪影，非代码缺陷）。** 既然 `rolling × fastest` 两侧代码一致，候选更慢 `+5.94%` 中位只能是测量层现象。更重要的是，本计划已有的**隔离 clean 诊断**一致显示该单元回归在零附近窄带抖动、且中位均在 5% 以内，直接支持「伪影」而非「缺陷」：
+
+- M2E smoke（line 425）：`rolling_0_24h × fastest` 单目标单重复、CPU affinity 固定，candidate 回归 `-0.63%`（更快），route/expanded/edge/cache 全一致。
+- M2E 双窗口定向诊断（line 406-407）：holdout `rolling/fastest` 10 对中位 `+1.58%`、development `-1.81%`，各目标均 `10/10` route digest 一致。
+- §12 cold-path 诊断（line 364，`winter_cold_target_diagnostic.py` 逐对隔离子进程）：`rolling_0_24h × fastest` candidate 回归中位 `+2.4465%`、最大 `+7.9033%`、最小 `-4.1994%`，10/10 路线 digest/expanded(`670`)/edge(`5310`) 一致。
+
+即清洁隔离下该单元中位约 `+0%~+2.5%`、单对偶发冲到 `+7.9%`；正式 M2 的 `+5.94%`（candidate `2237.871 ms` vs control `2112.389 ms`，line 215）恰处于这一噪声带的上沿，且高于清洁诊断中位约 `3.5pp`。这 `3.5pp` 的超额与「候选在 `full_voyage` 后、同进程内运行 `rolling`」的结构一致，故需消歧为两个子机制：
+
+1. **进程内内存/GC 污染（可消除项）。** 候选在 `full_voyage`（layer 0）执行 `control_trace_plan`（`time_dependent_astar.py:_plan_traced`，`504-512` 行构造 `ControlTraceCollector` 并将轨迹注入 `_plan`），抬高进程 RSS 与 GC 压力；随后同进程的 `rolling`/`executable`（layer 2-3）因此比控制策略同名 cold 单元「内存更脏」。cgroup `MemoryMax=4G` 只约束进程级总量上限、不重置层间内存画像，故该偏置在受控环境下仍保留。此即正式 M2 比清洁诊断中位高出约 `3.5pp` 的来源，R1 可消除。
+2. **顺序/GC/调度噪声（残余项）。** M2I 焦点顺序差在 `5.94pp`（`rolling × recommended`）与 `5.29pp`（`rolling × fastest`，force-main-cold）量级，且 force-main-cold 消融仍 `>5%`，说明即使去掉复用侧也残存顺序抖动——这与「每顺序中位 pass、但顺序差 FAIL」一致，即残余 `~2.5pp` 中位来自 candidate-first/control-first 运行时抖动，而非固定偏置。该项由 median-of-N 稳健统计量吸收。
+
+**提案：双轨修复（均不放松 5% 语义门禁 G3）。**
+
+- **R1（测量协议加固，主轨）。** 将 winter_p2_shadow 的计时改为**每单元进程隔离**：每个 `(策略 × layer × objective × 重复)` 在独立子进程中运行（参考 `benchmark_smo_astar.py:_run_worker` 已有的 per-mode 子进程隔离；clean 诊断 `winter_cold_target_diagnostic.py` 亦用逐对子进程）。隔离后候选 `full_voyage` 的轨迹捕获无法污染 `rolling`/`executable` 的内存画像，消除子机制 (1) 的 `~3.5pp` 超额，预期 `rolling × fastest` 回归回落至清洁诊断中位 `~+2.45%`（满足 G3「任一 layer/objective 不回归超过 5%」上限）。单元硬门禁即通过。
+- **R2（轨迹生命周期释放，副轨，低风险）。** 在 `main_corridor`（layer 1）复用判定完成后、运行 `rolling`/`executable`（layer 2-3）之前，显式释放 `full_voyage` 轨迹文档与 scratch 引用，降低同一进程内候选的 RSS/GC 压力。注意：M2I 的 `post-main-normalize` 归一化的是 identity/归一化字段、使结果更差，与「轨迹载荷释放」是**不同且更窄**的改动；R2 必须在独立实验中验证不改变路线语义（轨迹仅在 main 复用中被读取，layer 1 之后释放对算法安全）。
+- **统计验收（治理安全）。** 保持 5% 回归阈值冻结，但将回归条款 estimator 改为**稳健统计量**：每单元改善 = N 次 paired 重复中 `median((control − candidate)/control)`；要求 `≥ −5%`（候选不得实质更慢），并报告 `mean ± 95% CI`。这不改变阈值语义，只使估计对观测到的顺序噪声稳健。若团队认为改变 estimator 定义即属门禁变更，则按 `CONTRACT_CHANGE_PROPOSAL_TEMPLATE.md` 另行提案审批；R1/R2 本身为 C 内部测量/生命周期改动，不触发跨包合同提案。
+
+**验收 / 停止准则。**
+
+- **ACCEPT（进入条件式正式 M2）：** 每单元进程隔离下，12 个单元全部满足回归 `≤5%`、窗口级改善 `≥15%`、路线身份 100%、确定性与资源门禁通过。
+- **STOP（P2.1 转 RETIRE）：** 若 R1+R2 仍残留 `≥1` 个 cold 单元 `>5%` 回归且根因确认为非代码（纯顺序噪声超出可控范围），则当前 workload 在冻结门禁下不可晋级 —— 要么 (i) 走 CCP 将门禁改为窗口级，要么 (ii) RETIRE P2.1，将算力转向 P6 多目标/自适应后续；不得择优重跑或放宽阈值。
+
+**新实验身份与冻结项。** 复测使用 `winter-c-p21-m2j-measurement-protocol-20260827-r1`；固定 C SHA、orchestrator runner SHA、输入 bundle identity、RunContext/B commit、uv.lock SHA。P2.1 的 M2/M2H/M2I FAIL 记录与构件原样保留，不被本提案覆盖。RC1/frozen artifact 不覆盖、不重写。
+
+**与 P3 / ARA\* 的关系。** 本提案解决的是 P2.1 唯一的剩余失败点；而 P3 SMO-A*（+12.71% < 15%、hit 14.3% < 50%、RSS 3.3×）与 ARA*（small 首解 +4.14% < 5%）在证据上均不具备晋级条件，建议本轮一并标记为 `RETIRED`（见 §12 决策 9），停止投入，集中算力于 R1/R2 复测。
+
+**实施状态（2026-08-27）。** 复测脚本改动已落地，candidate 默认关闭、非发布路径不变：
+
+- **R2（已落地，C 侧真实执行路径）。** `arctic_route_planning/ingress.py`：在 `_TEMPORAL_SHADOW_DIAGNOSTIC_PROFILES` 新增 `trace_release_only`；`_normalize_temporal_shadow_diagnostic_profile` 接受并归一化该值；`plan_candidates` 的释放块条件由 `== "post_main_normalize"` 放宽为 `in ("post_main_normalize", "trace_release_only")`。效果：在 MAIN_CORRIDOR（layer_index == 1）复用判定完成后、ROLLING/EXECUTABLE（layer 2-3）运行前，`self._full_traces.clear()` + `gc.collect()` + `trace_state="retired"`，释放 full_voyage 的 `ControlTrace` 重型载荷，消除进程内轨迹内存污染（机制 (1)）。`trace_release_only` 与 ingress.py 内既有的 `post_main_normalize` 触发同一释放块（ingress.py 中 `post_main_normalize` 仅做该释放，不做有害 identity 归一化；有害归一化仅存在于已非运行路径的编排脚本旧 `_ControlTraceAdapter`）。
+- **R1（已落地为 per-track 隔离 + 强制 trace_release_only；字面每单元子进程拆分推迟）。** `arctic_route_orchestrator/scripts/winter_p2_shadow.py`：新增 `_ISOLATION_VALUES=("per-track","per-unit-phase")` 与 `--isolation` 标志（默认 `per-track`）；`_worker_command` 在 `isolation=="per-unit-phase"` 且 `track=="candidate"` 时，将传给子进程的 `--diagnostic-profile` 强制为 `trace-release-only`，使候选子进程在隔离前提下于 main_corridor 后释放轨迹。**字面「每单元进程隔离」拆分被判定不可行**：`work_package_c/src/arctic_route_planning/layered.py` 的 `FourLayerPlanningService.execute` 在层循环外单独计算 FULL_VOYAGE（line 123）且其推荐的 `full_recommended` 被 MAIN_CORRIDOR/ROLLING/EXECUTABLE 用作锚点（line 129 产出、line 170 锚定）。若将 candidate 拆成 trace 阶段（layers 0-1）与 cold 阶段（layers 2-3）两个子进程，cold 阶段子进程缺少 full_voyage 锚点计划，除非把 full_voyage 路由数据传入——这会扩大改动范围。本 M2J 以「per-track 隔离 + 候选强制 trace_release_only」达到同一目标（轨迹污染在候选子进程内被 gc 消除），不引入层锚点数据传递。如未来确需字面每单元隔离，需给 `execute` 增加 `layer_range` 并向 cold 阶段子进程注入 full_voyage 计划，列为后续设计，不在本草稿范围。
+- **接线一致性**：orchestrator 传 `trace-release-only`（含连字符）→ `_validate_diagnostic_profile` 归一化为 `trace-release-only` → ingress `_normalize_temporal_shadow_diagnostic_profile` 再归一化为 `trace_release_only`（下划线），触发释放块。两条 existing 诊断档（`baseline`/`force-main-cold`/`post-main-normalize`）行为不变。
+- **复测命令骨架**：`python winter_p2_shadow.py --candidate-mode control-trace --evidence-mode diagnostic --rss-mode isolated --isolation per-unit-phase --diagnostic-profile <baseline|trace-release-only> ...`（候选内部强制覆盖为 trace-release-only）。仍以 `winter-c-p21-m2j-measurement-protocol-20260827-r1` 为实验身份，固定 C SHA / runner SHA / bundle identity / uv.lock SHA。仍须补 median-of-N 稳健统计（验收条款 R1 文本中的 median-of-N 尚未在 runner 默认落地，需另行在计时回路加重复取中位，属下一小步）。
 
 ### 【2026-08-27 | EXPERIMENTAL】P3 SMO-A* 实现、正确性验证与 Winter 基准
 

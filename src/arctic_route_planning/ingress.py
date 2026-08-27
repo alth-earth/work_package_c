@@ -62,7 +62,7 @@ from arctic_route_planning.service import (
 _TEMPORAL_SHADOW_EXACT_MODE = "exact_temporal"
 _TEMPORAL_SHADOW_CONTROL_TRACE_MODE = "control_trace"
 _TEMPORAL_SHADOW_DIAGNOSTIC_PROFILES = frozenset(
-    {"baseline", "force_main_cold", "post_main_normalize"}
+    {"baseline", "force_main_cold", "post_main_normalize", "trace_release_only"}
 )
 
 
@@ -74,14 +74,14 @@ def _normalize_temporal_shadow_diagnostic_profile(value: Any) -> str:
         return "baseline"
     if not isinstance(raw, str):
         raise ValueError(
-            "diagnostic_profile must be baseline, force_main_cold, or "
-            "post_main_normalize"
+            "diagnostic_profile must be baseline, force_main_cold, "
+            "post_main_normalize, or trace_release_only"
         )
     normalized = raw.strip().lower().replace("-", "_")
     if normalized not in _TEMPORAL_SHADOW_DIAGNOSTIC_PROFILES:
         raise ValueError(
-            "diagnostic_profile must be baseline, force_main_cold, or "
-            "post_main_normalize"
+            "diagnostic_profile must be baseline, force_main_cold, "
+            "post_main_normalize, or trace_release_only"
         )
     return normalized
 
@@ -1041,7 +1041,7 @@ class _TemporalShadowCandidatePlanner:
         if (
             self._candidate_mode == _TEMPORAL_SHADOW_CONTROL_TRACE_MODE
             and layer_index == 1
-            and self._diagnostic_profile == "post_main_normalize"
+            and self._diagnostic_profile in ("post_main_normalize", "trace_release_only")
         ):
             normalize_started = time.perf_counter()
             self._full_traces.clear()
