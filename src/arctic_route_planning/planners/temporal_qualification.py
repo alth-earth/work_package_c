@@ -329,6 +329,7 @@ class TemporalDominanceCertificate:
             and objective_matches
             and self.suffix_monotone
             and self.coverage_complete
+            and self.reason is None
         )
 
     def permits(self, expected_scope: TemporalScope | Mapping[str, Any]) -> bool:
