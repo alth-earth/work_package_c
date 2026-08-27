@@ -441,7 +441,7 @@ def _run_worker(
         *args.objective_order,
     ]
     if args.diagnostic:
-        command.append("--diagnostic")
+        command.extend(("--diagnostic", "--gate-profile", "diagnostic"))
     try:
         completed = subprocess.run(
             command,
@@ -1131,7 +1131,7 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise ValueError("commit input requires --start, --goal, and --departure")
     if args.output_dir is not None and args.gate_profile is None:
         raise ValueError("evidence mode requires --gate-profile")
-    if args.diagnostic and args.output_dir is None:
+    if args.diagnostic and args.output_dir is None and not args.worker:
         raise ValueError("--diagnostic requires evidence mode with --output-dir")
     if args.diagnostic and args.gate_profile != "diagnostic":
         raise ValueError("--diagnostic requires --gate-profile diagnostic")
