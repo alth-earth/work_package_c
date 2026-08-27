@@ -726,3 +726,84 @@ P0.1 M0 已收口为 `M0_PASS_READY_FOR_M1_PLAN`；该历史标记只表示当�
 FIFO scan 对可航有向边使用 15 分钟 probe，临界 slack 才递归加密；真实反例判 `FIFO_VIOLATED`，无反例但无区间证明判 `FIFO_UNCERTAIN_NO_INTERVAL_PROOF`，coverage/evaluator/ETA 异常判 uncertain。所有 uncertain、scope mismatch、未知 evaluator 和 fail-closed 对抗场景的 pruning 必须为零。资源前沿只使用 `TemporalDominancePolicy.disabled()`，保留 exact-arrival A* 与独立 zero-heuristic Dijkstra 的路线/ETA/业务字段/失败语义/确定性/扩展计数/RSS/swap/OOM/timeout 证据；Dijkstra 仅为正确性证据，不作为性能基线。
 
 八小时无人值守驱动使用单 CPU、`MemoryMax=4G`、`MemorySwapMax=0`、worker deadline、heartbeat、fsync 和 identity-checked resume。一个输入、目标或 24h 分支失败时只停止该分支并继续其他任务；语义不一致、身份漂移、fail-open pruning、dirty evidence worktree 或 production/frozen 写入为全局硬停止。实验产物留在 `.runtime/experiments/c-p01-m15-real-qualification-20260827-r1/`，最终只追加本节结果，不写 formal latest、replanning baseline 或 frozen artifact。
+
+### 【2026-08-28 | COMPLETED】P0.1-M1.5 真实输入资格审计与资源前沿
+
+本轮从独立 worktree `research/p01-m15-real-qualification-20260827` 的 clean
+实现提交 `1716f58abac0d4e505ba5059866bc76024c5acf8` 运行。首次 r1--r3
+构件因先后发现的 FIFO worker CPU 亲和性和 nohup 生命周期问题中止，均保留为
+`STOPPED_HARD` 诊断构件且不计入样本；r4 由 systemd service 承载并写入最终
+`ALL_DONE`，是本节唯一可计入的实验 identity：
+`/root/my_project/.runtime/experiments/c-p01-m15-real-qualification-20260827-r4/`。
+
+**冻结身份。** holdout 使用 committed window
+`risk-window-sha256-115ad3ab6d7034fabc9428f91c14099b02dff8bb2443569a8d3947187fbb5ff9`，
+departure `2026-02-22T00:00:00Z`，start `(5,7)`，segment goals
+`executable_0_6h=(7,6)`、`rolling_0_24h=(14,5)`，route-plan-set SHA256
+`572ebbfe04a345005431bc08f852d56538e9eefd414ac56fd02a499827436510`。
+development 使用 committed window
+`risk-window-sha256-bdfd7964df96ffcad7dd78d9830394a0a91d7fbbfde16c0649d2ba2fb68a00ab`，
+departure `2026-03-22T00:00:00Z`，start `(5,7)`，segment goals
+`executable_0_6h=(7,7)`、`rolling_0_24h=(14,6)`，route-plan-set SHA256
+`0b4d4b6a216d34c704de5b6d49d878c326c5ab4f45402435f4b17248670f22be`。
+两套输入均通过 145 帧、3600 秒连续性、RiskFrame content/frame identity、
+RiskFrame generation、grid/vessel/planner/config 和冻结 layer goal 围栏。
+共同 implementation digest 为
+`887d485b825872e31f3b7ff4c378ac294b8aad7e3bc1f74d2a97eeea537f4532`，
+config tree digest 为 `537e1a1d1ef3f8015402e9b57556518b92a2524993074b4ecc1ccf58143cded4`，
+`uv.lock` SHA256 为
+`8893cb8387825ca4890ed808f4a98b02ba938337752971dacc3e77f859164f22`。
+
+**FIFO 诊断。** 扫描从 departure-time hard-mask connected component 的全部有向边开始，
+基础 probe 间隔 15 分钟，tolerance 1 秒；临界 slack 未触发额外 midpoint 插入。
+有限探测从未被提升为连续 FIFO 证书，`coverage_complete=false`，dominance 始终关闭且
+pruning 为零。
+
+| 输入/segment | 有向边 | probes | edge evaluations | evaluator errors | 结果 |
+|---|---:|---:|---:|---:|---|
+| holdout / `executable_0_6h` | 1388 | 25 | 34700 | 748 | `FIFO_UNCERTAIN_EVALUATOR_FAILURE` |
+| holdout / `rolling_0_24h` | 1388 | 97 | 134636 | 3569 | `FIFO_UNCERTAIN_EVALUATOR_FAILURE` |
+| development / `executable_0_6h` | 1540 | 25 | 38500 | 821 | `FIFO_UNCERTAIN_EVALUATOR_FAILURE` |
+| development / `rolling_0_24h` | 1540 | 97 | 149380 | 2944 | `FIFO_UNCERTAIN_EVALUATOR_FAILURE` |
+
+错误样本为 ETA `EtaRefinementError`（`invalid_operator`/coverage 不能稳定收敛）。
+没有可审计的真实“后出发、早到达”反例，因此本轮结论不是
+`FIFO_VIOLATED`，而是 `REAL_INPUT_FIFO_UNCERTAIN_REQUIRES_INTERVAL_PROOF`：在取得
+到达函数区间单调性证明或保守上下界前，真实输入继续禁止 certified dominance。
+
+**6h exact-arrival 资源前沿。** baseline 和本轮唯一执行路径均为
+`TemporalDominancePolicy.disabled()`；每个 objective 运行 2 个独立 worker，另在同一
+冻结 edge evaluator 上运行 zero-heuristic exact-arrival Dijkstra 正确性证据。两输入各
+6/6 case 均满足路线节点、精确 ETA、速度、风险、成本、confidence、source IDs、失败语义
+与 reference 一致，semantic digest deterministic，dominance pruning=0；worker 均为单 CPU、
+`MemoryMax=4G`、`MemorySwapMax=0`，无 swap/OOM/timeout。
+
+| 输入 | fastest compute median/P95 ms | low-risk median/P95 ms | recommended median/P95 ms | RSS median KiB | 结果 |
+|---|---:|---:|---:|---:|---|
+| holdout | 63.49 / 63.86 | 148.03 / 148.36 | 64.50 / 65.07 | 119996--120118 | `RESOURCE_FRONTIER_PASS` (6/6) |
+| development | 38.10 / 44.83 | 105.02 / 106.45 | 31.56 / 32.29 | 120196--120244 | `RESOURCE_FRONTIER_PASS` (6/6) |
+
+这只是 dominance-disabled 的可行性/正确性和资源观察，不是 candidate 性能通过，也不
+把 Dijkstra 当作独立性能基线。
+
+**24h 条件分支。** 两输入均因 6h 通过而启动 24h；每目标运行 1 个 exact-arrival A*
+和 1 个 reference Dijkstra。两输入均为
+`REAL_INPUT_6H_FEASIBLE_24H_RESOURCE_FAIL` / `RESOURCE_FRONTIER_PARTIAL`（3/3
+记录完成但 valid case 为 0）：holdout fastest A* 完成但 Dijkstra 达到冻结
+`queue=50000`，low-risk/recommended A* 达到冻结 `queue=50000`；development 同样在
+fastest reference 达到 queue 上限、low-risk/recommended A* 达到 queue 上限。失败不是
+swap、OOM 或 worker timeout，且没有放宽 `50k expansions / 100k labels / 50k queue /
+400k edge evaluations`。因此 24h 不构成可行资源通过，也不启动 full-voyage。
+
+**收口与下一分支。** P0.1-M1.5 不满足任何 candidate 晋级条件，保持
+`REAL_INPUT_FIFO_UNCERTAIN_REQUIRES_INTERVAL_PROOF` 与
+`REAL_INPUT_6H_FEASIBLE_24H_RESOURCE_FAIL`；`TemporalDominancePolicy.disabled()` 仍是
+默认行为，未调用 `certified_only(...)`，未修改 B/C、C/D 合同、ingress/service，未写
+formal latest、replanning baseline 或 frozen artifact。P2.1 仍为
+`MEASUREMENT_INCONCLUSIVE / FORMAL_M2_FAIL_UNCHANGED`，P3 SMO-A* 为
+`DEFERRED/RETIRED`，ARA* 为 `M0_FAIL/DEFERRED`。
+
+下一步只能另立、另审计 ETA interval-proof/保守到达界限计划；若改为研究非 FIFO 语义，先
+另立 P0.2 label-correcting/Pareto 计划。代码回滚边界为保留 clean 提交
+`1716f58`（或其父提交 `626e6d3`），不 merge、不 push；当前 r4 实验产物和 r1--r3
+中止证据全部留在 `.runtime/experiments/`，不作为正式发布输入。
