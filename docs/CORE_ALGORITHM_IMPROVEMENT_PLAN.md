@@ -541,7 +541,7 @@ P2.1-M2I 停止后，按本文档要求建立独立 P3 计划。P3 选择 SMO-A*
 
 **下一步条件。** 在进入条件式 M2 之前，需要：(1) 在 development bundle 上重复基准以验证一致性；(2) 分析 cache miss 的具体构成（搜索路径差异 vs 时间桶分散），评估是否可通过缓存键归约（如时间桶对齐）提升 hit rate；(3) 评估 RSS 增长是否可接受或需要 LRU 淘汰策略；(4) 若 SMO-A* 无法达到 15% 改善目标，则按原计划启动 ARA*（Anytime Repairing A*）作为备选方案。不得放宽 P3 验收目标或冻结门禁。P2.1 M2 的 FAIL 记录和构件原样保留，不被 P3 覆盖。
 
-### 【2026-08-27 | IN_PROGRESS】P3.1 SMO-A* 证据加固、有界优化与 ARA* 后备
+### 【2026-08-27 | COMPLETED】P3.1 SMO-A* 证据加固、有界优化与 ARA* 后备
 
 本轮执行边界已经冻结：SMO-A* 仍是唯一主线候选，ARA* 只有在 SMO 未通过候选晋级门时进入 M0 可行性验证；本轮不执行正式 M2、不改变默认 planner、不写入 formal latest、replanning baseline 或 frozen artifact。所有结果使用新的 experiment identity，P2.1 的失败记录和构件保持原样。
 
@@ -561,3 +561,17 @@ P2.1-M2I 停止后，按本文档要求建立独立 P3 计划。P3 选择 SMO-A*
 - 另以 `--worker-timeout-seconds 3` 做 guard smoke，runner 按预期以非零状态退出且没有结果文件；该 guard 验证不计入 M1 样本。
 - ARA* 仅完成 synthetic M0 语义单测：固定 epsilon 序列、阶段 incumbent/下界/gap 记录、单调代价、epsilon=1 与 control 对照及 expansion fail-closed 均通过；尚未执行 ARA* timing M0 或 Winter M1/M2。
 - 结论：SMO 仍为 `EXPERIMENTAL / NOT_EVALUATED_AFTER_P3.1_PATCH`，ARA* 为 `M0_UNIT_PASS / RESEARCH_ONLY`；本轮不进入正式 M2，不启用任何 candidate，不写入 formal latest、replanning baseline 或 frozen artifact。
+
+### 【2026-08-27 | PLANNED】P3.2 SMO 双窗口 M1 收口与 ARA* 候选决策门
+
+本轮只推进到候选决策门：先完成 SMO 的 synthetic M0 与双 Winter M1；SMO 两窗口均通过时只标记 `SMO_M1_PASS_READY_FOR_M2_REVIEW`，不执行正式 M2。SMO 总体失败时关闭该候选，再完成 ARA* 强化 M0；ARA* 本轮不进入 Winter M1。当前 P3.1 已固定为本地提交 `cef3d17ebdf6a6c021330b0a45f04c2e7e57380f`，后续重型证据必须来自 clean 本地提交，不以 push 作为门禁。
+
+**证据链加固。** SMO runner 必须逐 worker、逐完整 pair 持久化原始结果，并以 `manifest.json`、`cases.jsonl`、`workers/` 和 `summary.json` 记录 `PREPARED/RUNNING/COMPLETED/FAIL/ABORTED` 状态。恢复运行必须重新校验 C SHA、clean 状态、runner/lock/config/input digest、请求、目标顺序、重复次数和资源预算；半个 pair 只能标记 `ORPHANED_EXCLUDED`，不得与恢复后的另一个 cell 拼成 paired 样本。旧的一次性 `--output` 模式可保留兼容，但不构成 P3.2 晋级证据。
+
+**SMO M0。** 固定复用现有 `5×7×7` 与 `9×13×13` synthetic profile，每个 profile 预热 1 对、计时 10 对；control/shared 独立进程并交替先后顺序。门禁为业务路线和失败语义 100% 一致、离散结果确定、median wall 不恶化超过 `5%`、RSS ratio `≤1.10`、无 swap/OOM/timeout。cache hit rate 在 M0 只记录，`≥50%` 的正式要求在 M1 判定。
+
+**SMO M1。** holdout 固定 commit digest `115ad3ab…`、departure `2026-02-22T00:00:00Z`；development 固定 commit digest `bdfd7964…`、departure `2026-03-22T00:00:00Z`；两者均为 145 帧、节点 `(5,7)→(26,2)`、目标顺序 `fastest→low_risk→recommended`。每窗口直接串行执行 5 个 paired run，pair 顺序奇偶交替；每 worker timeout 900 秒，单 CPU，systemd cgroup 使用 `MemoryMax=4G`、`MemorySwapMax=0`、`OOMPolicy=stop`。每窗口独立要求路线业务字段 100% 一致、median wall 改善 `≥15%`、nearest-rank P95 不恶化超过 `5%`、聚合 cache hit rate `≥50%`、median RSS ratio `≤1.10`，且无 swap/OOM/timeout。硬语义、身份或资源错误立即停止；若 holdout 只有性能门失败，仍完成 development 5 对，但后者标为 `DIAGNOSTIC_AFTER_OVERALL_FAIL`，不得挽救总体 FAIL。
+
+**ARA* 条件式 M0。** 仅在 SMO 总体失败后，补充首次 incumbent elapsed time、首解成本和阶段诊断；覆盖三目标、静态/动态风险、hard mask、风险/时域约束、取消和扩展上限。非 FIFO 与同桶多 ETA 反例必须标记为 `INHERITED_CONTROL_LIMITATION`，不得将 ARA* 对当前近似 control 的一致误报为一般最优性证明。两个 synthetic profile 各预热 1 对、计时 10 对；要求阶段成本单调不增、每个 epsilon=2.5 首解相对 epsilon=1/control 的成本 gap `≤10%`、每个 profile/objective 首解时间 median 至少改善 `20%`、epsilon=1 最终业务字段 100% 一致、RSS ratio `≤1.10` 且无硬失败。通过时标记 `ARA_M0_PASS_READY_FOR_M1_PLAN`，否则为 `ARA_M0_FAIL/DEFERRED`。
+
+**发布与停止边界。** 所有构件写入新的 `.runtime/experiments/c-p32-*` identity；不覆盖 P2.1/P3.1 证据，不修改 B/C、C/D 合同，不导出 ARA* 公共 planner，不写 formal latest、replanning baseline 或 frozen artifact，不启用任何 candidate。
