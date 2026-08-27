@@ -7,7 +7,7 @@ Content Status:
 Document Role: CANONICAL
 Scope: work package C entrypoint and public boundary
 Branch: research-validation-system
-Last Verified: 2026-08-25
+Last Verified: 2026-08-27
 ---
 
 > [!NOTE]
@@ -27,13 +27,15 @@ Last Verified: 2026-08-25
 ## Research Validation 定位（2026-08-21 23:18）
 
 C 的阶段角色为 Risk-aware Navigation Decision。四层 × 三目标 = 12 路线已实现并由
-RC1 artifact 验证；当前执行仍是 12 次独立 A*。Shared multi-objective search、增量
-search 和 replay Viewer candidate publication 尚未实现。
+RC1 artifact 验证；正式默认执行仍是 12 次独立 A*。SMO-A* 共享遍历记忆化已作为
+显式、默认关闭的 C 内部实验路径提供；增量 search 和 replay Viewer candidate publication
+尚未实现。
 
 核心算法研究线已完成 P0 exact-arrival-time 候选、P1 内部可恢复 session 骨架、P2 同目标
-单调约束证书复用和 P2.1 control-trace equivalence。P2.1 在显式、默认关闭、不发布的 shadow
-路径中，对同 goal 收紧重复查询取得可重复的 M0/M1 耗时优势；默认 control、正式合同与 frozen
-artifact 均未改变。该结论不外推到不同 anchor、完整 Winter、全局最优或生产默认。当前状态、
+单调约束证书复用和 P2.1 control-trace equivalence；P3 SMO-A* 已完成初版实现，P3.1 已完成
+内存/证据加固与 ARA* 的 synthetic M0 可行性骨架。P2.1 在显式、默认关闭、不发布的 shadow 路径中，对同 goal 收紧重复查询取得
+可重复的 M0/M1 耗时优势；默认 control、正式合同与 frozen artifact 均未改变。该结论不外推到
+不同 anchor、完整 Winter、全局最优或生产默认。当前状态、
 证据、失败实验和后续门禁以
 [`CORE_ALGORITHM_IMPROVEMENT_PLAN.md`](docs/CORE_ALGORITHM_IMPROVEMENT_PLAN.md) 为准。
 
@@ -44,8 +46,9 @@ or cache behavior changed.
 The real B-frame/C-search comparison is documented in
 [`BC_COUPLING_PERFORMANCE_REPORT.md`](docs/archive/performance/BC_COUPLING_PERFORMANCE_REPORT.md), and the
 bounded next-step gate in [`C_OPTIMIZATION_PROPOSAL.md`](docs/archive/performance/C_OPTIMIZATION_PROPOSAL.md).
-The planner now exposes observational edge-geometry cache hit/miss counters;
-cache keys, eviction, A* behavior, routes and public contracts are unchanged.
+The planner exposes observational edge-geometry and opt-in traversal-cache
+statistics. The default cache key, eviction policy, A* behavior, routes and
+public contracts remain unchanged; SMO-A* is not enabled by formal callers.
 
 C 消费 B 的逐小时风险窗，按 ETA 采样风险，运行时间依赖规划，并输出三目标路线、可选 v3
 四层整组和重规划结果。
@@ -54,7 +57,7 @@ C 消费 B 的逐小时风险窗，按 ETA 采样风险，运行时间依赖规�
 
 | 项目 | 状态 |
 |---|---|
-| 版本/工程 | 0.4.0；当前研究工作树 `UV_OFFLINE=1 make check` 为 272 passed |
+| 版本/工程 | 0.4.0；当前研究工作树的最新检查结果以 `make check` 实际输出为准 |
 | 挑战杯主线 | v3 四层 × 三目标（12 路线整组）+ 重规划；v2 三目标为强制后备 |
 | RC1 实源状态 | PASS（2026-08-16）：mur/dikson v3 四层 + 6h 重规划经 orchestrator r6/r7 跑通；单目标 144h ≈96s |
 | RC2 BC 扩展 | `bc.risk-frame.v2` 可选 `hard_reason`（NONE/LAND/DATA_UNAVAILABLE/OTHER），旧帧向后兼容（RC2 分支） |

@@ -6,7 +6,7 @@ Content Status:
 Document Role: SUPPORTING
 Scope: work package C change history
 Branch: research-validation-system
-Last Verified: 2026-08-25
+Last Verified: 2026-08-27
 ---
 
 # 工作包 C 变更记录
@@ -14,6 +14,21 @@ Last Verified: 2026-08-25
 本文件记录工作包 C 的可见功能、跨包合同、兼容性和验证状态变化。项目用途、运行方法
 与当前架构请先阅读 [README.md](README.md)；长期设计取舍见
 [决策记录](docs/DECISIONS.md)。
+
+## Unreleased — P3.1 SMO-A* evidence hardening（2026-08-27）
+
+- `TimeDependentAStar` 的显式 `shared_edge_evaluation=True` 路径现在把拒绝边保存为
+  traceback-free 不可变 rejection record，并让最后一个 objective 只读已有缓存，避免缓存
+  无后续消费者的条目；默认 `plan()`、非 shared 路径和正式调用链保持兼容。
+- 新增 `traversal_cache_stats` 观察字段，区分 accepted/rejected hit/miss、当前/峰值条目，
+  仅用于内部诊断，不进入 C→D 路线合同或业务 digest。
+- `scripts/benchmark_smo_astar.py` 改为每 cell 独立 worker、control/candidate 交替、CPU
+  绑定、进程 RSS/`VmSwap`、硬超时与完整路线业务语义 digest，并记录 Git/lock/runner/input identity。
+- 新增未从 package root 导出的 `AnytimeRepairingAStar` 研究候选：固定
+  `2.5→2.0→1.5→1.0` epsilon 修复序列，记录 incumbent/下界/gap，扩展预算耗尽时 fail-closed；
+  仅通过 synthetic M0 单测，不进入 Winter 或正式入口。
+- 本轮仍未启用 SMO、未修改 RiskFrame/RoutePlan 合同、未写入 formal latest 或 frozen artifact；
+  P3.1 的双 Winter M1 与 ARA* 后备状态以 `CORE_ALGORITHM_IMPROVEMENT_PLAN.md` 为准。
 
 ## Unreleased — P2.1 control-trace equivalence（2026-08-25 02:32 +08:00）
 

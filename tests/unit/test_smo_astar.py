@@ -197,6 +197,20 @@ class TestSmoAstarRejectedEdgeCaching:
         total_hits = sum(r.metrics.traversal_cache_hits for r in shared.values())
         assert total_hits > 0
 
+    def test_rejections_are_traceback_free_cache_records(self) -> None:
+        zero = np.zeros((3, 4), dtype=np.float32)
+        hard = np.zeros((3, 4), dtype=np.bool_)
+        hard[0, 1] = True
+        planner = _planner(
+            _risk_window((zero, zero, zero), hard_masks=(hard, hard, hard))
+        )
+        planner.plan_candidates(_base_request(), shared_edge_evaluation=True)
+
+        stats = planner.traversal_cache_stats
+        assert stats["rejected_hits"] > 0
+        assert stats["rejected_entries"] > 0
+        assert stats["entries"] <= stats["peak_entries"]
+
     def test_rejected_risk_edges_are_cached(self) -> None:
         zero = np.zeros((3, 4), dtype=np.float32)
         high = zero.copy()
@@ -247,3 +261,15 @@ class TestSmoAstarBackwardCompat:
             assert b.source_risk_ids == s.source_risk_ids
             assert b.metrics.expanded_states == s.metrics.expanded_states
             assert b.metrics.generated_states == s.metrics.generated_states
+
+    def test_final_objective_does_not_grow_shared_cache(self) -> None:
+        zero = np.zeros((3, 4), dtype=np.float32)
+        future = zero.copy()
+        future[1, 1:3] = 1.0
+        planner = _planner(_risk_window((zero, future, future)))
+        planner.plan_candidates(_base_request(), shared_edge_evaluation=True)
+
+        stats = planner.traversal_cache_stats
+        assert stats["peak_entries"] > 0
+        assert stats["entries"] < stats["misses"]
+        assert stats["entries"] <= stats["peak_entries"]

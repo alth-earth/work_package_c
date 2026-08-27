@@ -179,8 +179,37 @@ class _EdgeTraversalData:
     source_risk_ids: tuple[str, ...]
 
 
-_REJECTED = object()
 _CACHE_MISS = object()
+
+
+@dataclass(frozen=True, slots=True)
+class _CachedRejection:
+    """Small, traceback-free representation of a rejected edge.
+
+    Storing the original exception in the cross-objective cache retains its
+    traceback (and therefore hot-loop frames and locals) until the cache is
+    released.  A rejection is deterministic for the exact cache key, so only
+    its stable kind/detail need to be retained; a fresh exception is raised on
+    a later cache hit.
+    """
+
+    kind: str
+    detail: str
+
+
+@dataclass(slots=True)
+class _TraversalCacheStats:
+    """Per-call observational statistics for the shared traversal cache."""
+
+    hits: int = 0
+    misses: int = 0
+    accepted_hits: int = 0
+    rejected_hits: int = 0
+    accepted_misses: int = 0
+    rejected_misses: int = 0
+    entries: int = 0
+    peak_entries: int = 0
+    rejected_entries: int = 0
 
 
 @dataclass(slots=True)
@@ -209,6 +238,7 @@ class _Counters:
 
 class _RejectedEdge(Exception):
     def __init__(self, reason: str) -> None:
+        super().__init__(reason)
         self.reason = reason
 
 
@@ -246,6 +276,7 @@ class TimeDependentAStar:
         self._edge_cache_hits = 0
         self._edge_cache_misses = 0
         self._heur_dist: dict[Node, float] = {}
+        self._last_traversal_cache_stats = _TraversalCacheStats()
         self._validate_grid_alignment()
 
     @property
@@ -268,6 +299,23 @@ class TimeDependentAStar:
             "hits": self._edge_cache_hits,
             "misses": self._edge_cache_misses,
             "entries": len(self._edge_cache),
+        }
+
+    @property
+    def traversal_cache_stats(self) -> dict[str, int]:
+        """Return shared-traversal statistics from the last candidate call."""
+
+        stats = self._last_traversal_cache_stats
+        return {
+            "hits": stats.hits,
+            "misses": stats.misses,
+            "accepted_hits": stats.accepted_hits,
+            "rejected_hits": stats.rejected_hits,
+            "accepted_misses": stats.accepted_misses,
+            "rejected_misses": stats.rejected_misses,
+            "entries": stats.entries,
+            "peak_entries": stats.peak_entries,
+            "rejected_entries": stats.rejected_entries,
         }
 
     def plan(self, request: PlanningRequest) -> PlanningResult:
@@ -306,6 +354,8 @@ class TimeDependentAStar:
         *,
         trace: object | None,
         traversal_cache: dict | None = None,
+        cache_stats: _TraversalCacheStats | None = None,
+        cache_write: bool = True,
     ) -> PlanningResult:
         started = perf_counter()
         self._last_counters: _Counters | None = None
@@ -415,6 +465,8 @@ class TimeDependentAStar:
                         cost_model,
                         traversal_cache,
                         counters,
+                        cache_stats,
+                        cache_write,
                     )
                 except RiskCoverageError:
                     counters.coverage += 1
@@ -494,21 +546,28 @@ class TimeDependentAStar:
         sets, so the returned routes are identical to the non-shared path.
         """
 
+        modes = tuple(ObjectiveMode(raw_mode) for raw_mode in objectives)
+        self._last_traversal_cache_stats = _TraversalCacheStats()
         if not shared_edge_evaluation:
             return {
                 mode: self.plan(replace(request, objective=mode))
-                for raw_mode in objectives
-                for mode in (ObjectiveMode(raw_mode),)
+                for mode in modes
             }
         traversal_cache: dict = {}
+        cache_stats = _TraversalCacheStats()
+        self._last_traversal_cache_stats = cache_stats
         results: dict[ObjectiveMode, PlanningResult] = {}
-        for raw_mode in objectives:
-            mode = ObjectiveMode(raw_mode)
+        for index, mode in enumerate(modes):
             results[mode] = self._plan(
                 replace(request, objective=mode),
                 trace=None,
                 traversal_cache=traversal_cache,
+                cache_stats=cache_stats,
+                # No later objective can consume entries written by the final
+                # objective.  It may still read entries produced earlier.
+                cache_write=index < len(modes) - 1,
             )
+        cache_stats.entries = len(traversal_cache)
         return results
 
     def _evaluate_edge_data(
@@ -630,6 +689,8 @@ class TimeDependentAStar:
         cost_model: CostModel,
         traversal_cache: dict | None,
         counters: _Counters,
+        cache_stats: _TraversalCacheStats | None = None,
+        cache_write: bool = True,
     ) -> _EdgeTraversal:
         """Edge evaluation with optional cross-objective traversal cache.
 
@@ -643,28 +704,72 @@ class TimeDependentAStar:
             cache_key = (start, end, departure_time, incoming_code)
             cached = traversal_cache.get(cache_key, _CACHE_MISS)
             if cached is not _CACHE_MISS:
-                if isinstance(cached, BaseException):
-                    raise cached
                 counters.cache_hits += 1
+                if cache_stats is not None:
+                    cache_stats.hits += 1
+                if isinstance(cached, _CachedRejection):
+                    if cache_stats is not None:
+                        cache_stats.rejected_hits += 1
+                    self._raise_cached_rejection(cached)
+                if cache_stats is not None:
+                    cache_stats.accepted_hits += 1
                 cost = self._compute_cost(cached, cost_model)
                 return self._build_traversal(start, end, cached, cost)
 
         if traversal_cache is not None:
             counters.cache_misses += 1
+            if cache_stats is not None:
+                cache_stats.misses += 1
         try:
             data = self._evaluate_edge_data(
                 start, end, departure_time, incoming_code, request
             )
         except (_RejectedEdge, RiskCoverageError, UnnavigableSpeedError) as exc:
-            if traversal_cache is not None:
-                traversal_cache[cache_key] = exc
+            if cache_stats is not None:
+                cache_stats.rejected_misses += 1
+            if traversal_cache is not None and cache_write:
+                cached_rejection = self._cache_rejection(exc)
+                traversal_cache[cache_key] = cached_rejection
+                if cache_stats is not None:
+                    cache_stats.rejected_entries += 1
+                    cache_stats.entries = len(traversal_cache)
+                    cache_stats.peak_entries = max(
+                        cache_stats.peak_entries, cache_stats.entries
+                    )
             raise
 
-        if traversal_cache is not None:
+        if cache_stats is not None:
+            cache_stats.accepted_misses += 1
+        if traversal_cache is not None and cache_write:
             traversal_cache[cache_key] = data
+            if cache_stats is not None:
+                cache_stats.entries = len(traversal_cache)
+                cache_stats.peak_entries = max(
+                    cache_stats.peak_entries, cache_stats.entries
+                )
 
         cost = self._compute_cost(data, cost_model)
         return self._build_traversal(start, end, data, cost)
+
+    @staticmethod
+    def _cache_rejection(
+        exception: _RejectedEdge | RiskCoverageError | UnnavigableSpeedError,
+    ) -> _CachedRejection:
+        if isinstance(exception, _RejectedEdge):
+            return _CachedRejection(f"rejected:{exception.reason}", exception.reason)
+        if isinstance(exception, RiskCoverageError):
+            return _CachedRejection("coverage", str(exception))
+        return _CachedRejection("speed", str(exception))
+
+    @staticmethod
+    def _raise_cached_rejection(rejection: _CachedRejection) -> None:
+        if rejection.kind.startswith("rejected:"):
+            raise _RejectedEdge(rejection.detail)
+        if rejection.kind == "coverage":
+            raise RiskCoverageError(rejection.detail)
+        if rejection.kind == "speed":
+            raise UnnavigableSpeedError(rejection.detail)
+        raise RuntimeError(f"unknown cached rejection kind: {rejection.kind}")
 
     def _evaluate_edge(
         self,

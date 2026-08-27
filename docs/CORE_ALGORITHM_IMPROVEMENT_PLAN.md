@@ -74,7 +74,7 @@ RiskSourcePlanningIngress.execute
 - 边评估对空间点进行风险采样，按环境速度因子计算船速，使用两轮 ETA/速度精化，再计算风险、置信度、距离、转向和等效小时成本。
 - `RiskSampler` 对时间覆盖、hard mask、confidence、source identity 和窗口边界严格检查，未知数据不被当作安全数据。
 - `CostModel.lower_bound()` 提供基于最快速度的局部下界；`use_heuristic=False` 可在同一近似状态图上运行 zero-heuristic Dijkstra。
-- 四层编排当前为 `full_voyage`、`main_corridor`、`rolling`、`executable`，每层三个目标，核心执行仍是 12 次相互独立的 A* 查询；共享多目标搜索和增量重规划尚未实现。
+- 四层编排当前为 `full_voyage`、`main_corridor`、`rolling`、`executable`，每层三个目标；正式默认执行仍是 12 次相互独立的 A* 查询，SMO-A* 仅由显式、默认关闭的内部开关启用，增量重规划尚未实现。
 
 **当前成熟度与证据：**
 
@@ -83,11 +83,11 @@ RiskSourcePlanningIngress.execute
 | 正式 B→C 输入与 fail-closed | `AUTHORITATIVE_PASS` | committed-window lease、identity/digest 校验、覆盖和硬约束拒绝 |
 | Winter 四层三目标生产 | `AUTHORITATIVE_PASS` | 145 个正式小时帧、4 层 × 3 目标、12/12 route integrity、hard violation 0 |
 | C→D 路线合同 | `FROZEN_BASELINE` | route v2 / four-layer v3 schema、digest 和来源字段保持冻结 |
-| 单元/合同回归 | `UNIT_PASS` | P0 clean/synced 基线为 `215 passed`；P2.1 算法实现提交 `9ab88298059b2da5ce3f08c8aed995fcff8e4bd8` 执行 `UV_OFFLINE=1 make check` 为 `274 passed`，Ruff、lock/sync、CLI 通过 |
+| 单元/合同回归 | `UNIT_PASS` | 历史 P0/P2.1 基线分别为 `215/274 passed`；本轮 `UV_OFFLINE=1 make check` 为 `249 passed`，Ruff、lock/sync、CLI 通过 |
 | 当前 A* 的全局最优性 | `NOT_IMPLEMENTED`（未证明） | 时间桶合并、FIFO、ETA 迭代和连续时间误差均无通用证明 |
 | P2.1 相对独立 cold control 的受限重复查询优势 | `EXPERIMENTAL_PASS` | clean M0/M1 与 Winter formal 均观测到约 47%–79% 总耗时改善；只适用于同 goal 收紧查询，不等于跨 workload 稳定优势 |
 | 相对于传统算法的生产级稳定性能优势 | `NOT_IMPLEMENTED`（未证明） | P2.1 Winter M2 因 `rolling_0_24h × fastest` 中位回归 `5.94% > 5%` 失败；候选未默认启用 |
-| P3 SMO-A* 共享记忆化多目标搜索 | `EXPERIMENTAL` | 12 正确性测试通过；Winter holdout 基准 +12.71% wall-time 改善、14.3% cache hit rate、100% 路线一致；低于 15% 改善和 50% hit rate 目标 |
+| P3 SMO-A* 共享记忆化多目标搜索 | `EXPERIMENTAL` | 14 项聚焦正确性/缓存回归通过；历史 Winter holdout 基准 +12.71% wall-time 改善、14.3% cache hit rate、100% 路线一致；P3.1 双窗口 M1 尚未完成，不能覆盖原有未达标结论 |
 | bounded LRU 风险采样缓存 | `EXPERIMENTAL` | direct medium 实验约 14.77% median 改善，但增加约 38.6 MiB RSS，未通过正式 12 路线门禁 |
 
 **上一版审计的状态修正：** 上一版把计数器热循环、环境变量/资源观测耦合、v3 常量散落、层窗口常量、session 无界增长等工程项标为已修复；代码和测试已支持这一结论。本次不再把这些历史问题列为当前算法瓶颈，当前重点转为时间依赖搜索语义、可证明复用和可重复性能证据。
@@ -505,9 +505,9 @@ clean smoke 构件 `/root/my_project/.runtime/experiments/winter-c-p21-m2e-gate-
 
 P2.1-M2I 停止后，按本文档要求建立独立 P3 计划。P3 选择 SMO-A*（Shared-Memoization Objective-A*）作为新的候选算法，不修改 P2.1 的控制轨迹复用路径、不改变 B/C/D 合同、不改变正式 A* 默认。所有 P3 构件为研究验证性质，candidate 保持默认关闭、非发布。
 
-**算法定义。** SMO-A* 是纯记忆化优化：在 `plan_candidates(shared_edge_evaluation=True)` 时，三个目标函数（fastest / low_risk / recommended）共享一个 per-call 遍历缓存。缓存键为 `(start_node, end_node, departure_time, incoming_code)`，全部为目标无关且确定性可哈希。首次评估的边（cache miss）执行完整的风险采样、速度计算和几何评估，将目标无关结果存为 `_EdgeTraversalData`；后续目标命中缓存时仅执行轻量的 `CostModel.evaluate()`（目标相关），跳过昂贵的风险采样。被拒绝的边（hard mask / risk / coverage / speed）也被缓存为异常对象，后续目标直接 re-raise 而不重新评估。每个 `plan_candidates` 调用创建独立缓存，不跨层共享。
+**算法定义。** SMO-A* 是纯记忆化优化：在 `plan_candidates(shared_edge_evaluation=True)` 时，三个目标函数（fastest / low_risk / recommended）共享一个 per-call 遍历缓存。缓存键为 `(start_node, end_node, departure_time, incoming_code)`，全部为目标无关且确定性可哈希。首次评估的边（cache miss）执行完整的风险采样、速度计算和几何评估，将目标无关结果存为 `_EdgeTraversalData`；后续目标命中缓存时仅执行轻量的 `CostModel.evaluate()`（目标相关），跳过昂贵的风险采样。被拒绝的边（hard mask / risk / coverage / speed）保存为 traceback-free 的紧凑 rejection record，后续目标按同一类型和原因重新抛出，而不保留原异常栈。每个 `plan_candidates` 调用创建独立缓存，不跨层共享。
 
-**实现位置。** `src/arctic_route_planning/planners/time_dependent_astar.py`：新增 `_EdgeTraversalData` dataclass、`_REJECTED`/`_CACHE_MISS` 哨兵、`_evaluate_edge_data()` / `_compute_cost()` / `_build_traversal()` / `_evaluate_edge_cached()` 方法；`_Counters` 新增 `cache_hits`/`cache_misses`；`SearchMetrics` 新增 `traversal_cache_hits`/`traversal_cache_misses`；`plan_candidates()` 新增 keyword-only `shared_edge_evaluation: bool = False`，默认 `False` 保持完全向后兼容。`profiling.py` 已更新以识别新方法名。原始 `_evaluate_edge()` 保留用于非缓存路径的向后兼容。
+**实现位置。** `src/arctic_route_planning/planners/time_dependent_astar.py`：新增 `_EdgeTraversalData` 与 `_CachedRejection` dataclass、`_CACHE_MISS` 哨兵、`_evaluate_edge_data()` / `_compute_cost()` / `_build_traversal()` / `_evaluate_edge_cached()` 方法；`_Counters` 新增 `cache_hits`/`cache_misses`；`SearchMetrics` 新增 `traversal_cache_hits`/`traversal_cache_misses`；planner 增加只读 `traversal_cache_stats` 观测，并让最终 objective 不再扩张缓存。`plan_candidates()` 新增 keyword-only `shared_edge_evaluation: bool = False`，默认 `False` 保持完全向后兼容。`profiling.py` 已更新以识别新方法名。原始 `_evaluate_edge()` 保留用于非缓存路径的向后兼容。
 
 **P2.1 归档。** `control_trace_reuse.py`、`temporal_reuse.py`、`temporal_session.py` 移至 `planners/_archive/`；对应测试移至 `tests/unit/_archive/`；`pyproject.toml` 添加 `norecursedirs` 排除归档目录；`temporal_label_astar.py` 保留（P0 正确性 oracle）；`ingress.py`、`benchmark_bc_coupling.py`、`validate_temporal_semantics.py` 的导入路径已更新。
 
@@ -520,7 +520,7 @@ P2.1-M2I 停止后，按本文档要求建立独立 P3 计划。P3 选择 SMO-A*
 | `TestSmoAstarRejectedEdgeCaching` | 2 | hard mask 和 risk threshold 拒绝的边被缓存，后续目标跳过 |
 | `TestSmoAstarBackwardCompat` | 2 | 默认 `shared_edge_evaluation=False` 与显式 `False` 结果一致；`expanded_states`/`generated_states`/`source_risk_ids` 匹配 |
 
-全套测试 190 passed（含 12 SMO-A* + 133 unit + 45 integration，排除归档 P2.1 测试）；Ruff 全部通过。
+初版实现时全套测试 190 passed（含 12 SMO-A* + 133 unit + 45 integration，排除归档 P2.1 测试）；Ruff 全部通过。该数字属于初版证据，不代表当前工作树的最新检查结果。
 
 **Winter 基准结果。** 使用 holdout `total_with_tide` 输入（145 帧、risk content digest `115ad3ab…`），start=(5,7) goal=(26,2)，departure 2026-02-22T00:00Z，1 次重复：
 
@@ -540,3 +540,24 @@ P2.1-M2I 停止后，按本文档要求建立独立 P3 计划。P3 选择 SMO-A*
 **当前成熟度。** SMO-A* 处于「实现完成 + 正确性验证通过 + 基准数据正向但不充分」阶段。+12.71% 改善低于 15% 目标、cache hit rate 低于 50% 目标、RSS 增长显著。不满足进入正式 M2 门禁的条件。candidate 保持默认关闭、非发布。
 
 **下一步条件。** 在进入条件式 M2 之前，需要：(1) 在 development bundle 上重复基准以验证一致性；(2) 分析 cache miss 的具体构成（搜索路径差异 vs 时间桶分散），评估是否可通过缓存键归约（如时间桶对齐）提升 hit rate；(3) 评估 RSS 增长是否可接受或需要 LRU 淘汰策略；(4) 若 SMO-A* 无法达到 15% 改善目标，则按原计划启动 ARA*（Anytime Repairing A*）作为备选方案。不得放宽 P3 验收目标或冻结门禁。P2.1 M2 的 FAIL 记录和构件原样保留，不被 P3 覆盖。
+
+### 【2026-08-27 | IN_PROGRESS】P3.1 SMO-A* 证据加固、有界优化与 ARA* 后备
+
+本轮执行边界已经冻结：SMO-A* 仍是唯一主线候选，ARA* 只有在 SMO 未通过候选晋级门时进入 M0 可行性验证；本轮不执行正式 M2、不改变默认 planner、不写入 formal latest、replanning baseline 或 frozen artifact。所有结果使用新的 experiment identity，P2.1 的失败记录和构件保持原样。
+
+**证据入口。** `scripts/benchmark_smo_astar.py` 改为每个 cell 使用独立 worker、control/candidate 交替顺序、同一 CPU 绑定、进程 RSS/`VmSwap` 记录，并把 Git SHA、工作树状态、`uv.lock` SHA、runner SHA、输入 RiskFrame identity 和完整路线业务字段写入结果。runner 接受显式 departure/config 和每 worker 硬超时，不再把 vessel/planner 假设隐藏在脚本中；路线比较覆盖 waypoint、ETA、速度、风险、confidence、source IDs、成本和失败语义。
+
+**本轮唯一 SMO 优化。** 保留 exact UTC departure cache key，禁止时间桶归并、近似键、跨层缓存和为性能修改风险/ETA 语义。缓存拒绝结果从异常对象改成无 traceback 的不可变 record；最后一个 objective 只读取既有条目，不为后续不存在的消费者写入新条目。新增 cache hit/miss、accepted/rejected、entry/peak-entry 诊断，不改变 `shared_edge_evaluation=False` 的默认和正式调用路径。
+
+**晋级门与顺序。** 先在 5×7×7、9×13×13 synthetic fixture 做 M0（预热 1 + 计时 10）；再在 holdout 与 development 两套既有 `total_with_tide` Winter 输入各做至少 5 次 paired M1，独立进程、交替顺序、同一资源环境。沿用本计划既有语义/资源规则，并冻结 SMO 目标为：路线业务字段 100% 一致、median wall-time 改善 `≥15%`、P95 不恶化超过 `5%`、cache hit rate `≥50%`、RSS ratio `≤1.10`、无 swap/OOM/timeout/资源超限。任一窗口或任一门禁失败即停止 SMO，不择优删样本或放宽阈值。
+
+**ARA* 后备边界。** SMO 停止后只实现 C 内部 M0 candidate，复用当前状态图、边评估器、取消和资源限制；固定 epsilon 序列 `2.5 → 2.0 → 1.5 → 1.0`，记录阶段首次解、代价、下界和观察 gap，并要求解代价单调不增、`epsilon=1.0` 与当前 control/reference oracle 在 synthetic 状态图上相符。ARA* 本轮不进入 Winter M1/M2、不导出公共 planner、不接入 ingress/service。
+
+**本轮执行记录（2026-08-27）。**
+
+- SMO bounded patch 已完成：拒绝边使用无 traceback record，最后一个 objective 对共享缓存只读；新增 rejected/accepted 命中与条目峰值诊断。`shared_edge_evaluation=False`、正式 planner、RiskFrame/RoutePlan 合同和发布路径未改变。
+- `UV_OFFLINE=1 make check`：Ruff、锁文件/同步检查、CLI smoke 全部通过；pytest 为 `249 passed`。聚焦回归为 SMO `14 passed`、ARA* `4 passed`。
+- 新 runner 的 Winter holdout 单 worker smoke 在生成结果前运行超过既有单次基线，未生成 worker/result artifact，已手动终止（exit 130）。因此 holdout/development 的 5 次 paired M1、P95/RSS/swap 晋级判定均为 `NOT_EVALUATED`，不能把该次尝试算作 FAIL 或 PASS。
+- 另以 `--worker-timeout-seconds 3` 做 guard smoke，runner 按预期以非零状态退出且没有结果文件；该 guard 验证不计入 M1 样本。
+- ARA* 仅完成 synthetic M0 语义单测：固定 epsilon 序列、阶段 incumbent/下界/gap 记录、单调代价、epsilon=1 与 control 对照及 expansion fail-closed 均通过；尚未执行 ARA* timing M0 或 Winter M1/M2。
+- 结论：SMO 仍为 `EXPERIMENTAL / NOT_EVALUATED_AFTER_P3.1_PATCH`，ARA* 为 `M0_UNIT_PASS / RESEARCH_ONLY`；本轮不进入正式 M2，不启用任何 candidate，不写入 formal latest、replanning baseline 或 frozen artifact。
