@@ -141,6 +141,7 @@ def _implementation_sha256(project_root: Path) -> dict[str, str]:
 
 def _implementation_sha256_p1(project_root: Path) -> dict[str, str]:
     paths = set(_implementation_sha256(project_root))
+    paths.add("src/arctic_route_planning/planners/temporal_session.py")
     paths.add("src/arctic_route_planning/planners/_archive/temporal_session.py")
     return {relative: _sha256(project_root / relative) for relative in sorted(paths)}
 

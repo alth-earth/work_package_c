@@ -71,6 +71,8 @@ _IMPLEMENTATION_FILES = (
     Path(__file__).resolve().parents[1]
     / "src/arctic_route_planning/planners/temporal_label_astar.py",
     Path(__file__).resolve().parents[1]
+    / "src/arctic_route_planning/planners/temporal_session.py",
+    Path(__file__).resolve().parents[1]
     / "src/arctic_route_planning/planners/_archive/temporal_session.py",
 )
 

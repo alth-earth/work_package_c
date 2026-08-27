@@ -6,7 +6,7 @@ from datetime import timedelta
 
 import pytest
 
-from arctic_route_planning.planners._archive.temporal_session import (
+from arctic_route_planning.planners.temporal_session import (
     TemporalSessionIdentity,
 )
 from arctic_route_planning.planners.temporal_qualification import (

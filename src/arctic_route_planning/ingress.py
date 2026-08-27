@@ -522,7 +522,7 @@ def _shadow_identity_for(
 
     try:
         if candidate_mode == _TEMPORAL_SHADOW_EXACT_MODE:
-            from arctic_route_planning.planners._archive.temporal_session import (
+            from arctic_route_planning.planners.temporal_session import (
                 TemporalSessionIdentity,
             )
 
@@ -723,7 +723,7 @@ class _TemporalShadowCandidatePlanner:
     ) -> Mapping[Any, Any]:
         # Importing the session identity here keeps P1 absent from the normal
         # formal ingress import graph and makes this adapter shadow-only.
-        from arctic_route_planning.planners._archive.temporal_session import TemporalSessionIdentity
+        from arctic_route_planning.planners.temporal_session import TemporalSessionIdentity
 
         results: dict[Any, Any] = {}
         layer_index = self._layer_index
