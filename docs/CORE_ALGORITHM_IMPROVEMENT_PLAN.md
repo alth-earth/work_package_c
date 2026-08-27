@@ -716,3 +716,13 @@ P0.1 M0 已收口为 `M0_PASS_READY_FOR_M1_PLAN`；该历史标记只表示当�
 **验证。** `test_eta_refinement.py` 18 项（含 bounded 振荡收敛、`no_fixed_point` fail-closed、method 校验、拒绝恢复）；`test_time_dependent_astar.py` 13 项（含默认两轮保持、bounded 热路径、拒绝恢复、fail-closed 透传）；`make check` 336 项全绿。**回滚方式**：删除 `eta_refinement_policy` 注入与 `method="bounded"` 分支即恢复纯固定两轮（默认路径本就等价）。
 
 **Owner**：work_package_c / orchestrator。**提交**：见 research-validation-system 分支本日提交。
+
+### 【2026-08-28 | PLANNED】P0.1-M1.5 真实输入资格审计与资源前沿
+
+本轮以当前 M1 的 `M1_PASS_READY_FOR_SEPARATE_REAL_INPUT_PLAN` 为入口，使用已有完整 145 帧 holdout/development committed window，建立真实 RiskFrame 的有限域 FIFO 诊断和 exact-arrival 资源前沿。真实 ETA 是连续到达时间；15 分钟等离散探测未发现反例时只能记录 `FIFO_UNCERTAIN`，不得据此生成可用 dominance certificate 或启用 candidate。
+
+执行在独立本地 worktree `research/p01-m15-real-qualification-20260827` 中进行。新增研究 runner `benchmark_temporal_dominance_real.py`，不改动已通过的 synthetic M1 runner；输入、route-plan-set、配置、锁文件、实现提交和 frame/content digest 全部进入 experiment identity。先扫描 `executable_0_6h`，仅在对应输入的 6h 语义/资源构件完整时条件执行 `rolling_0_24h`；full-voyage、Winter M2、P2.1/P3/ARA* 和 candidate 均不启动。
+
+FIFO scan 对可航有向边使用 15 分钟 probe，临界 slack 才递归加密；真实反例判 `FIFO_VIOLATED`，无反例但无区间证明判 `FIFO_UNCERTAIN_NO_INTERVAL_PROOF`，coverage/evaluator/ETA 异常判 uncertain。所有 uncertain、scope mismatch、未知 evaluator 和 fail-closed 对抗场景的 pruning 必须为零。资源前沿只使用 `TemporalDominancePolicy.disabled()`，保留 exact-arrival A* 与独立 zero-heuristic Dijkstra 的路线/ETA/业务字段/失败语义/确定性/扩展计数/RSS/swap/OOM/timeout 证据；Dijkstra 仅为正确性证据，不作为性能基线。
+
+八小时无人值守驱动使用单 CPU、`MemoryMax=4G`、`MemorySwapMax=0`、worker deadline、heartbeat、fsync 和 identity-checked resume。一个输入、目标或 24h 分支失败时只停止该分支并继续其他任务；语义不一致、身份漂移、fail-open pruning、dirty evidence worktree 或 production/frozen 写入为全局硬停止。实验产物留在 `.runtime/experiments/c-p01-m15-real-qualification-20260827-r1/`，最终只追加本节结果，不写 formal latest、replanning baseline 或 frozen artifact。
