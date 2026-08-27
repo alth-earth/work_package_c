@@ -293,6 +293,16 @@ def _resource_evidence_complete(record: dict[str, Any], *, cpu: int) -> bool:
     return True
 
 
+def _set_cpu_affinity(cpu: int | None) -> None:
+    """Pin every worker type, including the diagnostic FIFO worker."""
+
+    if cpu is None or cpu < 0:
+        return
+    if not hasattr(os, "sched_setaffinity"):
+        raise RuntimeError("fixed CPU evidence is unavailable on this platform")
+    os.sched_setaffinity(0, {cpu})
+
+
 def _read_jsonl(path: Path) -> tuple[list[dict[str, Any]], int]:
     """Read complete JSONL records, ignoring an interrupted trailing line."""
 
@@ -764,8 +774,7 @@ def _reference_matches(candidate: dict[str, Any], reference: dict[str, Any]) -> 
 
 
 def _worker_resource(args: argparse.Namespace) -> dict[str, Any]:
-    if args.cpu is not None and args.cpu >= 0 and hasattr(os, "sched_setaffinity"):
-        os.sched_setaffinity(0, {args.cpu})
+    _set_cpu_affinity(args.cpu)
     fixture = _load_fixture(args)
     objective = ObjectiveMode(args.objective)
     planner = _build_planner(fixture, objective)
@@ -847,6 +856,7 @@ def _probe_times(fixture: RealFixture) -> tuple[datetime, ...]:
 
 
 def _fifo_scan(args: argparse.Namespace) -> dict[str, Any]:
+    _set_cpu_affinity(args.cpu)
     fixture = _load_fixture(args)
     planner = _build_planner(fixture, ObjectiveMode.FASTEST)
     request = _request(fixture, ObjectiveMode.FASTEST)
