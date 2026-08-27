@@ -6,9 +6,6 @@ from datetime import timedelta
 
 import pytest
 
-from arctic_route_planning.planners.temporal_session import (
-    TemporalSessionIdentity,
-)
 from arctic_route_planning.planners.temporal_qualification import (
     DominanceMode,
     FifoCertificate,
@@ -16,6 +13,9 @@ from arctic_route_planning.planners.temporal_qualification import (
     TemporalDominanceCertificate,
     TemporalDominancePolicy,
     qualify_fifo,
+)
+from arctic_route_planning.planners.temporal_session import (
+    TemporalSessionIdentity,
 )
 from arctic_route_planning.planners.time_dependent_astar import PlanningRequest
 
