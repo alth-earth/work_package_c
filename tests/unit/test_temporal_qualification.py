@@ -16,6 +16,7 @@ from arctic_route_planning.planners.temporal_qualification import (
 )
 from arctic_route_planning.planners.temporal_session import (
     TemporalSessionIdentity,
+    TemporalSessionIdentityMismatch,
 )
 from arctic_route_planning.planners.time_dependent_astar import PlanningRequest
 
@@ -120,6 +121,120 @@ def test_dominance_requires_fifo_suffix_and_coverage() -> None:
     assert policy.mode is DominanceMode.CERTIFIED_ONLY
     assert policy.permits(fifo.scope)
     assert not policy.permits({"objective": "low_risk"})
+
+
+@pytest.mark.parametrize("flag", ("suffix_monotone", "coverage_complete"))
+def test_dominance_rejects_non_qualifying_certificate_and_records_reason(flag: str) -> None:
+    planner = _planner()
+    request = PlanningRequest(start=(1, 0), goal=(1, 3), departure_time=T0)
+    scope = planner.temporal_scope(request)
+    fifo = qualify_fifo(
+        ("edge",),
+        (T0, T0 + timedelta(hours=1)),
+        lambda _edge, departure: departure + timedelta(hours=1),
+        scope=scope,
+    )
+    certificate = TemporalDominanceCertificate.from_fifo(
+        fifo,
+        suffix_monotone=flag != "suffix_monotone",
+        coverage_complete=flag != "coverage_complete",
+    )
+    planner.dominance_policy = TemporalDominancePolicy.certified_only(certificate)
+    context = planner._new_execution_context()
+    context.dominance_scope = scope
+
+    assert not planner._authorize_dominance(context, request)
+    expected_reason = (
+        "suffix_not_monotone" if flag == "suffix_monotone" else "coverage_incomplete"
+    )
+    assert context.diagnostics.dominance_rejection_reasons == {expected_reason: 1}
+
+
+@pytest.mark.parametrize(
+    "scope_field",
+    (
+        "risk_frame_content_digest",
+        "risk_identity_digest",
+        "generation_id",
+        "input_revision",
+        "grid_digest",
+        "vessel_model_digest",
+        "planner_config_digest",
+        "eta_policy_digest",
+        "search_limits_digest",
+        "edge_evaluator_digest",
+        "objective",
+        "start",
+        "goal",
+        "departure_time",
+        "maximum_elapsed_seconds",
+        "maximum_risk",
+        "time_bucket_seconds",
+        "edge_sample_count",
+        "edge_ids",
+        "probe_times",
+    ),
+)
+def test_dominance_scope_mismatch_is_rejected_for_each_identity_field(
+    scope_field: str,
+) -> None:
+    planner = _planner()
+    request = PlanningRequest(start=(1, 0), goal=(1, 3), departure_time=T0)
+    scope = planner.temporal_scope(
+        request,
+        edge_ids=("edge",),
+        probe_times=(T0, T0 + timedelta(hours=1)),
+    )
+    fifo = qualify_fifo(
+        ("edge",),
+        (T0, T0 + timedelta(hours=1)),
+        lambda _edge, departure: departure + timedelta(hours=1),
+        scope=scope,
+    )
+    certificate = TemporalDominanceCertificate.from_fifo(
+        fifo,
+        suffix_monotone=True,
+        coverage_complete=True,
+        scope=scope,
+    )
+    policy = TemporalDominancePolicy.certified_only(certificate)
+    mismatched = dict(scope.mapping)
+    mismatched[scope_field] = f"mismatch:{scope_field}"
+
+    assert scope.matches(scope)
+    assert not policy.permits(mismatched)
+
+
+def test_dominance_does_not_mutate_existing_labels_when_pruning_new_label() -> None:
+    planner = _planner()
+    request = PlanningRequest(start=(1, 0), goal=(1, 3), departure_time=T0)
+    scope = planner.temporal_scope(request)
+    fifo = qualify_fifo(
+        ("edge",),
+        (T0, T0 + timedelta(hours=1)),
+        lambda _edge, departure: departure + timedelta(hours=1),
+        scope=scope,
+    )
+    planner.dominance_policy = TemporalDominancePolicy.certified_only(
+        TemporalDominanceCertificate.from_fifo(
+            fifo,
+            suffix_monotone=True,
+            coverage_complete=True,
+        )
+    )
+    context = planner._new_execution_context()
+    context.dominance_scope = scope
+    labels = {((1, 1), (0, 1), T0): 1.0}
+    original_labels = dict(labels)
+
+    assert planner._should_prune_dominated_label(
+        ((1, 1), (0, 1), T0 + timedelta(minutes=10)),
+        1.0,
+        labels,
+        request,
+        context=context,
+    )
+    assert labels == original_labels
 
 
 def test_planner_default_policy_is_disabled_and_scope_contains_input_identity() -> None:
@@ -285,3 +400,29 @@ def test_session_identity_binds_the_dominance_policy_digest() -> None:
 
     assert disabled.dominance_policy_digest != enabled.dominance_policy_digest
     assert disabled.session_id != enabled.session_id
+
+
+def test_checkpoint_restore_rejects_dominance_policy_change() -> None:
+    planner = _planner()
+    request = PlanningRequest(start=(1, 0), goal=(1, 3), departure_time=T0)
+    session = planner.create_session(request)
+    assert planner.advance_session(session, expansion_slice=1) is None
+    checkpoint = planner.checkpoint_session(session)
+
+    scope = planner.temporal_scope(request)
+    fifo = qualify_fifo(
+        ("edge",),
+        (T0, T0 + timedelta(hours=1)),
+        lambda _edge, departure: departure + timedelta(hours=1),
+        scope=scope,
+    )
+    planner.dominance_policy = TemporalDominancePolicy.certified_only(
+        TemporalDominanceCertificate.from_fifo(
+            fifo,
+            suffix_monotone=True,
+            coverage_complete=True,
+        )
+    )
+
+    with pytest.raises(TemporalSessionIdentityMismatch, match="identity fence"):
+        planner.restore_session(checkpoint, request=request)

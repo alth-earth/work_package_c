@@ -52,6 +52,7 @@ OBJECTIVES = tuple(ObjectiveMode)
 SYNTHETIC_PROFILES = {
     "small": SyntheticProfileConfig(rows=5, cols=7, frame_count=7),
     "medium": SyntheticProfileConfig(rows=9, cols=13, frame_count=13),
+    "stress": SyntheticProfileConfig(rows=13, cols=19, frame_count=19),
 }
 _T0 = datetime(2026, 2, 15, tzinfo=UTC)
 _DEFAULT_TIMEOUT_SECONDS = 300.0
@@ -1023,6 +1024,11 @@ def _summarize(cases: list[dict[str, Any]]) -> dict[str, Any]:
         and item["median_regression_percent"] <= _REGRESSION_CEILING_PERCENT
         for item in objective_summaries.values()
     )
+    objective_p95_regression_ok = bool(objective_summaries) and all(
+        item["p95_regression_percent"] is not None
+        and item["p95_regression_percent"] <= _REGRESSION_CEILING_PERCENT
+        for item in objective_summaries.values()
+    )
     gate_checks = {
         "paired_cases_present": bool(cases),
         "candidate_workers_pass": candidate_pass,
@@ -1041,6 +1047,7 @@ def _summarize(cases: list[dict[str, Any]]) -> dict[str, Any]:
         "dominance_scope_match": scope_match,
         "reference_oracle_match": reference_match,
         "per_objective_regression_le_5pct": objective_regression_ok,
+        "per_objective_p95_regression_le_5pct": objective_p95_regression_ok,
         "regression_metric_compute_ms": metric_consistent,
         "median_regression_le_5pct": (
             bool(regressions)

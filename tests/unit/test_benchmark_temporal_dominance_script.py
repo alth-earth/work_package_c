@@ -74,9 +74,28 @@ def test_summary_rejects_regression_above_five_percent() -> None:
     assert summary["gate_checks"]["median_regression_le_5pct"] is False
 
 
+def test_summary_rejects_p95_regression_above_five_percent_even_when_median_passes() -> None:
+    cases = [_case(regression=value) for value in (0.0, 0.0, 0.0, 0.0, 6.0)]
+
+    summary = _SCRIPT._summarize(cases)
+
+    assert summary["objective_summaries"]["fastest"]["median_regression_percent"] == 0.0
+    assert summary["objective_summaries"]["fastest"]["p95_regression_percent"] == 6.0
+    assert summary["gate_checks"]["per_objective_regression_le_5pct"] is True
+    assert summary["gate_checks"]["per_objective_p95_regression_le_5pct"] is False
+    assert summary["gate_verdict"] == "FAIL"
+
+
 def test_experiment_identity_is_stable_for_a_profile() -> None:
     assert _SCRIPT._experiment_id("small") == _SCRIPT._experiment_id("small")
     assert _SCRIPT._experiment_id("small") != _SCRIPT._experiment_id("medium")
+
+
+def test_stress_profile_is_fixed_and_identity_bound() -> None:
+    profile = _SCRIPT.SYNTHETIC_PROFILES["stress"]
+
+    assert (profile.rows, profile.cols, profile.frame_count) == (13, 19, 19)
+    assert _SCRIPT._experiment_id("stress") != _SCRIPT._experiment_id("medium")
 
 
 def test_summary_uses_compute_metric_and_reports_p95() -> None:
