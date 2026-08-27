@@ -256,16 +256,16 @@ class _TraversalCacheStats:
     objective_lookups: dict[str, int] = field(default_factory=dict)
     objective_hits: dict[str, int] = field(default_factory=dict)
     objective_misses: dict[str, int] = field(default_factory=dict)
-    _seen_exact_keys: set[tuple[Node, Node, datetime, HeadingCode]] = field(
-        default_factory=set,
+    _seen_exact_keys: set[tuple[Node, Node, datetime, HeadingCode]] | None = field(
+        default=None,
         repr=False,
     )
-    _physical_departures: dict[tuple[Node, Node, HeadingCode], set[datetime]] = field(
-        default_factory=dict,
+    _physical_departures: dict[tuple[Node, Node, HeadingCode], set[datetime]] | None = field(
+        default=None,
         repr=False,
     )
-    _time_variant_keys: set[tuple[Node, Node, datetime, HeadingCode]] = field(
-        default_factory=set,
+    _time_variant_keys: set[tuple[Node, Node, datetime, HeadingCode]] | None = field(
+        default=None,
         repr=False,
     )
 
@@ -292,6 +292,12 @@ class _TraversalCacheStats:
         objective_counts = self.objective_hits if hit else self.objective_misses
         objective_counts[objective_name] = objective_counts.get(objective_name, 0) + 1
 
+        if self._seen_exact_keys is None:
+            self._seen_exact_keys = set()
+        if self._physical_departures is None:
+            self._physical_departures = {}
+        if self._time_variant_keys is None:
+            self._time_variant_keys = set()
         start, end, departure_time, incoming_code = key
         physical_key = (start, end, incoming_code)
         departures = self._physical_departures.get(physical_key)
@@ -466,11 +472,11 @@ class TimeDependentAStar:
             "exact_key_lookups": stats.exact_key_lookups,
             "exact_key_hits": stats.exact_key_hits,
             "exact_key_misses": stats.exact_key_misses,
-            "unique_exact_keys": len(stats._seen_exact_keys),
-            "unique_physical_edges": len(stats._physical_departures),
+            "unique_exact_keys": len(stats._seen_exact_keys or ()),
+            "unique_physical_edges": len(stats._physical_departures or {}),
             "physical_edge_reuse_lookups": stats.physical_edge_reuse_lookups,
             "time_variant_exact_misses": stats.time_variant_exact_misses,
-            "time_variant_unique_keys": len(stats._time_variant_keys),
+            "time_variant_unique_keys": len(stats._time_variant_keys or ()),
             "estimated_shallow_bytes": stats.estimated_shallow_bytes,
             "peak_estimated_shallow_bytes": stats.peak_estimated_shallow_bytes,
             "objective": objective,
