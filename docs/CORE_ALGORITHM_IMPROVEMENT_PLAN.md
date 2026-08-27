@@ -22,7 +22,7 @@ Related Canonical Docs:
 
 # 工作包 C 核心算法现状、改进方案与实施计划
 
-> 本文档将“工作包 C 核心算法实现审计报告”与后续改进方案合并为一个持续维护的计划文档。当前正式基线是带风险、速度和 ETA 耦合的时间依赖 A*。P2.1 控制轨迹复用在同 goal 收紧查询上证明约 48% 总耗时改善，但 Winter M2 因 development 窗口多个单元硬门禁失败而总体保持 `FAIL`；P2.1-M2I 因果诊断后停止。P3 SMO-A*（共享记忆化目标 A*）已实现并通过正确性验证，Winter holdout 基准显示 +12.71% wall-time 改善和 100% 路线一致性，但改善幅度和 cache hit rate 未达 P3 目标。所有候选继续默认关闭、非发布，尚不能声明生产级稳定优势或全局最优。
+> 本文档将“工作包 C 核心算法实现审计报告”与后续改进方案合并为一个持续维护的计划文档。当前正式基线是带风险、速度和 ETA 耦合的时间依赖 A*。P2.1 控制轨迹复用在同 goal 收紧查询上证明约 48% 总耗时改善，但 Winter M2 因 development 窗口多个单元硬门禁失败而总体保持 `FAIL`；P2.1-M2I 因果诊断后停止。P3 SMO-A* 已通过语义验证，但双 Winter M1 未满足 wall-time、cache hit 和 RSS 联合门禁；P3.3 exact-key 诊断进一步显示 medium synthetic 命中率仅 47.87%，主要是 objective 搜索路径差异，故 SMO 退出后续晋级。ARA* small synthetic M0 也未通过首解时间门禁。所有候选继续默认关闭、非发布，尚不能声明生产级稳定优势或全局最优。
 
 ## 1. 文档定位与更新规则（2026-08-24 20:52 +08:00）
 
@@ -83,11 +83,11 @@ RiskSourcePlanningIngress.execute
 | 正式 B→C 输入与 fail-closed | `AUTHORITATIVE_PASS` | committed-window lease、identity/digest 校验、覆盖和硬约束拒绝 |
 | Winter 四层三目标生产 | `AUTHORITATIVE_PASS` | 145 个正式小时帧、4 层 × 3 目标、12/12 route integrity、hard violation 0 |
 | C→D 路线合同 | `FROZEN_BASELINE` | route v2 / four-layer v3 schema、digest 和来源字段保持冻结 |
-| 单元/合同回归 | `UNIT_PASS` | 历史 P0/P2.1 基线分别为 `215/274 passed`；本轮 `UV_OFFLINE=1 make check` 为 `249 passed`，Ruff、lock/sync、CLI 通过 |
+| 单元/合同回归 | `UNIT_PASS` | 历史 P0/P2.1 基线分别为 `215/274 passed`；本轮 `UV_OFFLINE=1 make check` 为 `268 passed`，Ruff、lock/sync、CLI 通过 |
 | 当前 A* 的全局最优性 | `NOT_IMPLEMENTED`（未证明） | 时间桶合并、FIFO、ETA 迭代和连续时间误差均无通用证明 |
 | P2.1 相对独立 cold control 的受限重复查询优势 | `EXPERIMENTAL_PASS` | clean M0/M1 与 Winter formal 均观测到约 47%–79% 总耗时改善；只适用于同 goal 收紧查询，不等于跨 workload 稳定优势 |
 | 相对于传统算法的生产级稳定性能优势 | `NOT_IMPLEMENTED`（未证明） | P2.1 Winter M2 因 `rolling_0_24h × fastest` 中位回归 `5.94% > 5%` 失败；候选未默认启用 |
-| P3 SMO-A* 共享记忆化多目标搜索 | `EXPERIMENTAL` | 14 项聚焦正确性/缓存回归通过；历史 Winter holdout 基准 +12.71% wall-time 改善、14.3% cache hit rate、100% 路线一致；P3.1 双窗口 M1 尚未完成，不能覆盖原有未达标结论 |
+| P3 SMO-A* 共享记忆化多目标搜索 | `DEFERRED` | 语义/诊断回归通过；P3.2 holdout/development M1 分别因 hit rate `14.27%/19.19%`、RSS ratio `3.367/3.380` 失败；P3.3 synthetic medium exact-key hit `47.87%`，主要为 objective 路径差异，未形成安全修复路径 |
 | bounded LRU 风险采样缓存 | `EXPERIMENTAL` | direct medium 实验约 14.77% median 改善，但增加约 38.6 MiB RSS，未通过正式 12 路线门禁 |
 
 **上一版审计的状态修正：** 上一版把计数器热循环、环境变量/资源观测耦合、v3 常量散落、层窗口常量、session 无界增长等工程项标为已修复；代码和测试已支持这一结论。本次不再把这些历史问题列为当前算法瓶颈，当前重点转为时间依赖搜索语义、可证明复用和可重复性能证据。
@@ -190,7 +190,7 @@ target.maximum_risk    >= R_trace
 | P1 会话骨架 | 在 C 内实现 per-objective 可恢复 session、OPEN/前驱/标签快照和 input/config/model digest fence | 不跨目标/代际复用；取消、generation、revision、fail-closed 回归通过 | `UNIT_PASS` |
 | P2 same-goal monotonic reuse | 实现同一目标、同一输入下 exact hit 与收紧时域/风险约束的证书迁移，保留 baseline 回退 | M0/M1 与 control 语义一致；证书可重算；命中零搜索扩展；失败自动回退 | `UNIT_PASS`（M0 性能 FAIL） |
 | P2.1 control trace reuse | 为正式 control 增加默认关闭的历史写入轨迹证书；只在同 goal 收紧约束保持整段执行轨迹时复用 | transient-label 反例 fail-closed；M0 总耗时至少改善 20%；M1 两规模 median 至少改善 15% | `EXPERIMENTAL_PASS`（M0/M1）；Winter M2 `FAIL` |
-| P3 SMO-A* / full-anchor reuse | SMO-A* 共享记忆化已实现；full-anchor `U_A/LB_A` 证书复用保持 `PLANNED` | SMO-A*: 路线一致 PASS、cache hit rate >= 50%、wall >= 15%；full-anchor: M1 >= 5 次 paired | SMO-A* `EXPERIMENTAL`（基准未达标）；full-anchor `PLANNED` |
+| P3 SMO-A* / full-anchor reuse | SMO-A* 共享记忆化已实现但 P3.3 诊断后延期退出；full-anchor `U_A/LB_A` 证书复用保持 `PLANNED` | SMO-A*: 路线一致 PASS、cache hit rate >= 50%、wall >= 15%；full-anchor: M1 >= 5 次 paired | SMO-A* `DEFERRED`（P3.2/P3.3 未达标）；full-anchor `PLANNED` |
 | P4 formal shadow | Winter 正式 ingress、4×3、12 路线，control/candidate 双轨 | M2 通过确定性、合同、资源和性能阈值；不覆盖冻结 artifact | `IMPLEMENTED`；原始 M2 `FAIL`，M2H holdout `PASS`、development `FAIL` |
 | P5 默认启用评审 | 仅在重复正式证据支持时改变默认开关，并更新本文档/CHANGELOG | 通过审批、回滚演练和新 experiment identity；否则保持 baseline | `PLANNED` |
 | P6 多目标/自适应后续 | NAMOA*/MOPBD*/自适应网格等独立提案 | 必须先证明 P0/P3 的收益不足且合同必要性成立 | `DEFERRED` |
@@ -344,7 +344,8 @@ M0 r1 暴露 JSON/SHA 热路径 overhead 15%–20%，随后改为固定网络字
 4. 所有性能结论必须来自同输入、同边评估器、重复运行的 paired benchmark；单次 Winter wall time 只能称为工程观察。
 5. 重大算法选择、跨包合同变化和默认开关变化，需要在本文档记录决定、证据、owner、commit 和回滚方式；跨包事项同时走正式提案。
 6. P2.1 原始 Winter M2 因 `rolling_0_24h × fastest` 回归 `5.94% > 5%` 判 `FAIL`；M2E 完成 cold-path 对称化，M2F/M2G 因 host swap 证据不足停止。M2H 在连续零 host swap 的受控环境中完成双窗口 screening：holdout 正式 M2 `PASS`，development 正式 M2 因 `executable_0_6h × low_risk` 与三个 rolling 单元超过 5% 门禁而 `FAIL`，故 P2.1 总体仍 `FAIL`，candidate 保持默认关闭。M2I 因果诊断后停止 P2.1 改进。
-7. P3 SMO-A* 已实现并通过 12 项正确性测试，Winter holdout 基准显示 +12.71% wall-time 改善和 100% 路线一致性，但改善低于 15% 目标、cache hit rate 14.3% 低于 50% 目标、RSS 增长约 4 倍。SMO-A* 保持 `EXPERIMENTAL`，不进入正式 M2。下一步需在 development bundle 验证一致性、分析 cache miss 构成并评估 RSS 优化；若仍不达标则启动 ARA* 备选方案。P2.1 M2 的 FAIL 记录和构件原样保留。
+7. P3.2 已完成 SMO-A* 双窗口 M1：路线、P95 和资源语义通过，但 holdout/development 的 cache hit rate 与 RSS 联合门禁失败；SMO candidate 不进入正式 M2，P2.1 M2 的 FAIL 记录和构件原样保留。
+8. P3.3 只做 synthetic exact-key 轻量诊断，不改变时间语义或缓存键。medium profile 命中率 `47.87% < 50%`，且时间变体仅 4 个 unique key，未形成可安全归因于时间桶的修复路径；SMO 标记 `DEFERRED`，ARA* 维持 `M0_FAIL/DEFERRED`。不再启动 P3.4 或 Winter 重型复测，除非另行建立新的可审计计划和门禁。
 
 **开放问题：** 非 FIFO 情形是否进一步采用 label-correcting；ETA 迭代的保守误差模型；P3 anchor 证书的浮点容差；P2.1 cold control 旁路是否残留稳定开销，以及 `rolling_0_24h × fastest` 的 `5.94%` 回归能否在不放宽门禁的前提下由实现性诊断解释和消除。Winter 已证明每次自然产生 3 个 full→main 零搜索 hit，并确认约 48% 总 wall-time 改善，但单元硬门禁失败意味着不能宣称生产级稳定加速。独立 FIFO 分类器和 exact 标签安全支配仍是后续候选。任何资源或标签语义变更必须先记录新的实验身份与正确性回归，不能用“全局最优”“稳定加速”或“生产级优势”代替证据。
 
@@ -583,3 +584,24 @@ P2.1-M2I 停止后，按本文档要求建立独立 P3 计划。P3 选择 SMO-A*
 - SMO development 诊断：`c-p32-smo-m1-development-20260827-r1`，identity `a06273b278f6cb496a8f02988fc3a8dd2b1cca03e6cc31951254581abacca0dc`，5/5 对完整；路线、P95、资源通过，median 改善 `18.50%`，但 hit rate `19.19%`、RSS ratio `3.380` 失败。该结果仅作 holdout 性能失败后的诊断，不能挽救总体结论。SMO 候选关闭，未进入正式 M2。
 - ARA* M0：修正 synthetic horizon 后使用新 identity 重跑。`c-p32-ara-m0-small-20260827-r2` 为 `FAIL`：三目标 epsilon=1 路线一致、阶段成本单调、epsilon=2.5 首解 gap 均 `0%`、RSS ratio `1.0003`、资源通过，但 fastest/recommended 首解 median 改善仅 `4.14%/4.19%`（low_risk `40.42%`），未满足每目标 `≥20%`。`c-p32-ara-m0-medium-20260827-r2` 为 `PASS`：三目标首解改善 `44.57%/82.19%/63.16%`，gap `0%`、RSS ratio `1.0004`、资源通过。因 small profile 未通过，ARA* 整体标记 `M0_FAIL/DEFERRED`，不进入 Winter M1。
 - 所有正式实验均在 `MemoryMax=4G`、`MemorySwapMax=0`、单 CPU、`OOMPolicy=stop` 下执行；未观察到 swap、OOM、timeout 或 route semantic mismatch。未写入 formal latest、replanning baseline、frozen artifact，也未启用任何 candidate。
+
+### 【2026-08-27 | COMPLETED】P3.3 SMO exact-key 轻量诊断与退出决策
+
+本轮按 P3.2 失败后的保守条件，只验证 SMO 的 exact-key 重用构成，不进行 Winter 重型复测或候选优化。目标是区分“可安全归约的时间变体”与“三个 objective 搜索路径本来就不同”，并把 RSS 代价归因到可审计的缓存条目规模。ARA* 不在本轮重新打开。
+
+**执行边界与身份。** 新增 `c.p3.3-smo-diagnostic.v1` runner 模式 `--diagnostic --gate-profile diagnostic`，仅接受 synthetic profile，固定 1 次 warmup + 3 次 timed pair。control/shared 仍使用同一输入、同一边评估器和同一 exact UTC key；诊断 sidecar 只保存聚合计数和浅层 entry 大小估计，不保存业务路线之外的可发布字段。`DIAGNOSTIC_PASS` 只表示路线/失败语义、进程/宿主资源观测和构件完整，不表示任何性能晋级。
+
+**代码与测试。** `TimeDependentAStar.plan_candidates()` 增加默认关闭的内部 `traversal_cache_diagnostics` 开关；启用时记录 exact key lookup/hit/miss、物理边重用、不同 departure 的 exact miss、objective 分布和浅层 entry 字节估计。普通 control 路径不分配诊断集合。`benchmark_smo_astar.py` 增加独立 schema、参数围栏、诊断摘要和 `P3.3_DIAGNOSTIC_ONLY` admissibility 标记；新增/扩展的 SMO 与 runner 测试全部通过。最终诊断基线为本地 clean 提交 `888b42d175aa14a303fb31771d2f84db3c6393eb`。
+
+**诊断结果（均为观察值，不是 M1/M2 晋级证据）。**
+
+| profile | wall median 改善 | exact-key hit | unique exact/physical | time-variant unique | RSS ratio | objective hit rate（fastest / low_risk / recommended） |
+|---|---:|---:|---:|---:|---:|---:|
+| small | `56.48%` | `58.23%` | `33 / 33` | `0` | `0.9995` | `0% / 69.70% / 100%` |
+| medium | `45.43%` | `47.87%` | `196 / 192` | `4` | `0.9972` | `0% / 36.73% / 100%` |
+
+small 的浅层缓存条目估计中位数为 `27,204` bytes，medium 为 `166,608` bytes。medium 只有 4 个时间变体 key，表明主要未命中来自 objective 搜索路径差异，而不是可以安全合并的时间桶；任何时间桶归并或近似 key 仍被禁止。两个构件均为 1/3 warmup/timed pairs 完整，路线 identity 通过，进程 `VmSwap`、宿主 swap 计数、cgroup 当前 swap、OOM 和 timeout 均未增加。由于普通前台进程的 cgroup `memory.max`/`memory.swap.max` 不满足 P3.2 的 4 GiB/零 swap 限制，最终诊断身份记录 `strict_resources=false`；不把该轮误报为严格资源资格证据。
+
+**决策与停止动作。** medium exact-key hit `47.87% < 50%` 触发本轮预注册退出门；时间变体数量过小，不能支持安全 key 归约，且 P3.2 Winter 的高 RSS 问题没有在当前诊断中形成可接受的修复路径。因此 SMO 标记为 `DEFERRED/RETIRED`，不建立 P3.4、不执行 SMO Winter screening/M1/M2，也不改变正式 control。ARA* 保持 `M0_FAIL/DEFERRED`，只有另行提出具体阶段调度/搜索结构变化并重新通过两个 profile、三个 objective 的 M0，才可恢复评审。
+
+**构件与发布边界。** 最终构件为 `/root/my_project/.runtime/experiments/c-p33-smo-diagnostic-small-20260827-r4/` 和 `/root/my_project/.runtime/experiments/c-p33-smo-diagnostic-medium-20260827-r4/`；早期参数失败、严格 cgroup 资格失败和旧 runner 身份构件原样保留，但不计入本结论。所有构件均未写入 formal latest、replanning baseline 或 frozen artifact，未修改 B/C、C/D 合同，未启用 candidate，且未 push。
