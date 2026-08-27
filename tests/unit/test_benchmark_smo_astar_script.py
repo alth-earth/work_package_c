@@ -102,6 +102,7 @@ def test_m0_gate_accepts_semantic_and_resource_safe_no_regression() -> None:
     )
 
     assert summary["gate_verdict"] == "PASS"
+    assert summary["evidence_admissibility"] == "P3.2_GATE_EVIDENCE"
     assert summary["gate_checks"]["median_wall_regression_le_5pct"] is True
 
 
@@ -166,7 +167,8 @@ def test_diagnostic_summary_keeps_observations_out_of_promotion_gate() -> None:
         strict_resources=True,
     )
 
-    assert summary["gate_verdict"] == "PASS"
+    assert summary["gate_verdict"] == "DIAGNOSTIC_PASS"
+    assert summary["evidence_admissibility"] == "P3.3_DIAGNOSTIC_ONLY"
     assert "rss_ratio_le_1_10" not in summary["gate_checks"]
     assert summary["cache_diagnostics"]["exact_key_hit_rate_pct"] == 40.0
     assert summary["cache_diagnostics"]["time_variant_exact_misses_total"] == 45
@@ -185,6 +187,10 @@ def test_diagnostic_cli_requires_the_diagnostic_gate_profile() -> None:
             "--gate-profile",
             "diagnostic",
             "--diagnostic",
+            "--warmup-pairs",
+            "1",
+            "--repetitions",
+            "3",
         ]
     )
     _SCRIPT._validate_args(args)
@@ -202,3 +208,25 @@ def test_diagnostic_cli_requires_the_diagnostic_gate_profile() -> None:
     )
     with pytest.raises(ValueError, match="requires --gate-profile diagnostic"):
         _SCRIPT._validate_args(invalid)
+
+    invalid_commit = _SCRIPT._parser().parse_args(
+        [
+            "--commit",
+            "commit.json",
+            "--start",
+            "1",
+            "1",
+            "--goal",
+            "2",
+            "2",
+            "--departure",
+            "2026-01-01T00:00:00Z",
+            "--output-dir",
+            "diagnostic-output",
+            "--gate-profile",
+            "diagnostic",
+            "--diagnostic",
+        ]
+    )
+    with pytest.raises(ValueError, match="require a synthetic profile"):
+        _SCRIPT._validate_args(invalid_commit)

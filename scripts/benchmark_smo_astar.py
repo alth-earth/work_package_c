@@ -837,10 +837,21 @@ def _summarize_runs(
     else:  # pragma: no cover - argparse and validation fence this.
         raise ValueError(f"unsupported gate profile: {gate_profile}")
     cache_diagnostics = _summarize_cache_diagnostics(shared_runs)
+    gate_pass = all(checks.values())
+    gate_verdict = (
+        ("DIAGNOSTIC_PASS" if gate_pass else "DIAGNOSTIC_FAIL")
+        if gate_profile == "diagnostic"
+        else ("PASS" if gate_pass else "FAIL")
+    )
     return {
         "status": "COMPLETED",
         "gate_profile": gate_profile,
-        "gate_verdict": "PASS" if all(checks.values()) else "FAIL",
+        "gate_verdict": gate_verdict,
+        "evidence_admissibility": (
+            "P3.3_DIAGNOSTIC_ONLY"
+            if gate_profile == "diagnostic"
+            else "P3.2_GATE_EVIDENCE"
+        ),
         "gate_checks": checks,
         "repetitions": repetitions,
         "baseline_median_wall_seconds": baseline_median,
@@ -928,6 +939,11 @@ def _manifest_document(identity: dict[str, object]) -> dict[str, object]:
             f"c-p3.3-smo-diagnostic-{suffix}"
             if diagnostic
             else f"c-p3.2-smo-{suffix}"
+        ),
+        "evidence_admissibility": (
+            "P3.3_DIAGNOSTIC_ONLY"
+            if diagnostic
+            else "P3.2_GATE_EVIDENCE"
         ),
         "status": "PREPARED",
         "identity": identity,
@@ -1137,6 +1153,14 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--diagnostic requires --gate-profile diagnostic")
     if args.gate_profile == "diagnostic" and not args.diagnostic:
         raise ValueError("diagnostic gate profile requires --diagnostic")
+    if args.diagnostic and args.commit is not None:
+        raise ValueError("P3.3 diagnostics require a synthetic profile")
+    if (
+        args.diagnostic
+        and not args.worker
+        and (args.warmup_pairs != 1 or args.repetitions != 3)
+    ):
+        raise ValueError("P3.3 diagnostics require exactly 1 warmup pair and 3 repetitions")
     if args.output_dir is None and args.output is None and not args.worker:
         raise ValueError("parent mode requires --output-dir or --output")
 
