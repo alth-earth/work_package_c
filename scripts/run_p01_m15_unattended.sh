@@ -142,11 +142,26 @@ heartbeat_loop() {
 }
 
 HEARTBEAT_PID=""
+ACTIVE_PID=""
 FINAL_STATUS="STOPPED_HARD"
+
+terminate_active() {
+    if [[ -z "$ACTIVE_PID" ]] || ! kill -0 "$ACTIVE_PID" 2>/dev/null; then
+        return
+    fi
+    kill -TERM "$ACTIVE_PID" 2>/dev/null || true
+    for child in $(pgrep -P "$ACTIVE_PID" 2>/dev/null || true); do
+        kill -TERM "$child" 2>/dev/null || true
+    done
+    sleep 1
+    kill -KILL "$ACTIVE_PID" 2>/dev/null || true
+}
 
 on_signal() {
     FINAL_STATUS="STOPPED_HARD"
-    trap - INT TERM HUP
+    write_state "STOPPED_HARD" "$(<"$STAGE_FILE")" 143
+    terminate_active
+    trap - INT TERM
     exit 143
 }
 
@@ -166,7 +181,7 @@ on_exit() {
 }
 
 trap on_exit EXIT
-trap on_signal INT TERM HUP
+trap on_signal INT TERM
 
 if command -v systemd-run >/dev/null 2>&1 \
     && systemd-run --scope --quiet true >/dev/null 2>&1; then
@@ -195,11 +210,14 @@ run_stage() {
             --property=MemoryMax=4G \
             --property=MemorySwapMax=0 \
             --property=OOMPolicy=stop \
-            "$@" >> "$DRIVER_LOG" 2>&1
+            "$@" >> "$DRIVER_LOG" 2>&1 &
     else
-        timeout --signal=TERM --kill-after=30s "$deadline_seconds" "$@" >> "$DRIVER_LOG" 2>&1
+        timeout --signal=TERM --kill-after=30s "$deadline_seconds" "$@" >> "$DRIVER_LOG" 2>&1 &
     fi
+    ACTIVE_PID="$!"
+    wait "$ACTIVE_PID"
     local return_code="$?"
+    ACTIVE_PID=""
     set -e
     if [[ "$return_code" -eq 0 ]]; then
         write_state "COMPLETED" "$stage" 0
