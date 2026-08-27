@@ -799,6 +799,18 @@ def _resource_affinity_consistent(worker: dict[str, Any]) -> bool:
     return before.get("cpu_affinity") == after.get("cpu_affinity")
 
 
+def _paired_resource_affinity_consistent(case: dict[str, Any]) -> bool:
+    workers = case.get("workers", {})
+    baseline = workers.get("baseline", {})
+    candidate = workers.get("candidate", {})
+    affinities = []
+    for worker in (baseline, candidate):
+        before = worker.get("resources_before", {})
+        after = worker.get("resources_after", {})
+        affinities.extend((before.get("cpu_affinity"), after.get("cpu_affinity")))
+    return bool(affinities) and all(affinity == affinities[0] for affinity in affinities)
+
+
 def _pair_case(
     profile: str,
     objective: ObjectiveMode,
@@ -946,6 +958,9 @@ def _summarize(cases: list[dict[str, Any]]) -> dict[str, Any]:
     resource_affinity_consistent = bool(all_workers) and all(
         _resource_affinity_consistent(worker) for worker in all_workers
     )
+    paired_resource_affinity_consistent = bool(cases) and all(
+        _paired_resource_affinity_consistent(case) for case in cases
+    )
     semantic_digests: dict[tuple[str, str, str], set[str]] = {}
     for case in cases:
         for mode, worker in case.get("workers", {}).items():
@@ -1012,6 +1027,7 @@ def _summarize(cases: list[dict[str, Any]]) -> dict[str, Any]:
         "worker_status_clean": worker_status_clean,
         "resource_evidence_complete": resource_evidence_complete,
         "resource_affinity_consistent": resource_affinity_consistent,
+        "paired_resource_affinity_consistent": paired_resource_affinity_consistent,
         "semantic_identity": semantic_match,
         "deterministic_semantics": deterministic,
         "fifo_certified": fifo_certified,
