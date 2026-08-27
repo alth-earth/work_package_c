@@ -562,7 +562,7 @@ P2.1-M2I 停止后，按本文档要求建立独立 P3 计划。P3 选择 SMO-A*
 - ARA* 仅完成 synthetic M0 语义单测：固定 epsilon 序列、阶段 incumbent/下界/gap 记录、单调代价、epsilon=1 与 control 对照及 expansion fail-closed 均通过；尚未执行 ARA* timing M0 或 Winter M1/M2。
 - 结论：SMO 仍为 `EXPERIMENTAL / NOT_EVALUATED_AFTER_P3.1_PATCH`，ARA* 为 `M0_UNIT_PASS / RESEARCH_ONLY`；本轮不进入正式 M2，不启用任何 candidate，不写入 formal latest、replanning baseline 或 frozen artifact。
 
-### 【2026-08-27 | PLANNED】P3.2 SMO 双窗口 M1 收口与 ARA* 候选决策门
+### 【2026-08-27 | COMPLETED】P3.2 SMO 双窗口 M1 收口与 ARA* 候选决策门
 
 本轮只推进到候选决策门：先完成 SMO 的 synthetic M0 与双 Winter M1；SMO 两窗口均通过时只标记 `SMO_M1_PASS_READY_FOR_M2_REVIEW`，不执行正式 M2。SMO 总体失败时关闭该候选，再完成 ARA* 强化 M0；ARA* 本轮不进入 Winter M1。当前 P3.1 已固定为本地提交 `cef3d17ebdf6a6c021330b0a45f04c2e7e57380f`，后续重型证据必须来自 clean 本地提交，不以 push 作为门禁。
 
@@ -575,3 +575,11 @@ P2.1-M2I 停止后，按本文档要求建立独立 P3 计划。P3 选择 SMO-A*
 **ARA* 条件式 M0。** 仅在 SMO 总体失败后，补充首次 incumbent elapsed time、首解成本和阶段诊断；覆盖三目标、静态/动态风险、hard mask、风险/时域约束、取消和扩展上限。非 FIFO 与同桶多 ETA 反例必须标记为 `INHERITED_CONTROL_LIMITATION`，不得将 ARA* 对当前近似 control 的一致误报为一般最优性证明。两个 synthetic profile 各预热 1 对、计时 10 对；要求阶段成本单调不增、每个 epsilon=2.5 首解相对 epsilon=1/control 的成本 gap `≤10%`、每个 profile/objective 首解时间 median 至少改善 `20%`、epsilon=1 最终业务字段 100% 一致、RSS ratio `≤1.10` 且无硬失败。通过时标记 `ARA_M0_PASS_READY_FOR_M1_PLAN`，否则为 `ARA_M0_FAIL/DEFERRED`。
 
 **发布与停止边界。** 所有构件写入新的 `.runtime/experiments/c-p32-*` identity；不覆盖 P2.1/P3.1 证据，不修改 B/C、C/D 合同，不导出 ARA* 公共 planner，不写 formal latest、replanning baseline 或 frozen artifact，不启用任何 candidate。
+
+**执行结果（2026-08-27）。** P3.2 runner 在本地 clean 提交 `eb0902386b89cbc3d7bad7b06edaa90d55334002` 上完成 SMO 证据，ARA* 诊断 runner/首解字段在本地提交 `35371c20c6748a3e9793a0f75f09f0332b284ae8` 上完成；两者均未 push。
+
+- SMO synthetic M0：`c-p32-smo-m0-small-20260827-r1` 与 `c-p32-smo-m0-medium-20260827-r1` 均 `PASS`。small median wall 改善 `55.02%`、hit rate `58.23%`、RSS ratio `0.9998`；medium 分别为 `46.27%`、`47.87%`、`0.9973`；路线/资源门均通过。
+- SMO holdout：`c-p32-smo-m1-holdout-20260827-r1`，identity `aac85a0b05908f289c5e40a1bfeeacd410eb489322238e211190c7cd8c50ed77`，5/5 对完整，路线、P95、资源通过；median 改善 `11.22%`（目标 `≥15%`）、hit rate `14.27%`（目标 `≥50%`）、RSS ratio `3.367`（目标 `≤1.10`），故为性能型 `FAIL`。
+- SMO development 诊断：`c-p32-smo-m1-development-20260827-r1`，identity `a06273b278f6cb496a8f02988fc3a8dd2b1cca03e6cc31951254581abacca0dc`，5/5 对完整；路线、P95、资源通过，median 改善 `18.50%`，但 hit rate `19.19%`、RSS ratio `3.380` 失败。该结果仅作 holdout 性能失败后的诊断，不能挽救总体结论。SMO 候选关闭，未进入正式 M2。
+- ARA* M0：修正 synthetic horizon 后使用新 identity 重跑。`c-p32-ara-m0-small-20260827-r2` 为 `FAIL`：三目标 epsilon=1 路线一致、阶段成本单调、epsilon=2.5 首解 gap 均 `0%`、RSS ratio `1.0003`、资源通过，但 fastest/recommended 首解 median 改善仅 `4.14%/4.19%`（low_risk `40.42%`），未满足每目标 `≥20%`。`c-p32-ara-m0-medium-20260827-r2` 为 `PASS`：三目标首解改善 `44.57%/82.19%/63.16%`，gap `0%`、RSS ratio `1.0004`、资源通过。因 small profile 未通过，ARA* 整体标记 `M0_FAIL/DEFERRED`，不进入 Winter M1。
+- 所有正式实验均在 `MemoryMax=4G`、`MemorySwapMax=0`、单 CPU、`OOMPolicy=stop` 下执行；未观察到 swap、OOM、timeout 或 route semantic mismatch。未写入 formal latest、replanning baseline、frozen artifact，也未启用任何 candidate。
