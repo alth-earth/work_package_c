@@ -153,7 +153,9 @@ class TemporalScope:
         """
 
         value = self.mapping.get("edge_evaluator_digest")
-        return not (isinstance(value, str) and value.startswith("unknown:"))
+        return not (
+            isinstance(value, str) and value.startswith(("unknown:", "type:"))
+        )
 
 
 @dataclass(frozen=True, slots=True)
