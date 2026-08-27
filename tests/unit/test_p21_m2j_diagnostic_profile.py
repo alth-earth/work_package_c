@@ -98,3 +98,27 @@ def test_orchestrator_isolation_values_registered() -> None:
     # per-unit-phase isolation (the within-process realization of R1).
     assert 'effective_diagnostic_profile = "trace-release-only"' in source
     assert 'if isolation == "per-unit-phase" and track == "candidate"' in source
+
+
+def test_orchestrator_sign_aware_order_gap_registered() -> None:
+    """The M2K measurement-protocol fix pins the sign-aware order-gap gate.
+
+    Asserted on source text to keep the orchestrator/package test boundary clean.
+    The fix has two parts:
+    - ``order_gap_sign_aware_percent_points`` must be emitted alongside the raw
+      ``order_gap_percent_points`` sidecar so the raw diagnostic stays auditable.
+    - the candidate-first median needs ``_M2_MIN_ORDER_SAMPLES >= 3`` samples;
+      with fewer samples the gate fails closed (insufficient, not silently judged).
+    """
+    source = _read_orchestrator_script_source()
+    assert "_M2_MIN_ORDER_SAMPLES = 3" in source
+    assert "order_gap_sign_aware_percent_points" in source
+    assert "max_order_gap_sign_aware_percent_points" in source
+    assert "candidate_first_sample_sufficient" in source
+    assert "candidate_first_sample_count" in source
+    # The sign-aware gap must treat opposite-sign medians as no gap (0.0): the
+    # negative side is the candidate running *faster*, not an inconsistency.
+    assert "and (float(first) >= 0.0) == (float(second) >= 0.0)" in source
+    # The gap gate must require sufficient samples, not just a numeric ceiling.
+    assert "candidate_first_sample_sufficient" in source
+    assert "and sign_aware_gap <= _DIAGNOSTIC_ORDER_GAP_CEILING_PERCENT_POINTS" in source

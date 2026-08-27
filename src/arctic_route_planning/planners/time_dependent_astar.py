@@ -39,6 +39,12 @@ from .errors import (
     PlanningCancelled,
     PlanningHorizonExceeded,
 )
+from .eta_refinement import (
+    EtaEvaluation,
+    EtaRefinementError,
+    EtaRefinementPolicy,
+    refine_eta,
+)
 
 type HeadingCode = tuple[int, int] | None
 type State = tuple[Node, int, HeadingCode]
@@ -375,11 +381,16 @@ class TimeDependentAStar:
         planner_config: PlannerConfig | None = None,
         cost_weights: Mapping[ObjectiveMode | str, CostWeights] | None = None,
         full_turn_penalty_hours: float = 0.25,
+        eta_refinement_policy: EtaRefinementPolicy | None = None,
     ) -> None:
         self.grid = grid
         self.risk_sampler = risk_sampler
         self.vessel_model = vessel_model
         self.planner_config = planner_config or PlannerConfig()
+        # C-ALG-03 (progressive): default None keeps the historical two-round
+        # refinement so the formal route digest is unchanged.  Injecting an
+        # EtaRefinementPolicy opts into the fail-closed damped fixed point.
+        self.eta_refinement_policy = eta_refinement_policy
         self._full_turn_penalty_hours = full_turn_penalty_hours
         self._weights = {mode: self.planner_config.weights_for(mode) for mode in ObjectiveMode}
         if cost_weights is not None:
@@ -763,34 +774,86 @@ class TimeDependentAStar:
             start, end, minimum_samples=request.edge_sample_count
         )
         calm_speed = self._calm_speed
-        travel_hours = distance_km / calm_speed.speed_km_per_hour
+        initial_travel_hours = distance_km / calm_speed.speed_km_per_hour
         samples: tuple[SampledRisk, ...] = ()
         speed = calm_speed
 
-        for _ in range(_EDGE_REFINEMENT_ROUNDS):
-            samples = tuple(
+        # C-ALG-03 correctness debt (progressive): the default remains the
+        # historical fixed two-round refinement (exactly _EDGE_REFINEMENT_ROUNDS)
+        # so route digest is unchanged on the formal path.  When an
+        # ``eta_refinement_policy`` is injected, evaluation switches to the
+        # fail-closed damped fixed point (eta_refinement.refine_eta) with the
+        # same domain checks; non-convergence is reported via EtaRefinementError
+        # instead of silently accepting an un-converged ETA.  The formal Winter
+        # field ETA fixed point was observed to diverge under the damped update
+        # (recorded as a known correctness debt; see SSOT C-ALG-03), so the
+        # default must stay on the two-round path until a robust fixed-point
+        # algorithm lands (C-ALG-03B).
+        def _evaluate_at(guess_hours: float) -> EtaEvaluation:
+            sampled = tuple(
                 self.risk_sampler.sample(
-                    departure_time + timedelta(hours=travel_hours * fraction),
+                    departure_time + timedelta(hours=guess_hours * fraction),
                     point.longitude,
                     point.latitude,
                 )
                 for point, fraction in _with_fractions(points)
             )
-            if any(sample.hard_mask for sample in samples):
+            if any(sample.hard_mask for sample in sampled):
                 raise _RejectedEdge("hard")
             if any(
                 sample.confidence < self.planner_config.minimum_confidence
-                for sample in samples
+                for sample in sampled
             ):
                 raise _RejectedEdge("risk")
             if request.maximum_risk is not None and any(
-                sample.risk_score > request.maximum_risk for sample in samples
+                sample.risk_score > request.maximum_risk for sample in sampled
             ):
                 raise _RejectedEdge("risk")
-            speed = self.vessel_model.effective_speed(
-                min(sample.environment_speed_factor for sample in samples)
+            effective_speed = self.vessel_model.effective_speed(
+                min(sample.environment_speed_factor for sample in sampled)
             )
-            travel_hours = distance_km / speed.speed_km_per_hour
+            return EtaEvaluation(
+                samples=sampled,
+                speed=effective_speed,
+                implied_travel_hours=distance_km / effective_speed.speed_km_per_hour,
+            )
+
+        if self.eta_refinement_policy is not None:
+            try:
+                refined = refine_eta(
+                    initial_travel_hours,
+                    _evaluate_at,
+                    policy=self.eta_refinement_policy,
+                )
+            except EtaRefinementError as error:
+                # A rejection raised inside the callback surfaces as
+                # invalid_operator; restore the domain rejection exception so
+                # cached evaluator callers keep their existing catch semantics.
+                operator_exception = error.diagnostics.get("operator_exception")
+                if error.reason == "invalid_operator" and isinstance(
+                    operator_exception, str
+                ):
+                    message = str(error.diagnostics.get("operator_message", ""))
+                    if operator_exception == "_RejectedEdge":
+                        raise _RejectedEdge(message) from None
+                    if operator_exception == "RiskCoverageError":
+                        raise RiskCoverageError(message) from None
+                    if operator_exception == "UnnavigableSpeedError":
+                        raise UnnavigableSpeedError(message) from None
+                # Non-rejection failures (cycle / max_iterations /
+                # terminal_mismatch / unexpected invalid_operator) fail closed.
+                raise
+            samples = tuple(refined.evaluation.samples)
+            speed = refined.evaluation.speed
+            travel_hours = refined.travel_hours
+        else:
+            # Historical default: exactly two refinement rounds.
+            travel_hours = initial_travel_hours
+            for _ in range(_EDGE_REFINEMENT_ROUNDS):
+                evaluated = _evaluate_at(travel_hours)
+                samples = tuple(evaluated.samples)
+                speed = evaluated.speed
+                travel_hours = evaluated.implied_travel_hours
 
         risk_score = _trapezoidal_average(sample.risk_score for sample in samples)
         maximum_risk = max(sample.risk_score for sample in samples)

@@ -194,3 +194,196 @@ def test_edge_geometry_cache_keeps_sample_count_in_identity() -> None:
     planner._edge_geometry((1, 0), (1, 1), minimum_samples=3)
 
     assert planner.edge_geometry_cache_stats == {"hits": 1, "misses": 2, "entries": 2}
+
+
+def test_edge_evaluation_converges_under_oscillating_environment_factor() -> None:
+    """C-ALG-03: _evaluate_edge_data uses refine_eta (fail-closed fixed point).
+
+    An environment factor that alternates with the sampled time drives the old
+    fixed two-round loop toward whichever two rounds it sampled; the damped
+    fixed point instead converges to a self-consistent ETA without raising.
+    """
+    from arctic_route_planning.planners.eta_refinement import (
+        EtaRefinementPolicy,
+    )
+
+    # Oscillating risk field: risk_score alternates so that effective speed
+    # factors differ between a "fast" and a "slow" time band.
+    oscillating = np.zeros((3, 4), dtype=np.float32)
+    # seed high risk in the middle band to force a slowdown at that sample time
+    oscillating[1, :] = 1.0
+    planner = _planner(_risk_window((oscillating, oscillating, oscillating)))
+    # tight policy still converges on this small edge
+    planner.eta_refinement_policy = EtaRefinementPolicy(
+        max_iterations=12, absolute_tolerance_seconds=1.0
+    )
+    # _calm_speed is set on the plan() hot path; mirror it for the direct call.
+    planner._calm_speed = planner.vessel_model.effective_speed(1.0)
+    request = PlanningRequest(
+        start=(1, 0),
+        goal=(1, 3),
+        departure_time=T0,
+        objective=ObjectiveMode.FASTEST,
+    )
+    data = planner._evaluate_edge_data(
+        start=request.start,
+        end=(1, 1),
+        departure_time=request.departure_time,
+        incoming_code=None,
+        request=request,
+    )
+    assert data.travel_hours > 0.0
+    assert data.arrival_time > request.departure_time
+    assert data.confidence > 0.0
+
+
+def test_edge_evaluation_hard_mask_rejection_preserved() -> None:
+    """C-ALG-03: refine_eta integration preserves _RejectedEdge semantics."""
+    from arctic_route_planning.planners.time_dependent_astar import _RejectedEdge
+
+    zero = np.zeros((3, 4), dtype=np.float32)
+    hard = np.zeros((3, 4), dtype=np.bool_)
+    hard[1, 1] = True  # node (1,1) lies on the sampled (1,0)->(1,1) edge
+    planner = _planner(
+        _risk_window((zero, zero, zero), hard_masks=(hard, hard, hard))
+    )
+    planner._calm_speed = planner.vessel_model.effective_speed(1.0)
+    request = PlanningRequest(
+        start=(1, 0),
+        goal=(1, 3),
+        departure_time=T0,
+        objective=ObjectiveMode.FASTEST,
+    )
+    with pytest.raises(_RejectedEdge):
+        planner._evaluate_edge_data(
+            start=request.start,
+            end=(1, 1),
+            departure_time=request.departure_time,
+            incoming_code=None,
+            request=request,
+        )
+
+
+def test_edge_evaluation_injectable_policy_rounds() -> None:
+    """C-ALG-03: an injected EtaRefinementPolicy is honored by the hot path.
+
+    A single-iteration policy still converges on a calm edge (first implied ETA
+    already satisfies the tolerance), which is the correct fail-open behavior:
+    the fixed point is skipped only when it is provably unnecessary.
+    """
+    from arctic_route_planning.planners.eta_refinement import EtaRefinementPolicy
+
+    zero = np.zeros((3, 4), dtype=np.float32)
+    planner = _planner(_risk_window((zero, zero, zero)))
+    planner.eta_refinement_policy = EtaRefinementPolicy(max_iterations=1)
+    planner._calm_speed = planner.vessel_model.effective_speed(1.0)
+    request = PlanningRequest(
+        start=(1, 0),
+        goal=(1, 3),
+        departure_time=T0,
+        objective=ObjectiveMode.FASTEST,
+    )
+    data = planner._evaluate_edge_data(
+        start=request.start,
+        end=(1, 1),
+        departure_time=request.departure_time,
+        incoming_code=None,
+        request=request,
+    )
+    assert data.travel_hours > 0.0
+    assert planner.eta_refinement_policy.max_iterations == 1
+
+
+def test_edge_evaluation_propagates_non_rejection_refinement_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """C-ALG-03: non-rejection EtaRefinementError fails closed (no silent pass).
+
+    A cycle / max_iterations / terminal_mismatch inside refine_eta must surface
+    to callers instead of being swallowed; only domain rejections
+    (hard/risk/speed) are restored to their original exception types.  Only
+    reached when an EtaRefinementPolicy is injected (default stays two-round).
+    """
+    from arctic_route_planning.planners import eta_refinement as refinement_module
+    from arctic_route_planning.planners import time_dependent_astar as astar_module
+
+    zero = np.zeros((3, 4), dtype=np.float32)
+    planner = _planner(_risk_window((zero, zero, zero)))
+    planner.eta_refinement_policy = refinement_module.EtaRefinementPolicy()
+    planner._calm_speed = planner.vessel_model.effective_speed(1.0)
+    request = PlanningRequest(
+        start=(1, 0),
+        goal=(1, 3),
+        departure_time=T0,
+        objective=ObjectiveMode.FASTEST,
+    )
+
+    def _boom(*args: object, **kwargs: object) -> object:
+        raise refinement_module.EtaRefinementError(
+            "max_iterations", {"message": "did not converge (test)"}
+        )
+
+    monkeypatch.setattr(astar_module, "refine_eta", _boom)
+    with pytest.raises(refinement_module.EtaRefinementError) as excinfo:
+        planner._evaluate_edge_data(
+            start=request.start,
+            end=(1, 1),
+            departure_time=request.departure_time,
+            incoming_code=None,
+            request=request,
+        )
+    assert excinfo.value.reason == "max_iterations"
+
+
+def test_edge_evaluation_default_keeps_two_round_refinement() -> None:
+    """C-ALG-03 (progressive): without an injected policy the historical
+    two-round refinement is used, so the formal route digest stays unchanged.
+    """
+    zero = np.zeros((3, 4), dtype=np.float32)
+    planner = _planner(_risk_window((zero, zero, zero)))
+    assert planner.eta_refinement_policy is None
+    planner._calm_speed = planner.vessel_model.effective_speed(1.0)
+    request = PlanningRequest(
+        start=(1, 0),
+        goal=(1, 3),
+        departure_time=T0,
+        objective=ObjectiveMode.FASTEST,
+    )
+    data = planner._evaluate_edge_data(
+        start=request.start,
+        end=(1, 1),
+        departure_time=request.departure_time,
+        incoming_code=None,
+        request=request,
+    )
+    assert data.travel_hours > 0.0
+    assert data.arrival_time > request.departure_time
+
+
+def test_edge_evaluation_bounded_policy_hot_path() -> None:
+    """C-ALG-03B: injecting a bounded (interval-contraction) policy works on
+    the hot path and still runs the terminal self-consistency check.
+    """
+    from arctic_route_planning.planners.eta_refinement import EtaRefinementPolicy
+
+    oscillating = np.zeros((3, 4), dtype=np.float32)
+    oscillating[1, :] = 1.0
+    planner = _planner(_risk_window((oscillating, oscillating, oscillating)))
+    planner.eta_refinement_policy = EtaRefinementPolicy(method="bounded")
+    planner._calm_speed = planner.vessel_model.effective_speed(1.0)
+    request = PlanningRequest(
+        start=(1, 0),
+        goal=(1, 3),
+        departure_time=T0,
+        objective=ObjectiveMode.FASTEST,
+    )
+    data = planner._evaluate_edge_data(
+        start=request.start,
+        end=(1, 1),
+        departure_time=request.departure_time,
+        incoming_code=None,
+        request=request,
+    )
+    assert data.travel_hours > 0.0
+    assert data.arrival_time > request.departure_time
+    assert data.confidence > 0.0

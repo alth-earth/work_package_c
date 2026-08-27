@@ -124,3 +124,76 @@ def test_cost_components_are_all_expressed_as_equivalent_hours() -> None:
     assert result.low_confidence_hours == pytest.approx(0.4)
     assert result.total_equivalent_hours == pytest.approx(8.2)
     assert model.lower_bound(100.0) == pytest.approx(7.5)
+
+
+def test_lower_bound_is_admissible_against_exact_oracle() -> None:
+    """C-ALG-04: A* heuristic never exceeds the exact remaining cost.
+
+    On a small grid the zero-heuristic run is an exact Dijkstra oracle.  For
+    every node on the exact route, the admissible heuristic from that node
+    must stay at or below the true cheapest remaining cost.  We reconstruct
+    the remaining cost along the exact route: the oracle's accumulated
+    equivalent-hours from the node to the goal.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from arctic_route_planning.cost import VesselPerformanceModel
+    from arctic_route_planning.domain.models import ObjectiveMode
+    from arctic_route_planning.planners import PlanningRequest, TimeDependentAStar
+    from arctic_route_planning.risk import RiskSampler
+
+    from .factories import make_frame
+
+    t0 = datetime(2026, 1, 1, tzinfo=UTC)
+    times = (t0, t0 + timedelta(hours=1), t0 + timedelta(hours=3))
+    risk = np.zeros((3, 4), dtype=np.float32)
+    # asymmetric field so the cheapest path is not the straight one
+    risk[1, 1] = 0.9
+    risk[1, 2] = 0.9
+    frames = tuple(
+        make_frame(
+            valid_time,
+            risk,
+            risk_id=f"risk-{index}",
+            latitudes=(0.0, 0.05, 0.10),
+            longitudes=(0.0, 0.05, 0.10, 0.15),
+        )
+        for index, valid_time in enumerate(times)
+    )
+    sampler = RiskSampler(frames)
+    grid = RegularGrid.from_risk_frame(frames[0])
+    vessel = VesselPerformanceModel(
+        economic_speed_knots=10.0,
+        minimum_steerage_speed_knots=2.0,
+        maximum_speed_knots=12.0,
+        minimum_speed_factor=0.2,
+    )
+    planner = TimeDependentAStar(grid, sampler, vessel)
+    request = PlanningRequest(
+        start=(1, 0),
+        goal=(1, 3),
+        departure_time=t0,
+        objective=ObjectiveMode.RECOMMENDED,
+    )
+    exact = planner.plan(
+        PlanningRequest(
+            start=request.start,
+            goal=request.goal,
+            departure_time=request.departure_time,
+            objective=request.objective,
+            use_heuristic=False,
+        )
+    )
+    cost_model = planner._cost_model(request.objective)
+    # Walk the exact route backward, accumulating the true remaining cost from
+    # each node to the goal.  The heuristic from that node must never exceed it.
+    remaining = 0.0
+    for step in reversed(exact.steps):
+        heuristic = planner._heuristic(step.node, request.goal, cost_model, request)
+        assert heuristic <= remaining + 1e-6, (
+            f"heuristic {heuristic:.6f} exceeds exact remaining cost "
+            f"{remaining:.6f} at node {step.node}"
+        )
+        if step.edge_cost is not None:
+            remaining += step.edge_cost.total_equivalent_hours
+    assert exact.total_cost_hours > 0.0

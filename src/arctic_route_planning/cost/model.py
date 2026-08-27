@@ -74,7 +74,35 @@ class CostModel:
         )
 
     def lower_bound(self, remaining_distance_km: float) -> float:
-        """Admissible lower bound used by A*: risk/turn/deviation lower bounds are zero."""
+        """Admissible lower bound used by A*: risk/turn/deviation lower bounds are zero.
+
+        Admissibility argument (C-ALG-04 correctness debt, 2026-08-28):
+        let ``D`` be the remaining straight-line distance, ``d`` the true path
+        distance (``d >= D``), and ``v_max`` the vessel maximum speed.  For any
+        traversal, ``travel_hours >= D / v_max`` because the realised speed never
+        exceeds ``v_max``.  The true cost decomposes into non-negative
+        equivalent-hour terms:
+
+            cost = w_travel*travel_hours
+                 + w_risk*risk_hours
+                 + w_distance*distance_hours
+                 + w_turn*turn_hours
+                 + w_dev*deviation_hours
+                 + w_unc*uncertainty_hours
+
+        with ``distance_hours = d / v_max >= D / v_max``.  Hence
+
+            (w_travel + w_distance) * D / v_max
+                <= w_travel*travel_hours + w_distance*distance_hours
+                <= cost
+
+        because every weight is non-negative and every remaining term is
+        non-negative.  ``lower_bound`` is therefore admissible.  When called with
+        ``remaining_distance_km`` = straight-line distance (as ``_heuristic``
+        does), the bound is additionally conservative because straight-line
+        distance never exceeds the true path distance; consistency follows from
+        the triangle inequality on straight-line distances.
+        """
 
         if remaining_distance_km < 0 or not isfinite(remaining_distance_km):
             raise ValueError("remaining_distance_km must be finite and non-negative")

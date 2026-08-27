@@ -13,19 +13,36 @@ from dataclasses import dataclass
 from math import isfinite
 
 _ALLOWED_ERROR_REASONS = frozenset(
-    {"cycle", "max_iterations", "terminal_mismatch", "invalid_operator"}
+    {
+        "cycle",
+        "max_iterations",
+        "terminal_mismatch",
+        "invalid_operator",
+        "no_fixed_point",
+    }
 )
+_ALLOWED_METHODS = frozenset({"damped", "bounded"})
 
 
 @dataclass(frozen=True, slots=True)
 class EtaRefinementPolicy:
-    """Bounds and numerical tolerances for ETA fixed-point refinement."""
+    """Bounds and numerical tolerances for ETA fixed-point refinement.
+
+    ``method="damped"`` keeps the historical damped fixed-point iteration.
+    ``method="bounded"`` uses an interval-contraction (bisection-like) search
+    that first brackets a sign change of ``implied(t) - t``; it converges on
+    oscillatory fields where damping diverges, and reports ``no_fixed_point``
+    (fail-closed) when no sign change exists on the search interval instead of
+    silently returning a non-fixed point.  ``max_iterations`` bounds the
+    bisection steps.
+    """
 
     max_iterations: int = 12
     absolute_tolerance_seconds: float = 1.0
     relative_tolerance: float = 1e-6
     relaxation: float = 0.5
     history_size: int = 4
+    method: str = "damped"
 
     def __post_init__(self) -> None:
         if isinstance(self.max_iterations, bool) or self.max_iterations < 1:
@@ -40,6 +57,8 @@ class EtaRefinementPolicy:
             raise ValueError("relaxation must be finite and within (0, 1]")
         if isinstance(self.history_size, bool) or self.history_size < 3:
             raise ValueError("history_size must be at least 3")
+        if self.method not in _ALLOWED_METHODS:
+            raise ValueError(f"unsupported ETA refinement method: {self.method!r}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,13 +105,23 @@ def refine_eta(
     """Refine an ETA until the raw fixed-point residual and terminal residual pass.
 
     ``evaluate(guess_hours)`` must return the domain evaluation sampled using
-    that ETA guess and its implied travel time. The update is damped as
-    ``guess += relaxation * (implied - guess)``. Once the *raw* residual is
-    within tolerance, the operator is evaluated one more time at the raw ETA;
-    only that terminal evaluation is returned to callers.
+    that ETA guess and its implied travel time.  ``policy.method`` selects the
+    fixed-point algorithm:
 
-    Any invalid operator output, detected recent cycle, non-convergence, or
-    terminal inconsistency fails closed with :class:`EtaRefinementError`.
+    - ``"damped"`` (default, historical): ``guess += relaxation * (implied -
+      guess)``.  Converges on smooth fields; may diverge on strongly
+      oscillatory fields.
+    - ``"bounded"`` (C-ALG-03B): interval contraction over the ETA domain.
+      Brackets a sign change of ``implied(t) - t`` and bisects to the
+      tolerance; converges on oscillatory fields.  If no sign change exists on
+      the interval it fails closed with ``no_fixed_point`` instead of
+      returning a non-fixed point.
+
+    Once the *raw* residual is within tolerance, the operator is evaluated one
+    more time at the raw ETA; only that terminal evaluation is returned to
+    callers.  Any invalid operator output, detected recent cycle,
+    non-convergence, or terminal inconsistency fails closed with
+    :class:`EtaRefinementError`.
     """
 
     active_policy = policy or EtaRefinementPolicy()
@@ -106,7 +135,17 @@ def refine_eta(
                 "message": "initial_guess_hours must be finite and positive",
             },
         )
+    if active_policy.method == "bounded":
+        return _refine_bounded(initial, evaluate, active_policy)
+    return _refine_damped(initial, evaluate, active_policy)
 
+
+def _refine_damped(
+    initial: float,
+    evaluate: Callable[[float], EtaEvaluation],
+    active_policy: EtaRefinementPolicy,
+) -> EtaRefinementResult:
+    """Damped fixed-point iteration (historical default)."""
     guess = initial
     history: list[tuple[float, float]] = []
     max_residual_seconds = 0.0
@@ -212,6 +251,150 @@ def refine_eta(
             "max_residual_seconds": max_residual_seconds,
             "history": tuple(history),
             "message": "ETA fixed-point residual did not converge",
+        },
+    )
+
+
+def _refine_bounded(
+    initial: float,
+    evaluate: Callable[[float], EtaEvaluation],
+    active_policy: EtaRefinementPolicy,
+) -> EtaRefinementResult:
+    """Interval-contraction fixed point (C-ALG-03B, robust on oscillatory fields).
+
+    The residual function is ``g(t) = implied(t) - t``.  The search starts
+    from the initial guess and widens outward until ``g`` changes sign (a
+    bracketed root) or the widening hits the iteration budget.  On a bracketed
+    root the interval is bisected down to tolerance.  If no sign change is
+    found on the searched interval the refinement fails closed with
+    ``no_fixed_point``: returning the closest sample would silently accept an
+    ETA that is not self-consistent, which is exactly the correctness debt the
+    bounded method exists to eliminate.
+    """
+
+    max_residual_seconds = 0.0
+
+    def _implied(t: float) -> float:
+        evaluation = _invoke_operator(
+            evaluate, t, iteration=0, stage="bounded"
+        )
+        raw = _finite_positive_hours(evaluation.implied_travel_hours)
+        if raw is None:  # pragma: no cover - defensive invariant
+            raise EtaRefinementError(
+                "invalid_operator", {"stage": "bounded", "message": "implied invalid"}
+            )
+        nonlocal max_residual_seconds
+        max_residual_seconds = max(max_residual_seconds, abs(raw - t) * 3600.0)
+        return raw
+
+    def _g(t: float) -> float:
+        return _implied(t) - t
+
+    # Bracket: expand outward from the initial guess until g changes sign.
+    # The bracket phase is budgeted separately so the bisection below keeps
+    # enough iterations to actually converge.  Bisection halves the interval
+    # each step, so it needs O(log2(width / tolerance)) evaluations: give it
+    # its own budget decoupled from the damped iteration count.
+    bracket_budget = max(1, active_policy.max_iterations // 3)
+    bisection_budget = max(16, active_policy.max_iterations * 2)
+    left = initial
+    right = initial
+    left_g = _g(left)
+    right_g = left_g
+    expanded = 0
+    while (left_g < 0.0) == (right_g < 0.0) and expanded < bracket_budget:
+        step = max(initial, 0.5) * (2.0 ** expanded)
+        left = max(initial - step, initial / 4.0)
+        right = initial + step
+        left_g = _g(left)
+        right_g = _g(right)
+        expanded += 1
+
+    bracketed = (left_g < 0.0) != (right_g < 0.0)
+    if not bracketed:
+        # No sign change on the searched interval: no fixed point is provable.
+        raise EtaRefinementError(
+            "no_fixed_point",
+            {
+                "stage": "bounded_bracket",
+                "initial_guess_hours": initial,
+                "left_hours": left,
+                "right_hours": right,
+                "left_residual_seconds": left_g * 3600.0,
+                "right_residual_seconds": right_g * 3600.0,
+                "iterations": expanded,
+                "max_residual_seconds": max_residual_seconds,
+                "message": "no ETA fixed point found on the searched interval",
+            },
+        )
+
+    iterations = 0
+    while iterations < bisection_budget:
+        mid = (left + right) / 2.0
+        implied_mid = _implied(mid)
+        mid_g = implied_mid - mid
+        residual_seconds = abs(mid_g) * 3600.0
+        max_residual_seconds = max(max_residual_seconds, residual_seconds)
+        tolerance_hours = _tolerance_hours(mid, implied_mid, active_policy)
+        if residual_seconds / 3600.0 <= tolerance_hours:
+            # Terminal evaluation at the accepted ETA for self-consistency.
+            terminal_evaluation = _invoke_operator(
+                evaluate, mid, iteration=iterations, stage="terminal"
+            )
+            terminal_raw = _finite_positive_hours(
+                terminal_evaluation.implied_travel_hours
+            )
+            if terminal_raw is None:  # pragma: no cover - defensive invariant
+                raise EtaRefinementError(
+                    "invalid_operator",
+                    {"stage": "terminal", "iteration": iterations},
+                )
+            terminal_residual_seconds = abs(terminal_raw - mid) * 3600.0
+            max_residual_seconds = max(
+                max_residual_seconds, terminal_residual_seconds
+            )
+            terminal_tolerance_hours = _tolerance_hours(
+                mid, terminal_raw, active_policy
+            )
+            if (
+                terminal_residual_seconds / 3600.0
+                > terminal_tolerance_hours
+            ):
+                raise EtaRefinementError(
+                    "terminal_mismatch",
+                    {
+                        "stage": "terminal",
+                        "iteration": iterations,
+                        "raw_travel_hours": mid,
+                        "terminal_implied_travel_hours": terminal_raw,
+                        "terminal_residual_seconds": terminal_residual_seconds,
+                        "tolerance_seconds": terminal_tolerance_hours * 3600.0,
+                        "max_residual_seconds": max_residual_seconds,
+                        "message": "terminal evaluation is not self-consistent",
+                    },
+                )
+            return EtaRefinementResult(
+                travel_hours=mid,
+                evaluation=terminal_evaluation,
+                iterations=iterations,
+                terminal_resamples=1,
+                max_residual_seconds=max_residual_seconds,
+            )
+        if (left_g < 0.0) == (mid_g < 0.0):
+            left, left_g = mid, mid_g
+        else:
+            right, right_g = mid, mid_g
+        iterations += 1
+
+    raise EtaRefinementError(
+        "max_iterations",
+        {
+            "stage": "bounded",
+            "iterations": bisection_budget,
+            "left_hours": left,
+            "right_hours": right,
+            "max_residual_seconds": max_residual_seconds,
+            "message": "bounded ETA refinement did not converge within budget",
         },
     )
 

@@ -122,3 +122,66 @@ def test_terminal_evaluation_is_returned_not_the_pre_terminal_sample() -> None:
     assert result.evaluation.speed == "new"
     assert result.travel_hours == pytest.approx(1.0)
     assert result.terminal_resamples == 1
+
+
+def test_bounded_method_converges_on_oscillatory_operator() -> None:
+    """C-ALG-03B: the bounded method converges where damping diverges.
+
+    An operator whose implied ETA oscillates with the guess (the signature of a
+    strongly time-varying Winter risk field) makes the damped fixed point
+    diverge.  The bounded interval contraction brackets the sign change of
+    ``implied(t) - t`` and bisects to the tolerance.
+    """
+
+    def evaluate(guess: float) -> EtaEvaluation:
+        implied = 2.2 + 0.5 * math.sin(guess * 6.0)
+        return _evaluation(implied)
+
+    result = refine_eta(
+        1.0, evaluate, policy=EtaRefinementPolicy(method="bounded")
+    )
+
+    assert result.travel_hours > 0.0
+    assert result.max_residual_seconds > 0.0
+    # the returned ETA must be self-consistent within tolerance
+    implied_at_return = 2.2 + 0.5 * math.sin(result.travel_hours * 6.0)
+    assert abs(implied_at_return - result.travel_hours) * 3600.0 <= 1.0
+
+
+def test_bounded_method_fails_closed_when_no_fixed_point_exists() -> None:
+    """C-ALG-03B: no sign change means no fixed point is provable.
+
+    An operator with ``implied(t) == t + 0.5`` everywhere has no fixed point;
+    the bounded method must fail closed with ``no_fixed_point`` instead of
+    silently returning a non-fixed point (the damped method would report
+    ``max_iterations``).
+    """
+    with pytest.raises(EtaRefinementError) as raised:
+        refine_eta(
+            1.0,
+            lambda guess: _evaluation(guess + 0.5),
+            policy=EtaRefinementPolicy(method="bounded"),
+        )
+
+    assert raised.value.reason == "no_fixed_point"
+    assert raised.value.diagnostics["initial_guess_hours"] == 1.0
+
+
+@pytest.mark.parametrize("bad_method", ["bogus", "", "damped2", None])
+def test_unsupported_method_value_fails_closed(bad_method: object) -> None:
+    with pytest.raises(ValueError):
+        EtaRefinementPolicy(method=bad_method)  # type: ignore[arg-type]
+
+
+def test_bounded_method_restores_domain_rejection() -> None:
+    """C-ALG-03B: callback exceptions inside the bounded path remain
+    invalid_operator (fail-closed) with the original exception preserved."""
+    with pytest.raises(EtaRefinementError) as raised:
+        refine_eta(
+            1.0,
+            lambda guess: (_ for _ in ()).throw(ValueError("hard mask")),
+            policy=EtaRefinementPolicy(method="bounded"),
+        )
+
+    assert raised.value.reason == "invalid_operator"
+    assert raised.value.diagnostics["operator_exception"] == "ValueError"
