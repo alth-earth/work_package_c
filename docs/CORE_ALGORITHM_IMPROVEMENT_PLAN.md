@@ -591,17 +591,17 @@ P2.1-M2I 停止后，按本文档要求建立独立 P3 计划。P3 选择 SMO-A*
 
 **执行边界与身份。** 新增 `c.p3.3-smo-diagnostic.v1` runner 模式 `--diagnostic --gate-profile diagnostic`，仅接受 synthetic profile，固定 1 次 warmup + 3 次 timed pair。control/shared 仍使用同一输入、同一边评估器和同一 exact UTC key；诊断 sidecar 只保存聚合计数和浅层 entry 大小估计，不保存业务路线之外的可发布字段。`DIAGNOSTIC_PASS` 只表示路线/失败语义、进程/宿主资源观测和构件完整，不表示任何性能晋级。
 
-**代码与测试。** `TimeDependentAStar.plan_candidates()` 增加默认关闭的内部 `traversal_cache_diagnostics` 开关；启用时记录 exact key lookup/hit/miss、物理边重用、不同 departure 的 exact miss、objective 分布和浅层 entry 字节估计。普通 control 路径不分配诊断集合。`benchmark_smo_astar.py` 增加独立 schema、参数围栏、诊断摘要和 `P3.3_DIAGNOSTIC_ONLY` admissibility 标记；新增/扩展的 SMO 与 runner 测试全部通过。最终诊断基线为本地 clean 提交 `888b42d175aa14a303fb31771d2f84db3c6393eb`。
+**代码与测试。** `TimeDependentAStar.plan_candidates()` 增加默认关闭的内部 `traversal_cache_diagnostics` 开关；启用时记录 exact key lookup/hit/miss、物理边重用、不同 departure 的 exact miss、objective 分布和浅层 entry 字节估计。普通 control 路径不分配诊断集合。`benchmark_smo_astar.py` 增加独立 schema、参数围栏、诊断摘要和 `P3.3_DIAGNOSTIC_ONLY` admissibility 标记；新增/扩展的 SMO 与 runner 测试全部通过。最终诊断基线为本地 clean 提交 `e4717e4a3185823cf64e8d70b7ce794383495c8b`。
 
 **诊断结果（均为观察值，不是 M1/M2 晋级证据）。**
 
 | profile | wall median 改善 | exact-key hit | unique exact/physical | time-variant unique | RSS ratio | objective hit rate（fastest / low_risk / recommended） |
 |---|---:|---:|---:|---:|---:|---:|
-| small | `56.48%` | `58.23%` | `33 / 33` | `0` | `0.9995` | `0% / 69.70% / 100%` |
-| medium | `45.43%` | `47.87%` | `196 / 192` | `4` | `0.9972` | `0% / 36.73% / 100%` |
+| small | `56.91%` | `58.23%` | `33 / 33` | `0` | `0.9974` | `0% / 69.70% / 100%` |
+| medium | `43.19%` | `47.87%` | `196 / 192` | `4` | `0.9976` | `0% / 36.73% / 100%` |
 
 small 的浅层缓存条目估计中位数为 `27,204` bytes，medium 为 `166,608` bytes。medium 只有 4 个时间变体 key，表明主要未命中来自 objective 搜索路径差异，而不是可以安全合并的时间桶；任何时间桶归并或近似 key 仍被禁止。两个构件均为 1/3 warmup/timed pairs 完整，路线 identity 通过，进程 `VmSwap`、宿主 swap 计数、cgroup 当前 swap、OOM 和 timeout 均未增加。由于普通前台进程的 cgroup `memory.max`/`memory.swap.max` 不满足 P3.2 的 4 GiB/零 swap 限制，最终诊断身份记录 `strict_resources=false`；不把该轮误报为严格资源资格证据。
 
 **决策与停止动作。** medium exact-key hit `47.87% < 50%` 触发本轮预注册退出门；时间变体数量过小，不能支持安全 key 归约，且 P3.2 Winter 的高 RSS 问题没有在当前诊断中形成可接受的修复路径。因此 SMO 标记为 `DEFERRED/RETIRED`，不建立 P3.4、不执行 SMO Winter screening/M1/M2，也不改变正式 control。ARA* 保持 `M0_FAIL/DEFERRED`，只有另行提出具体阶段调度/搜索结构变化并重新通过两个 profile、三个 objective 的 M0，才可恢复评审。
 
-**构件与发布边界。** 最终构件为 `/root/my_project/.runtime/experiments/c-p33-smo-diagnostic-small-20260827-r4/` 和 `/root/my_project/.runtime/experiments/c-p33-smo-diagnostic-medium-20260827-r4/`；早期参数失败、严格 cgroup 资格失败和旧 runner 身份构件原样保留，但不计入本结论。所有构件均未写入 formal latest、replanning baseline 或 frozen artifact，未修改 B/C、C/D 合同，未启用 candidate，且未 push。
+**构件与发布边界。** 最终构件为 `/root/my_project/.runtime/experiments/c-p33-smo-diagnostic-small-20260827-r5/` 和 `/root/my_project/.runtime/experiments/c-p33-smo-diagnostic-medium-20260827-r5/`；早期参数失败、严格 cgroup 资格失败和旧 runner 身份构件原样保留，但不计入本结论。所有构件均未写入 formal latest、replanning baseline 或 frozen artifact，未修改 B/C、C/D 合同，未启用 candidate，且未 push。
