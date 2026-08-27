@@ -683,6 +683,8 @@ class TemporalLabelAStar(TimeDependentAStar):
         self,
         context: _TemporalExecutionContext,
         request: PlanningRequest,
+        *,
+        input_revision: int = 0,
     ) -> bool:
         """Evaluate the certificate fence once per search session."""
 
@@ -691,7 +693,23 @@ class TemporalLabelAStar(TimeDependentAStar):
             return False
         if context.dominance_authorized is None:
             if context.dominance_scope is None:
-                context.dominance_scope = self.temporal_scope(request)
+                certificate = policy.certificate
+                scope_kwargs: dict[str, Any] = {}
+                if certificate is not None:
+                    certificate_scope = certificate.scope.mapping
+                    # A certificate that explicitly binds its finite probe
+                    # domain must be checked against that same domain during
+                    # the search.  Older hand-built scopes may omit these
+                    # optional keys; those remain valid for compatibility.
+                    if certificate_scope.get("edge_ids"):
+                        scope_kwargs["edge_ids"] = certificate.fifo_certificate.edge_ids
+                    if certificate_scope.get("probe_times"):
+                        scope_kwargs["probe_times"] = certificate.fifo_certificate.probe_times
+                context.dominance_scope = self.temporal_scope(
+                    request,
+                    input_revision=input_revision,
+                    **scope_kwargs,
+                )
             context.dominance_authorized = policy.permits(
                 context.dominance_scope
             )

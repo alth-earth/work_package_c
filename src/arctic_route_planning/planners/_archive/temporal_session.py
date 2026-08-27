@@ -466,11 +466,11 @@ class TemporalSession:
         self.identity = identity
         self.state = TemporalSessionState.READY
         self.context = planner._new_execution_context()
-        self.context.dominance_scope = planner.temporal_scope(
+        planner._authorize_dominance(
+            self.context,
             request,
             input_revision=identity.input_revision,
         )
-        planner._authorize_dominance(self.context, request)
         planner._check_cancelled(request)
         planner._validate_request_nodes(request)
         self.start_sample = planner._sample_node(request.start, request.departure_time)
@@ -868,11 +868,11 @@ def restore_session(
     session.identity = checkpoint.identity
     session.state = checkpoint.state
     session.context = planner._new_execution_context()
-    session.context.dominance_scope = planner.temporal_scope(
+    planner._authorize_dominance(
+        session.context,
         restored_request,
         input_revision=checkpoint.identity.input_revision,
     )
-    planner._authorize_dominance(session.context, restored_request)
     from arctic_route_planning.planners.temporal_label_astar import _MutableDiagnostics
 
     session.context.diagnostics = _MutableDiagnostics(

@@ -496,7 +496,11 @@ def _build_components(
     if with_dominance:
         edges = _edge_ids(grid)
         probes = tuple(_T0 + timedelta(minutes=15 * index) for index in range(profile.frame_count))
-        scope = planner.temporal_scope(request)
+        scope = planner.temporal_scope(
+            request,
+            edge_ids=edges,
+            probe_times=probes,
+        )
         fifo = qualify_fifo(
             edges,
             probes,
