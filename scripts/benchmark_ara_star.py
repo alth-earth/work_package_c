@@ -255,7 +255,7 @@ def _build_components(args: argparse.Namespace) -> tuple[TimeDependentAStar, Pla
         goal=(profile.rows // 2, profile.cols - 1),
         departure_time=frames[0].valid_time,
         objective=ObjectiveMode(args.objective_order[0]),
-        maximum_elapsed=timedelta(hours=profile.frame_count),
+        maximum_elapsed=timedelta(hours=profile.frame_count - 1),
         maximum_risk=1.0,
         max_expansions=args.max_expansions,
     )
