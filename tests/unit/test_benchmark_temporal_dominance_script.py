@@ -98,6 +98,26 @@ def test_stress_profile_is_fixed_and_identity_bound() -> None:
     assert _SCRIPT._experiment_id("stress") != _SCRIPT._experiment_id("medium")
 
 
+def test_m1_qualification_audit_requires_pruning_only_for_certified_case() -> None:
+    audit = _SCRIPT._qualification_audit("small")
+
+    assert audit["passed"] is True
+    assert audit["case_count"] == 7
+    by_name = {case["name"]: case for case in audit["cases"]}
+    assert by_name["fifo_certified"]["authorized"] is True
+    assert by_name["fifo_certified"]["pruned"] is True
+    for name in (
+        "fifo_violated",
+        "fifo_uncertain",
+        "suffix_not_monotone",
+        "coverage_incomplete",
+        "scope_mismatch",
+        "unknown_evaluator",
+    ):
+        assert by_name[name]["authorized"] is False
+        assert by_name[name]["pruned"] is False
+
+
 def test_summary_uses_compute_metric_and_reports_p95() -> None:
     first = _case(regression=-10.0)
     second = _case(regression=2.0)

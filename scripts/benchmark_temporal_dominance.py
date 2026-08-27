@@ -41,6 +41,7 @@ from arctic_route_planning.planners.temporal_qualification import (
     FifoStatus,
     TemporalDominanceCertificate,
     TemporalDominancePolicy,
+    TemporalScope,
     qualify_fifo,
 )
 from arctic_route_planning.planners.time_dependent_astar import _EdgeTraversal
@@ -48,6 +49,7 @@ from arctic_route_planning.profiling import SyntheticProfileConfig
 from arctic_route_planning.risk import RiskSampler
 
 SCHEMA_VERSION = "c.p0.1-temporal-dominance.v1"
+EXPERIMENT_SERIES = "M1"
 OBJECTIVES = tuple(ObjectiveMode)
 SYNTHETIC_PROFILES = {
     "small": SyntheticProfileConfig(rows=5, cols=7, frame_count=7),
@@ -155,6 +157,7 @@ def _config_identity(
     timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
     return {
+        "experiment_series": EXPERIMENT_SERIES,
         "profile": profile_name,
         "profile_config": asdict(SYNTHETIC_PROFILES[profile_name]),
         "objectives": tuple(mode.value for mode in OBJECTIVES),
@@ -550,6 +553,131 @@ def _build_components(
     return planner, request, metadata
 
 
+def _qualification_audit(profile_name: str) -> dict[str, Any]:
+    """Exercise the M1 fail-closed matrix before timing any candidate.
+
+    The audit deliberately uses the same planner/scope construction as the
+    timed workers, but never runs a production planner or writes route output.
+    A negative certificate must both refuse authorization and leave a newly
+    generated exact-arrival label unpruned.
+    """
+
+    planner, request, _ = _build_components(
+        profile_name,
+        ObjectiveMode.FASTEST,
+        with_dominance=False,
+    )
+    edges = _edge_ids(planner.grid)
+    probes = tuple(_T0 + timedelta(minutes=15 * index) for index in range(2))
+    scope = planner.temporal_scope(request, edge_ids=edges, probe_times=probes)
+
+    def fifo_certificate(
+        *,
+        kind: str,
+        suffix_monotone: bool = True,
+        coverage_complete: bool = True,
+        certificate_scope: TemporalScope | None = None,
+    ) -> TemporalDominanceCertificate:
+        if kind == "certified":
+            def evaluate(_edge: Any, departure: datetime) -> datetime:
+                return departure + timedelta(hours=1)
+        elif kind == "violated":
+            def evaluate(_edge: Any, departure: datetime) -> datetime:
+                return (
+                    _T0 + timedelta(hours=3)
+                    if departure == _T0
+                    else _T0 + timedelta(hours=2)
+                )
+        elif kind == "uncertain":
+            def evaluate(_edge: Any, _departure: datetime) -> None:
+                return None
+        else:  # pragma: no cover - guarded by the audit table below
+            raise ValueError(f"unsupported FIFO audit kind: {kind}")
+        fifo = qualify_fifo(
+            (edges[0],),
+            probes,
+            evaluate,
+            scope=certificate_scope or scope,
+        )
+        return TemporalDominanceCertificate.from_fifo(
+            fifo,
+            suffix_monotone=suffix_monotone,
+            coverage_complete=coverage_complete,
+            scope=certificate_scope or scope,
+        )
+
+    mismatched_values = dict(scope.mapping)
+    mismatched_values["objective"] = "low_risk"
+    mismatched_scope = TemporalScope.from_mapping(mismatched_values)
+    unknown_values = dict(scope.mapping)
+    unknown_values["edge_evaluator_digest"] = "unknown:m1-audit"
+    unknown_scope = TemporalScope.from_mapping(unknown_values)
+    audit_specs = (
+        ("fifo_certified", "certified", True, True, scope, True, True),
+        ("fifo_violated", "violated", True, True, scope, False, False),
+        ("fifo_uncertain", "uncertain", True, True, scope, False, False),
+        ("suffix_not_monotone", "certified", False, True, scope, False, False),
+        ("coverage_incomplete", "certified", True, False, scope, False, False),
+        ("scope_mismatch", "certified", True, True, scope, False, False),
+        ("unknown_evaluator", "certified", True, True, unknown_scope, False, False),
+    )
+    labels = {
+        ((0, 1), (0, 1), _T0): 1.0,
+    }
+    records: list[dict[str, Any]] = []
+    for (
+        name,
+        kind,
+        suffix,
+        coverage,
+        certificate_scope,
+        expected_authorized,
+        expected_pruned,
+    ) in audit_specs:
+        certificate = fifo_certificate(
+            kind=kind,
+            suffix_monotone=suffix,
+            coverage_complete=coverage,
+            certificate_scope=certificate_scope,
+        )
+        planner.dominance_policy = TemporalDominancePolicy.certified_only(certificate)
+        context = planner._new_execution_context()
+        context.dominance_scope = (
+            mismatched_scope if name == "scope_mismatch" else scope
+        )
+        authorized = planner._authorize_dominance(context, request)
+        pruned = planner._should_prune_dominated_label(
+            ((0, 1), (0, 1), _T0 + timedelta(minutes=10)),
+            1.0,
+            labels,
+            request,
+            context=context,
+        )
+        records.append(
+            {
+                "name": name,
+                "fifo_status": certificate.fifo_certificate.status.value,
+                "certificate_usable": certificate.usable,
+                "authorized": authorized,
+                "pruned": pruned,
+                "expected_authorized": expected_authorized,
+                "expected_pruned": expected_pruned,
+                "rejection_reasons": dict(context.diagnostics.dominance_rejection_reasons),
+            }
+        )
+    passed = all(
+        record["authorized"] == record["expected_authorized"]
+        and record["pruned"] == record["expected_pruned"]
+        for record in records
+    )
+    return {
+        "profile": profile_name,
+        "case_count": len(records),
+        "passed": passed,
+        "cases": records,
+    }
+
+
 def _route_payload(result: Any) -> dict[str, Any]:
     planning_result = result.planning_result
     return {
@@ -910,7 +1038,11 @@ def _percentile(values: list[float], quantile: float) -> float | None:
     return float(ordered[rank - 1])
 
 
-def _summarize(cases: list[dict[str, Any]]) -> dict[str, Any]:
+def _summarize(
+    cases: list[dict[str, Any]],
+    *,
+    qualification_audit: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     regressions = [
         float(case["regression_percent"])
         for case in cases
@@ -1056,6 +1188,9 @@ def _summarize(cases: list[dict[str, Any]]) -> dict[str, Any]:
         "rss_ratio_le_1_10": rss_ratio is not None and rss_ratio <= _RSS_RATIO_CEILING,
         "resource_clean": resource_clean,
         "observable_label_reduction": pruned > 0,
+        "fail_closed_qualification": (
+            qualification_audit is None or qualification_audit.get("passed") is True
+        ),
     }
     hard_gate_checks = {
         key: value
@@ -1086,6 +1221,7 @@ def _summarize(cases: list[dict[str, Any]]) -> dict[str, Any]:
             if isinstance(case.get("wall_regression_percent"), (int, float))
         ],
         "candidate_dominance_pruned": pruned,
+        "qualification_audit": qualification_audit,
         "rss_median_ratio": rss_ratio,
         "profiles": sorted({str(case.get("profile")) for case in cases}),
         "objectives": sorted({str(case.get("objective")) for case in cases}),
@@ -1111,7 +1247,7 @@ def _experiment_id(
         )
     )[:16]
     return (
-        f"c-p0.1-temporal-dominance-{profile}-"
+        f"c-p0.1-temporal-dominance-{EXPERIMENT_SERIES.lower()}-{profile}-"
         f"{fixture_digest}-{implementation_digest}-{config_digest}"
     )
 
@@ -1127,8 +1263,10 @@ def _run(args: argparse.Namespace) -> int:
         repetitions=args.repetitions,
         timeout_seconds=args.worker_timeout_seconds,
     )
+    qualification_audit = _qualification_audit(args.synthetic_profile)
     manifest = {
         "schema_version": SCHEMA_VERSION,
+        "experiment_series": EXPERIMENT_SERIES,
         "experiment_id": _experiment_id(
             args.synthetic_profile,
             warmup_runs=args.warmup_runs,
@@ -1152,9 +1290,24 @@ def _run(args: argparse.Namespace) -> int:
         "worker_isolation": "one-process-per-strategy-objective-repetition",
         "regression_metric": _REGRESSION_METRIC,
         "regression_metric_unit": _REGRESSION_METRIC_UNIT,
+        "qualification_audit": qualification_audit,
     }
     _atomic_write_json(output_dir / "manifest.json", manifest)
     cases: list[dict[str, Any]] = []
+    if not qualification_audit["passed"]:
+        summary = _summarize(cases, qualification_audit=qualification_audit)
+        _atomic_write_json(output_dir / "comparison-summary.json", summary)
+        manifest.update({"status": summary["gate_verdict"], "summary": summary})
+        _atomic_write_json(output_dir / "manifest.json", manifest)
+        print(
+            json.dumps(
+                _jsonable(manifest),
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 2
     for _ in range(args.warmup_runs):
         for objective in OBJECTIVES:
             order = ("baseline", "candidate")
@@ -1181,7 +1334,7 @@ def _run(args: argparse.Namespace) -> int:
             )
             cases.append(case)
             _append_jsonl(output_dir / "cases.jsonl", case)
-    summary = _summarize(cases)
+    summary = _summarize(cases, qualification_audit=qualification_audit)
     _atomic_write_json(output_dir / "comparison-summary.json", summary)
     manifest.update({"status": summary["gate_verdict"], "summary": summary})
     _atomic_write_json(output_dir / "manifest.json", manifest)
