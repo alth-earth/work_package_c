@@ -83,11 +83,12 @@ RiskSourcePlanningIngress.execute
 | 正式 B→C 输入与 fail-closed | `AUTHORITATIVE_PASS` | committed-window lease、identity/digest 校验、覆盖和硬约束拒绝 |
 | Winter 四层三目标生产 | `AUTHORITATIVE_PASS` | 145 个正式小时帧、4 层 × 3 目标、12/12 route integrity、hard violation 0 |
 | C→D 路线合同 | `FROZEN_BASELINE` | route v2 / four-layer v3 schema、digest 和来源字段保持冻结 |
-| 单元/合同回归 | `UNIT_PASS` | 历史 P0/P2.1 基线分别为 `215/274 passed`；本轮 `UV_OFFLINE=1 make check` 为 `268 passed`，Ruff、lock/sync、CLI 通过 |
+| 单元/合同回归 | `UNIT_PASS` | 历史 P0/P2.1 基线分别为 `215/274 passed`；本轮 `UV_OFFLINE=1 make check` 为 `294 passed`，Ruff、lock/sync、CLI 通过 |
 | 当前 A* 的全局最优性 | `NOT_IMPLEMENTED`（未证明） | 时间桶合并、FIFO、ETA 迭代和连续时间误差均无通用证明 |
 | P2.1 相对独立 cold control 的受限重复查询优势 | `EXPERIMENTAL_PASS` | clean M0/M1 与 Winter formal 均观测到约 47%–79% 总耗时改善；只适用于同 goal 收紧查询，不等于跨 workload 稳定优势 |
 | 相对于传统算法的生产级稳定性能优势 | `NOT_IMPLEMENTED`（未证明） | P2.1 Winter M2 因 `rolling_0_24h × fastest` 中位回归 `5.94% > 5%` 失败；候选未默认启用 |
-| P3 SMO-A* 共享记忆化多目标搜索 | `DEFERRED` | 语义/诊断回归通过；P3.2 holdout/development M1 分别因 hit rate `14.27%/19.19%`、RSS ratio `3.367/3.380` 失败；P3.3 synthetic medium exact-key hit `47.87%`，主要为 objective 路径差异，未形成安全修复路径 |
+| P3 SMO-A* 共享记忆化多目标搜索 | `DEFERRED/RETIRED` | 语义/诊断回归通过；P3.2 holdout/development M1 分别因 hit rate `14.27%/19.19%`、RSS ratio `3.367/3.380` 失败；P3.3 synthetic medium exact-key hit `47.87%`，主要为 objective 路径差异，未形成安全修复路径 |
+| ARA* anytime 备选 | `M0_FAIL/DEFERRED` | small profile fastest/recommended 首解改善 `4.14%/4.19%`，未达到每目标 `20%` 门禁；不进入 Winter |
 | bounded LRU 风险采样缓存 | `EXPERIMENTAL` | direct medium 实验约 14.77% median 改善，但增加约 38.6 MiB RSS，未通过正式 12 路线门禁 |
 
 **上一版审计的状态修正：** 上一版把计数器热循环、环境变量/资源观测耦合、v3 常量散落、层窗口常量、session 无界增长等工程项标为已修复；代码和测试已支持这一结论。本次不再把这些历史问题列为当前算法瓶颈，当前重点转为时间依赖搜索语义、可证明复用和可重复性能证据。
