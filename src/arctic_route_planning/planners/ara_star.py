@@ -43,6 +43,7 @@ class AraStage:
     result: PlanningResult
     expanded_since_previous: int
     first_solution_cost_hours: float
+    first_solution_elapsed_ms: float
     lower_bound_hours: float
     observed_gap: float
 
@@ -98,6 +99,7 @@ class AnytimeRepairingAStar(TimeDependentAStar):
                         result=self._zero_length_result(request, start_sample, started),
                         expanded_since_previous=0,
                         first_solution_cost_hours=0.0,
+                        first_solution_elapsed_ms=0.0,
                         lower_bound_hours=0.0,
                         observed_gap=0.0,
                     ),
@@ -105,9 +107,7 @@ class AnytimeRepairingAStar(TimeDependentAStar):
             )
 
         cost_model = self._cost_model(request.objective)
-        labels: dict[State, tuple[float, datetime]] = {
-            start_state: (0.0, request.departure_time)
-        }
+        labels: dict[State, tuple[float, datetime]] = {start_state: (0.0, request.departure_time)}
         predecessor: dict[State, tuple[State, _EdgeTraversal]] = {}
         closed: set[State] = set()
         inconsistent: set[State] = set()
@@ -132,10 +132,11 @@ class AnytimeRepairingAStar(TimeDependentAStar):
         incumbent_cost = float("inf")
         stages: list[AraStage] = []
         previous_expanded = 0
+        first_solution_cost: float | None = None
+        first_solution_elapsed_ms: float | None = None
 
         for stage_index, epsilon in enumerate(schedule):
             self._check_cancelled(request)
-            stage_first_solution = incumbent_cost if incumbent_state is not None else None
             if stage_index:
                 # ARA* repairs the previous search tree: states improved while
                 # closed are moved back to OPEN, and all existing OPEN keys are
@@ -217,8 +218,9 @@ class AnytimeRepairingAStar(TimeDependentAStar):
                     if queued_cost < incumbent_cost - _COST_EPSILON:
                         incumbent_state = state
                         incumbent_cost = queued_cost
-                    if stage_first_solution is None:
-                        stage_first_solution = incumbent_cost
+                        if first_solution_cost is None:
+                            first_solution_cost = incumbent_cost
+                            first_solution_elapsed_ms = (perf_counter() - started) * 1000.0
                     continue
 
                 closed.add(state)
@@ -289,8 +291,9 @@ class AnytimeRepairingAStar(TimeDependentAStar):
                     if neighbor == request.goal and tentative_cost < incumbent_cost - _COST_EPSILON:
                         incumbent_state = next_state
                         incumbent_cost = tentative_cost
-                        if stage_first_solution is None:
-                            stage_first_solution = incumbent_cost
+                        if first_solution_cost is None:
+                            first_solution_cost = incumbent_cost
+                            first_solution_elapsed_ms = (perf_counter() - started) * 1000.0
 
             if incumbent_state is None:
                 if not queue:
@@ -323,7 +326,12 @@ class AnytimeRepairingAStar(TimeDependentAStar):
                     result=result,
                     expanded_since_previous=counters.expanded - previous_expanded,
                     first_solution_cost_hours=(
-                        incumbent_cost if stage_first_solution is None else stage_first_solution
+                        first_solution_cost if first_solution_cost is not None else incumbent_cost
+                    ),
+                    first_solution_elapsed_ms=(
+                        first_solution_elapsed_ms
+                        if first_solution_elapsed_ms is not None
+                        else (perf_counter() - started) * 1000.0
                     ),
                     lower_bound_hours=lower_bound,
                     observed_gap=_observed_gap(incumbent_cost, lower_bound),
