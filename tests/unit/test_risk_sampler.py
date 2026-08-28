@@ -151,3 +151,92 @@ def test_expected_identity_can_fence_a_planning_request() -> None:
         RiskSampler((frame,), expected_identity=wrong)
 
     assert identity.config_digest == CONFIG_DIGEST
+
+
+def test_interval_sampling_encloses_temporal_endpoints_and_uses_outward_rounding() -> None:
+    lower = make_frame(
+        T0,
+        np.full((2, 2), 0.2, dtype=np.float32),
+        risk_id="risk-lower",
+        confidence=np.full((2, 2), 0.9, dtype=np.float32),
+        environment_speed_factor=np.full((2, 2), 0.8, dtype=np.float32),
+    )
+    upper = make_frame(
+        T0 + timedelta(hours=1),
+        np.full((2, 2), 0.6, dtype=np.float32),
+        risk_id="risk-upper",
+        confidence=np.full((2, 2), 0.7, dtype=np.float32),
+        environment_speed_factor=np.full((2, 2), 0.5, dtype=np.float32),
+    )
+    sampler = RiskSampler((lower, upper))
+
+    evidence = sampler._sample_interval(
+        T0 + timedelta(minutes=15),
+        T0 + timedelta(minutes=45),
+        0.5,
+        0.5,
+    )
+
+    assert evidence.coverage_complete
+    assert evidence.failure_reason is None
+    assert evidence.risk_lower <= sampler.sample(T0 + timedelta(minutes=15), 0.5, 0.5).risk_score
+    assert evidence.risk_upper >= sampler.sample(T0 + timedelta(minutes=45), 0.5, 0.5).risk_score
+    assert evidence.confidence_lower <= 0.7
+    assert evidence.environment_speed_factor_lower <= 0.5
+    assert evidence.environment_speed_factor_upper >= 0.8
+    assert evidence.source_risk_ids == ("risk-lower", "risk-upper")
+    assert evidence.covered_frame_boundaries == (T0, T0 + timedelta(hours=1))
+
+
+def test_interval_sampling_conservatively_or_masks_and_requires_speed_factor() -> None:
+    hard_mask = np.zeros((2, 2), dtype=np.bool_)
+    hard_mask[0, 0] = True
+    lower = make_frame(
+        T0,
+        np.zeros((2, 2)),
+        risk_id="risk-lower",
+        hard_mask=hard_mask,
+        environment_speed_factor=np.full((2, 2), 0.8),
+    )
+    upper = make_frame(
+        T0 + timedelta(hours=1),
+        np.zeros((2, 2)),
+        risk_id="risk-upper",
+        environment_speed_factor=np.full((2, 2), 0.7),
+    )
+    sampler = RiskSampler((lower, upper))
+
+    masked = sampler._sample_interval(T0, T0 + timedelta(minutes=30), 0.0, 0.0)
+    missing_factor = RiskSampler(
+        (make_frame(T0, np.zeros((2, 2)), risk_id="risk-missing"),)
+    )._sample_interval(T0, T0, 1.0, 1.0)
+
+    assert masked.hard_mask_possible
+    assert masked.coverage_complete
+    assert not missing_factor.coverage_complete
+    assert missing_factor.failure_reason == "RiskSamplingError:environment_speed_factor is missing"
+
+
+def test_interval_sampling_fails_closed_for_gap_order_and_out_of_bounds() -> None:
+    lower = make_frame(
+        T0,
+        np.zeros((2, 2)),
+        risk_id="risk-lower",
+        environment_speed_factor=np.ones((2, 2)),
+    )
+    upper = make_frame(
+        T0 + timedelta(hours=4),
+        np.zeros((2, 2)),
+        risk_id="risk-upper",
+        environment_speed_factor=np.ones((2, 2)),
+    )
+    sampler = RiskSampler((lower, upper), max_frame_gap=timedelta(hours=2))
+
+    gap = sampler._sample_interval(T0, T0 + timedelta(hours=1), 0.0, 0.0)
+    reversed_interval = sampler._sample_interval(T0 + timedelta(hours=1), T0, 0.0, 0.0)
+    outside = sampler._sample_interval(T0 - timedelta(seconds=1), T0, 0.0, 0.0)
+
+    assert not gap.coverage_complete
+    assert "exceeding" in (gap.failure_reason or "")
+    assert reversed_interval.failure_reason == "invalid_interval_order"
+    assert not outside.coverage_complete
