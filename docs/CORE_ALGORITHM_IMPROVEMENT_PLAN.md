@@ -1191,3 +1191,97 @@ latest、replanning baseline 或 frozen artifact，不 push。
 **P0.2 维护。** 扩展 test-only label-correcting/Pareto oracle 的周期 ETA、重复精确到达、
 取消、资源上限和 evaluator failure fixture；没有真实 FIFO 反例时不接入真实 runner 或生产
 planner，仅记录可执行性设计状态。
+
+### 【2026-08-28 | COMPLETED】P0.1-M1.10/M1.11：解析 ETA/FIFO 证明与证明型资源 Corridor
+
+本轮在已集成 M1.9 的本地 clean tip `62333b6` 上建立隔离分支
+`research/p01-m110-analytic-eta-proof-20260828`，先提交本段 PLANNED 记录
+`c3d9295`，随后按提交序列完成实现。最终证据使用 clean implementation commit
+`6b77d87e1af0c8f6b182931e6c340016f11047a6`；辅助 worktree 为
+`/root/my_project/.runtime/worktrees/c-p01-m110-analytic-eta-proof`。本轮未修改 B/C、C/D
+合同、ingress/service、公共 planner、formal latest、replanning baseline 或 frozen
+artifact，不 push；M2J/M2K、P2.1、P3、ARA* 和 candidate 状态保持不变。
+
+**解析 interval evidence。** `RiskIntervalSample` 增加 confidence 上界、risk/speed
+factor slope envelope 以及 `ALWAYS_NAVIGABLE/ALWAYS_BLOCKED/TRANSITION_OR_UNKNOWN`
+三态；`RiskSampler._sample_interval` 仍只作 C 内部 sidecar，沿用已有双线性空间贡献、
+时间 frame partition、hard-mask OR、outward rounding 和 fail-closed coverage。新增
+`derive_operator_sensitivity` 与 `EtaAnalyticCertificate`，由 interval image、vessel
+speed 单调性和隐式 arrival slope 机械推导 contraction/唯一根/FIFO 状态。只有完整
+coverage、认证 evaluator、完整 scope、无连续性/可航性断点、image 包含 domain 且
+contraction `<1` 时才授权；non-unique、unknown、coverage/discontinuity、scope/policy
+mismatch 和无证明均不授权。`TemporalEtaIntervalEvaluator.evaluate_analytic` 不读取
+调用者布尔 flag 作为证明，`sample()`、正式 `plan()` 和默认
+`TemporalDominancePolicy.disabled()` 保持原行为。
+
+**Synthetic analytic proof gate。** 独立 runner schema 为
+`c.p0.1-temporal-eta-analytic-proof.v1`，构件目录为
+`/root/my_project/.runtime/experiments/c-p01-m110-analytic-eta-proof-20260828-r4/`，
+experiment id 为 `c.p0.1-temporal-eta-analytic-proof.v1-49a2c2faae706da9`。在
+small/medium/stress × 三 objective × 13 场景 × 3 repetitions 上完成 `351/351`：
+`authorization_count=27`（仅 contraction-backed unique root）、`fifo_certified_count=27`、
+`deterministic=true`、`fail_closed=true`、`all_expected=true`、
+`pruning_zero_for_rejected=true`。覆盖 finite no-bracket、continuous non-unique、root
+exclusion、hard-mask/RiskFrame boundary、coverage/evaluator failure、ETA cycle、
+max-iterations、terminal mismatch、scope 和 policy/checkpoint digest mismatch；未授权
+场景均未产生 dominance 资格。
+
+**证明型 Corridor。** 新增 C 内部 `AdmissibleBoundEvidence` 和
+`TemporalCorridorEvidence`，以独立 forward/reverse admissible lower bounds 只排除
+`forward + reverse > horizon` 的新生成状态，使用 downward rounding 保留精确边界；
+scope、evaluator、coverage、proof digest 任一不匹配即 rejected，绝不删除已扩展 label、
+注入 reference route 或使用 beam/近似剪枝。独立 runner
+`c.p0.1-temporal-corridor-proof.v1` 构件目录为
+`/root/my_project/.runtime/experiments/c-p01-m111-corridor-proof-20260828-r3/`，
+experiment id 为 `c.p0.1-temporal-corridor-proof.v1-0f1873aabcf8628c`。small/medium/
+stress × 三 objective × certified/coverage-incomplete/scope-mismatch/non-admissible
+完成 `36/36`，`semantic_match=true`、`deterministic=true`、`fail_closed=true`；9 个
+certified case 共观察到 `1008` 次安全排除，27 个 rejected case 剪枝为 `0`。既有实际
+planner state-bound regression 也保持 `27/27 PASS`，未改变冻结的
+`50k expansions / 100k labels / 50k queue / 400k edge evaluations`。
+
+**真实 145 帧 FIFO 资格审计。** 新增独立
+`scripts/benchmark_temporal_eta_analytic_real.py`，复用冻结 fixture loader，但输出
+`manifest.json`、`cases.jsonl`、`fifo-scan.jsonl`、`eta-interval.jsonl`、
+`resource-frontier.jsonl`、`comparison-summary.json`、`heartbeat.json` 和终态标记。真实
+搜索仍固定 `dominance_policy=disabled`、`dominance_pruned=0`，每个 objective 重复计算
+evidence 以核验 deterministic；未调用 `certified_only(...)`。
+
+| 输入 / segment | directed edges | objectives | interval evaluations | status counts | FIFO counterexample | authorization |
+|---|---:|---:|---:|---|---|---:|
+| holdout / `executable_0_6h` | 1388 | 3 | 104100 | `UNCERTAIN_DISCONTINUITY=102150`; `UNCERTAIN_COVERAGE=1950` | 无 | 0 |
+| development / `executable_0_6h` | 1540 | 3 | 115500 | `UNCERTAIN_DISCONTINUITY=114000`; `UNCERTAIN_COVERAGE=1500` | 无 | 0 |
+
+上述最新 clean-identity 构件分别为
+`c.p0.1-temporal-eta-analytic-real.v1-c994a2cb080e2b9b`（holdout）和
+`c.p0.1-temporal-eta-analytic-real.v1-1037dfd4cc6dd1d2`（development），均绑定完整
+145 帧、route-plan-set、config/lock digest、bounded ETA policy、scope、search limits，
+并记录 `deterministic=true`、`fifo_certified_count=0`、`fifo_violated_count=0`。
+未认证 evaluator 与跨 frame/连续性证据使两输入均固定为
+`REAL_INPUT_FIFO_UNCERTAIN_REQUIRES_INTERVAL_PROOF`；这不是 `FIFO_VIOLATED`，也不是
+`READY_FOR_SEPARATE_REAL_DOMINANCE_PLAN`。6h gate 未通过，因此按条件门不启动新的
+24h interval qualification；这也不改变既有 M1.6 的
+`REAL_INPUT_6H_FEASIBLE_24H_RESOURCE_FAIL` 事实，未形成新的 24h 资源结论。
+
+**P0.2 维护与验证。** 非 FIFO test-only oracle 新增同 exact-arrival 成本替换和
+`maximum_elapsed` 边界测试，聚焦 non-FIFO/ETA/RiskSampler/Corridor/runner 共 `49` 项
+通过；全量 pytest 为 `416 passed, 3 skipped`，跳过仍仅为并行 orchestrator worktree
+中退休的 M2J 诊断脚本缺失。全量 Ruff、`uv lock --check --offline`、CLI smoke、
+active/archive import boundary 和 `git diff --check` 通过。`UV_OFFLINE=1 make check`
+在隔离 worktree 不能直接完成：本地没有 `.mamba-env/bin/uv`；通过复用已有环境时，
+offline build cache 缺 `hatchling`，`uv sync --check` 还明确显示 worktree 环境与正式
+worktree 包路径不同。未修改环境、依赖或 `uv.lock`，等价的直接 pytest/Ruff/lock 检查已
+执行并保留该阻塞证据。
+
+本轮最终状态固定为：
+
+- 真实 holdout/development：`REAL_INPUT_FIFO_UNCERTAIN_REQUIRES_INTERVAL_PROOF`；
+  certified dominance 继续默认关闭；
+- synthetic analytic ETA：`ANALYTIC_ETA_PROOF_MATRIX_PASS`；仅 synthetic 证明场景具备
+  研究授权，不代表真实输入资格；
+- synthetic proof-carrying Corridor：`TEMPORAL_CORRIDOR_MATRIX_PASS`；真实 24h
+  state-bound 未启动；
+- P0.2：`READY_FOR_P0.2_IMPLEMENTATION_PLAN` 仍仅表示 test-only 可行性，不是生产实现；
+- 下一步只能另立真实 evaluator/interval proof、带 scope 的 corridor/envelope 或
+  P0.2 label-correcting 计划；不得自动进入 Winter、P2.1、P3、ARA*、formal latest 或
+  candidate 启用。
