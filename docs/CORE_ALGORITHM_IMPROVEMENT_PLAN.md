@@ -947,3 +947,91 @@ uncertain 时保持 `REAL_INPUT_FIFO_UNCERTAIN_REQUIRES_INTERVAL_PROOF`；state-
 资源不足时标记 `REAL_INPUT_RESOURCE_BOUND_INSUFFICIENT`；发现真实 FIFO 反例才另立完整
 P0.2。全部实验和测试完成后仅追加结果与 commit/identity，保留 M0/M1/M1.5/M1.6、M2J/M2K、
 P3、ARA* 历史。
+
+### 【2026-08-28 | COMPLETED】P0.1-M1.7/M1.8 与 P0.2-M0：ETA 区间证明、资源限界与非 FIFO 可行性
+
+本轮从 C 侧 clean 基线 `067a28e` 建立隔离分支
+`research/p01-m17-eta-proof-20260828`，计划段先以 `7988e62` 提交；最终实现和证据
+绑定 clean commit `3cb9e40f4e6826ebbf62290282f11b7cc8cdb352`。辅助 worktree 为
+`/root/my_project/.runtime/worktrees/c-p01-m17-eta-proof`，完成收口后移除，分支保留。
+本轮不修改 B/C、C/D 合同、ingress/service、正式 planner 或 production 路径，不写
+formal latest、replanning baseline 或 frozen artifact，不 push。
+
+**身份与输入。** synthetic ETA、synthetic state-bound 和真实 interval runner 均绑定
+实现文件摘要、配置树 digest
+`537e1a1d1ef3f8015402e9b57556518b92a2524993074b4ecc1ccf58143cded4`、`uv.lock` SHA256
+`8893cb8387825ca4890ed808f4a98b02ba938337752971dacc3e77f859164f22`、policy/search
+limits/evaluator identity；真实构件另绑定冻结 RiskWindow、route-plan-set、scope 和
+segment。真实 r4 构件的 ETA runner implementation digest 为
+`e64c03210c587f8ed63e941d89f99a2c95099538babb62788685152c009f3b2f`，state-bound runner
+digest 为 `c2293c7c02f55988fe456e483752170a30fb9a86cc788af352adea086c816558`，均为
+`git_dirty=false`。
+
+**P0.1-M1.7 ETA interval qualification。** C 内部 sidecar 以
+`g(t)=implied_travel_hours(t)-t` 的保守 interval residual 为对象，显式按边界切分
+RiskFrame/hard-mask/evaluator 区间；有限采样、无 bracket、覆盖不足、未知 evaluator、
+不连续边界和失败均不能生成可用证书。独立 synthetic runner
+`c.p0.1-temporal-eta-interval.v1` 在 small/medium/stress × 三 objective × 七场景上
+完成 `63/63`，状态矩阵为 9 `ROOT_EXISTS_UNIQUE`、9 `ROOT_EXISTS_NONUNIQUE`、9
+`ROOT_EXCLUDED` 和 36 个 `UNCERTAIN_*`；可用证书 18，uncertain 证书可用数为 0，
+`fail_closed=true`。
+
+真实输入使用完整 145 帧 holdout/development，15 分钟 probe、1 秒 tolerance、最多四级
+自适应边界检查；r4 每段均 `ALL_DONE`，没有插入 midpoint，也没有发现后出发早到达反例或
+产生 certificate digest。所有段的 dominance policy 为 `disabled`，coverage/evaluator
+均未认证：
+
+| 输入 / segment | 有向边 | probes | edge evaluations | evaluator errors | failure classes | 结果 |
+|---|---:|---:|---:|---:|---|---|
+| holdout / `executable_0_6h` | 1388 | 25 | 34700 | 748 | `fixed_point_uncertain`, `operator_invalid` | `FIFO_UNCERTAIN_EVALUATOR_FAILURE` |
+| holdout / `rolling_0_24h` | 1388 | 97 | 134636 | 3569 | `fixed_point_uncertain`, `operator_invalid` | `FIFO_UNCERTAIN_EVALUATOR_FAILURE` |
+| development / `executable_0_6h` | 1540 | 25 | 38500 | 821 | `fixed_point_uncertain`, `operator_invalid` | `FIFO_UNCERTAIN_EVALUATOR_FAILURE` |
+| development / `rolling_0_24h` | 1540 | 97 | 149380 | 2944 | `fixed_point_uncertain`, `operator_invalid` | `FIFO_UNCERTAIN_EVALUATOR_FAILURE` |
+
+因此真实结论保持 `REAL_INPUT_FIFO_UNCERTAIN_REQUIRES_INTERVAL_PROOF`，不是
+`FIFO_VIOLATED`，也不是 `FIFO_CERTIFIED`；在得到连续到达函数的 interval monotonicity
+证明或保守上下界之前，certified dominance 继续禁用。可审计构件位于
+`/root/my_project/.runtime/experiments/c-p01-m17-eta-interval-20260828-r4/`。
+
+**P0.1-M1.8 state-bound。** 新增 proof-carrying allowed-node/corridor sidecar，证书
+绑定完整 `TemporalScope`、allowed/excluded nodes、coverage、evaluator 和 proof digest；
+只有新生成 label 可被丢弃，已扩展 label 不删除。synthetic runner
+`c.p0.1-temporal-state-bound.v1` 在 3 profile × 3 objective × certified/coverage-incomplete/
+scope-mismatch 上完成 `27/27`：9 个 certified case 观察到真实 pruning（总计 9），语义
+digest 全部一致；coverage incomplete、scope mismatch 的拒绝场景 pruning 为 0。
+搜索上限仍为 `50k expansions / 100k labels / 50k queue / 400k edge evaluations`，
+没有 beam/近似剪枝或 oracle 路线注入。构件位于
+`/root/my_project/.runtime/experiments/c-p01-m17-eta-proof-20260828-r3/state-bound/`。
+
+本轮没有用 state-bound candidate 重跑真实 24h；继承 M1.6 的真实资源事实：6h
+dominance-disabled 可行，24h 在冻结 `queue=50000` 处仍为
+`REAL_INPUT_6H_FEASIBLE_24H_RESOURCE_FAIL`。这不是放宽上限或择优重跑的依据；后续若
+研究真实 corridor/envelope，必须另立带排除证明的计划。synthetic 构件位于
+`/root/my_project/.runtime/experiments/c-p01-m17-eta-proof-20260828-r3/`。
+
+**P0.2-M0 非 FIFO 可行性。** 新增 C 内部、test-only exact-arrival label-correcting
+reference，不从 production/ingress 导出。六个 adversarial focused tests 覆盖 2×2 后到
+达更优 suffix、同节点不同精确 ETA、周期/label 上限、evaluator/hard-mask failure、
+取消和 arrival-before-departure；失败结果不携带部分 route label。全量验证中该矩阵通过，
+没有公共 API、合同或 ingress 变化。因此仅标记
+`READY_FOR_P0.2_IMPLEMENTATION_PLAN`，不宣称连续海洋模型上的全局最优，也不直接实现或
+启用 production candidate。
+
+**验证与最终分支。** 全量 pytest 为 `379 passed, 3 skipped`；跳过项仅因并行
+orchestrator worktree 中退休的 M2J 诊断脚本缺失。聚焦 ETA/state-bound/non-FIFO/runner
+测试通过，Ruff、`uv lock --check`、CLI smoke、active/archive import boundary 和
+`git diff --check` 通过。直接 `UV_OFFLINE=1 make check` 仍因本辅助 worktree 没有
+`.mamba-env/bin/uv` 在 Makefile lint 目标处退出；使用已有等价 Python/Ruff/UV 环境完成了
+上述可执行检查，未修改依赖或 lock 文件。
+
+本轮最终状态固定为：
+
+- `REAL_INPUT_FIFO_UNCERTAIN_REQUIRES_INTERVAL_PROOF`；不设置
+  `READY_FOR_SEPARATE_REAL_DOMINANCE_PLAN`；
+- `REAL_INPUT_6H_FEASIBLE_24H_RESOURCE_FAIL`；不提高任何冻结资源上限；
+- `READY_FOR_P0.2_IMPLEMENTATION_PLAN`（仅 test-only 设计，不是实现或生产资格）；
+- candidate、Winter、P2.1、P3 SMO-A*、ARA* 状态全部不变。
+
+所有实验产物仍在 `.runtime/experiments/`，没有写入 formal/latest/frozen 路径。完成
+clean 验证后移除本轮辅助 worktree，保留本地分支和构件，等待下一份独立的 interval-proof、
+真实 dominance 资格或 P0.2 实现计划。
