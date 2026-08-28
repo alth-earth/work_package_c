@@ -12,7 +12,6 @@ from arctic_route_planning.planners.non_fifo_feasibility import (
     search_non_fifo,
 )
 
-
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
 
 
