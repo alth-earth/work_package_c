@@ -104,3 +104,28 @@ def test_real_corridor_summary_does_not_promote_missing_objectives() -> None:
     assert summary["status"] == "REAL_INPUT_RESOURCE_BOUND_INSUFFICIENT"
     assert summary["projection_only"] is True
     assert summary["observed_label_pruning"] == 0
+
+
+def test_real_corridor_pruning_runner_is_explicitly_test_only() -> None:
+    module = _load("benchmark_temporal_corridor_pruning_real.py")
+    args = module._parser().parse_args(
+        [
+            "--risk-window-commit",
+            "/tmp/window.json",
+            "--route-plan-set",
+            "/tmp/routes.json",
+            "--segment",
+            "executable_0_6h",
+            "--config-root",
+            "/tmp/config",
+            "--output-dir",
+            "/tmp/out",
+            "--objective",
+            "recommended",
+        ]
+    )
+
+    assert args.mode == "test-only-pruning"
+    assert args.objective == "recommended"
+    assert module.SCHEMA_VERSION.endswith("corridor-pruning-real.v1")
+    assert module.SEARCH_LIMITS["max_queue"] == 50_000
