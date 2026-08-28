@@ -363,6 +363,7 @@ def _scan_objective(
     authorized = 0
     fifo_certified = 0
     fifo_violated = 0
+    deterministic = True
     for edge_index, edge in enumerate(edges):
         key = (objective_name, edge_index)
         if key in existing:
@@ -379,6 +380,7 @@ def _scan_objective(
                     fifo_certified += 1
                 if evidence.get("fifo_status") == FifoStatus.FIFO_VIOLATED.value:
                     fifo_violated += 1
+            deterministic = deterministic and bool(record.get("deterministic", False))
             continue
         points = planner._edge_geometry(
             edge[0], edge[1], minimum_samples=request.edge_sample_count
@@ -402,8 +404,11 @@ def _scan_objective(
             evaluator_digest="explicit:real-analytic-eta-v1",
         )
         probe_records: list[dict[str, Any]] = []
+        edge_deterministic = True
         for probe in probes:
             evidence = evaluator.evaluate_analytic(probe, domain, scope=edge_scope)
+            repeat_evidence = evaluator.evaluate_analytic(probe, domain, scope=edge_scope)
+            edge_deterministic = edge_deterministic and evidence.digest == repeat_evidence.digest
             serialized = _serialize_evidence(evidence)
             status_counts[evidence.status.value] += 1
             if evidence.reason:
@@ -429,8 +434,10 @@ def _scan_objective(
             "scope_digest": edge_scope.digest,
             "dominance_policy": "disabled",
             "dominance_pruned": 0,
+            "deterministic": edge_deterministic,
             "probe_records": probe_records,
         }
+        deterministic = deterministic and edge_deterministic
         _append_jsonl(output / "eta-interval.jsonl", record)
         _append_jsonl(
             output / "cases.jsonl",
@@ -499,12 +506,7 @@ def _scan_objective(
             bool(item.get("evidence", {}).get("evaluator_certified"))
             for item in all_probe_evidence
         ),
-        "deterministic": len(
-            {
-                item.get("evidence", {}).get("digest") for item in all_probe_evidence
-            }
-        )
-        == len(all_probe_evidence),
+        "deterministic": deterministic,
     }
     return summary, intervals
 
