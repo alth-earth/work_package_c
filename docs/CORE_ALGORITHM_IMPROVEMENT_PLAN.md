@@ -1578,3 +1578,47 @@ confidence、source IDs 和失败语义；重复运行 semantic digest 与资源
 `NO_PERFORMANCE_PROOF/FAIL` 或 `INVALID/PENDING`。实验产物如有需要只写
 `.runtime/experiments/`，本地提交后移除辅助 worktree，不 push。下一步仍需另立真实
 输入预算/取消协议和生产候选审查计划。
+
+### 【2026-08-29 | COMPLETED】P0.2-M2：actual temporal edge adapter 与 bounded 非 FIFO 语义桥
+
+本轮从正式 clean `cdc30aa` 建立隔离分支
+`research/p02-m2-nonfifo-temporal-adapter-20260829`，先提交治理计划
+`528798a`，实现与测试提交为 `691c9b1`，随后 fast-forward 集成回正式
+`research-validation-system`。辅助 worktree 只用于隔离实现，集成验证完成后按计划移除；
+未 push。所有改动仍为 C 内部 research-only sidecar，没有修改 B/C、C/D 合同、
+ingress/service、公共 planner、正式 `TimeDependentAStar`/`plan()` 默认行为、真实 runner、
+Winter/P2.1/P3/ARA* 或 production candidate，也没有写 formal latest、replanning baseline
+或 frozen artifact。
+
+**actual-session 语义桥。** 新增未从 `planners.__init__` 导出的
+`planners/non_fifo_temporal_adapter.py`，显式调用
+`run_non_fifo_temporal_search(...)` 时直接创建并推进 active `TemporalSession`，使用实际
+`TemporalLabelAStar` 的 `_EdgeTraversal`/ETA/risk/cost 评估。adapter 强制
+`PlanningRequest.use_heuristic=False`、`TemporalDominancePolicy.disabled()` 且不允许
+state-bound certificate；不满足围栏或 identity fence 漂移会拒绝执行。成功载体保留完整
+`PlanningResult` 的路线、精确 ETA、速度、风险、成本、confidence、source IDs 和业务步证据，
+并以不含运行时计时的稳定 semantic digest 绑定这些字段。
+
+**失败与安全边界。** `GOAL_FOUND`、`EXHAUSTED`、`RESOURCE_LIMIT`、`CANCELLED` 和
+`EVALUATOR_FAILURE` 均显式返回，资源上限继续由 active temporal session 的
+expansion/label/queue/edge-evaluation limits 执行；失败结果不携带部分成功 route。adapter
+会拒绝或报告任何 dominance/state-bound pruning，保留已扩展 exact-arrival labels，不引入
+时间桶跨到达剪枝或 FIFO 假设。horizon、hard/evaluator failure 和 identity mismatch
+均保持 fail-closed。
+
+**验证证据。** 新增 adapter 聚焦矩阵 `7 passed`，与 non-FIFO sidecar、independent
+zero-heuristic reference oracle、temporal label 合计 `40 passed`；实际 non-FIFO 后到达
+更优 suffix 的路线、精确 ETA 和等价成本与独立 oracle 一致，重复运行 semantic digest、
+业务字段和资源计数确定一致。adapter 的资源、取消、horizon、evaluator failure、模式围栏、
+identity drift 与非导出边界均有回归覆盖。隔离 worktree 全量为 `444 passed, 3 skipped`
+（3 个 skip 仅为退休 M2J orchestrator 脚本路径缺失）；集成正式工作树
+`UV_OFFLINE=1 make check` 为 `447 passed`，Ruff、`uv lock --check`、offline sync、CLI
+smoke、active/archive import boundary 和 `git diff --check` 全部通过。未生成实验构件。
+
+**收口结论。** 本轮仅证明 active exact-arrival temporal session 能在显式零启发式、
+dominance/state-bound 关闭的条件下承载 C 真实边业务语义，并不证明连续非 FIFO 海洋模型
+的全局最优性、真实输入资格或性能晋级。状态保持并强化为
+`READY_FOR_P0.2-ADAPTER_REAL-INPUT_PLAN`；真实输入仍为
+`REAL_INPUT_FIFO_VIOLATED`，24h queue 上限和 candidate/Winter/P2.1/P3/ARA* 冻结不变。
+后续必须另立带输入 identity、取消协议、资源预算和 oracle/语义审计的 real-input 计划，
+不得自动启动 production 或 candidate。
