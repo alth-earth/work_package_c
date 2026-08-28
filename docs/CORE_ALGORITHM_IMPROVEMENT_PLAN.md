@@ -1678,3 +1678,36 @@ smoke、active/archive import boundary 和 `git diff --check` 全部通过。
 `REAL_INPUT_FIFO_VIOLATED`、24h queue 上限、dominance 默认关闭及 candidate/Winter/P2.1/
 P3/ARA* 冻结不变。后续必须另立长任务资源预算、真实输入 identity 和 oracle 证据计划，
 不得自动接入 production。
+
+### 【2026-08-29 | PLANNED】P0.2-M4：真实输入 non-FIFO temporal adapter 长任务资格审计
+
+P0.2-M3 已证明实际 temporal session 的非 FIFO 研究 adapter 可以分片、暂停、恢复和取消；
+本轮只把该研究边界带到已有完整 145 帧 holdout/development 输入，审计真实边评估的语义、
+资源上限和可恢复证据。实验从当前 clean C tip 建立独立 worktree，身份绑定实现与
+`uv.lock`、配置树、RiskFrame commit/content/frame digest、冻结 four-layer route-plan-set、
+segment、目标、request/scope、adapter mode 和搜索上限。只复用现有输入，不下载或改写风险数据。
+
+**执行围栏。** 新增独立 `benchmark_non_fifo_temporal_real.py` runner，不改动已通过的 P0.1
+real runner。runner 只显式调用 `run_non_fifo_temporal_search(...)`，强制
+`use_heuristic=False`、`TemporalDominancePolicy.disabled()` 且无 state-bound；正式
+`TemporalLabelAStar.plan()`、ingress/service、B/C 与 C/D 合同、公共 planner、candidate、
+Winter/P2.1/P3/ARA* 和 production latest/frozen 路径均不变。按输入/segment/objective/重复
+逐 worker 串行执行，固定 CPU、timeout、资源快照和 cgroup 证据；无 route 或资源超限不得
+伪装为成功，也不提高既定 expansion/label/queue/edge-evaluation 上限。
+
+**输入与证据。** 继续校验 145 帧小时连续性、generation/revision、grid/vessel/planner/config
+digest、起点/目标与冻结路线层一致。6h 先执行；24h 仅在同一输入 6h 三目标语义、determinism、
+reference 对照和资源证据完整后条件启动。每个实验目录只写 `manifest.json`、`cases.jsonl`、
+`resource-frontier.jsonl`、`comparison-summary.json`、`heartbeat.json` 以及最终
+`ALL_DONE`/`STOPPED_HARD`；每条完成记录立即 fsync，resume 只接受完全相同 identity，拒绝半完成
+worker。成功 route 必须保留 exact arrival、速度、风险、成本、confidence、source IDs 和稳定
+semantic digest，并与独立 zero-heuristic exact-arrival reference 对照；reference 仅作正确性
+证据，不作性能基线。
+
+**状态与收口。** 真实 FIFO 已知为 `REAL_INPUT_FIFO_VIOLATED`，本轮不把 adapter 结果升级为
+FIFO 资格或 dominance 资格。每个 segment 记录 `GOAL_FOUND`、`EXHAUSTED`、`RESOURCE_LIMIT`、
+`CANCELLED`、`EVALUATOR_FAILURE`、`TIMEOUT` 和 `INVALID/PENDING` 的明确原因；语义不一致、
+fail-open pruning、identity 漂移、dirty evidence worktree 或生产路径写入为全局硬停止。全部
+输入仅表示 `READY_FOR_P0.2-ADAPTER_REAL-EVIDENCE_REVIEW`；资源失败保留为真实前沿边界，
+不得择优重跑、提高上限或自动启动 Winter。完成后只追加本 SSOT、做本地集成提交并移除辅助
+worktree，不 push。
