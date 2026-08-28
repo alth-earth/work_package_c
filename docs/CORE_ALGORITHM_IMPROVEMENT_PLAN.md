@@ -2066,3 +2066,59 @@ ordering 的 expansion/queue 改善或明确记录“无改善”，但不以合
 资源证据缺失，标记 `NO_PERFORMANCE_PROOF/FAIL` 或 `INVALID/PENDING`。即使真实 6h 有改善，
 也只能另立 24h 资源审计计划，不自动重跑 Winter 或启用 candidate。完成后移除 M8 辅助 worktree，
 保留本地研究分支和实验构件，不 push。
+
+### 【2026-08-29 | COMPLETED】P0.2-M8：certified reverse-graph heuristic ordering
+
+本轮从 M7 clean tip `1e13cec` 建立隔离分支
+`research/p02-m8-certified-heuristic-20260829` 和 worktree，先提交计划
+`4d740b2`。实现提交为 `da6972c`、`0f76c8c`、`25dd468`、`a2352bf`；改动仅限 C
+内部研究 sidecar、session/checkpoint 身份、测试和诊断 runner。未修改 B/C、C/D 合同、
+ingress/service、公共 planner 或正式默认路径，未启用 candidate/Winter/P2.1/P3/ARA*，未写
+formal latest/replanning baseline/frozen artifact，也未 push。
+
+**证书与适配器。** 新增 `TemporalHeuristicCertificate`，从完整有限图的反向拓扑 travel
+lower bound 和非负 `CostModel` 权重生成 objective lower-bound map；证书 digest 覆盖完整
+`TemporalScope`、objective、universe、反向距离、cost model、evaluator 和 proof。图闭包、
+非负边权及 consistency 不满足时证书不可用。`TemporalLabelAStar` 仅在显式研究请求
+`use_heuristic=True` 且证书 scope 完全匹配时使用该 map 排序；缺失节点、scope/policy/
+checkpoint/evaluator 漂移、非 admissible 或未知证据均拒绝并记录原因。启发式只改变出队顺序，
+不做 dominance/state-bound pruning，不删除已扩展 label；`TemporalDominancePolicy.disabled()`、
+普通 non-FIFO adapter 和正式 `plan()` 默认行为保持不变。`TemporalSessionIdentity` 与
+checkpoint 已绑定 `heuristic_policy_digest`，恢复时重新执行 identity fence。
+
+**Synthetic gate。** 独立 runner
+`c.p0.2-temporal-certified-heuristic.v1` 在 small/medium/stress ×
+fastest/low_risk/recommended × certified/scope-mismatch/incomplete/non-admissible/
+unknown-evaluator × 2 repeats 完成 `90/90`。18 个 certified case 与 zero-heuristic
+exact-arrival adapter 和独立 Dijkstra oracle 的路线、精确 ETA、业务字段和 semantic digest
+一致，并观察到 priority ordering 的扩展/队列改善；72 个拒绝 case 均为
+`REJECTED_FAIL_CLOSED`，无 heuristic 生效、无 dominance/state-bound pruning。汇总状态为
+`TEMPORAL_CERTIFIED_HEURISTIC_MATRIX_PASS`，且 `semantic_match=true`、`deterministic=true`、
+`fail_closed=true`、`production_candidate_enabled=false`。权威构件为
+`/root/my_project/.runtime/experiments/c-p02-m8-certified-heuristic-matrix-20260829-r1/`。
+
+**真实 holdout 6h。** 首次直接运行因宿主位于 `/init.scope`、未具备计划要求的 4 GiB/0 swap
+cgroup，构件按设计标记 `INVALID/PENDING`，未用于结论。随后在
+`MemoryMax=4G`、`MemorySwapMax=0`、固定 CPU=2 的 systemd cgroup 中，以完整 145 帧 holdout、
+冻结 `executable_0_6h` route-plan-set、三目标 × 两次重复完成权威诊断；dominance 和
+state-bound 均关闭，candidate 仍关闭。权威构件为
+`/root/my_project/.runtime/experiments/c-p02-m8-certified-heuristic-real-holdout-6h-20260829-r2/`，
+identity `c.p0.2-temporal-certified-heuristic-real.v1-a6b1cd93431a72f8`，汇总状态
+`READY_FOR_P0.2-CERTIFIED-HEURISTIC-REAL-REVIEW`，`6/6 PASS`。
+
+每个 case 均 `GOAL_FOUND`，baseline/candidate/reference 的路线、精确 ETA、速度、风险、成本、
+confidence、source IDs 和失败语义一致，`semantic_match=true`、`reference_match=true`、
+`deterministic=true`；candidate 证书 scope 全部匹配且 `heuristic_rejected=0`。fastest 两次
+扩展标签 `18→5`、队列峰值 `26→19`；low_risk 为 `19→10`、队列 `26→26`；recommended
+为 `19→5`、队列 `26→19`。所有 case `dominance_pruned=0`、`state_bound_pruned=0`，CPU
+affinity、RSS、无 swap、4 GiB cgroup 和 OOM 事件证据完整（`resource_evidence_complete=true`、
+`resource_clean=true`）。
+
+**边界与结论。** M8 证明了在已知有限图、scope 完整且非 FIFO exact-arrival 研究适配器中，
+证书化反向图 objective 下界可安全改善队列排序并保持路线/业务语义；不证明 FIFO、连续 ETA
+或全局生产最优性。真实输入的既有 `REAL_INPUT_FIFO_VIOLATED` 不变，M4 的
+`REAL_INPUT_6H_FEASIBLE_24H_RESOURCE_FAIL` 不覆盖、不重跑，且未提高
+`50k expansions / 100k labels / 50k queue / 400k edge evaluations` 上限。综合状态为
+`READY_FOR_P0.2-CERTIFIED-HEURISTIC-REAL-REVIEW`，仅可作为另立 24h 资源审计或 bounded
+state/corridor 计划的证据；candidate、Winter、P2.1、P3、ARA* 和 dominance 继续默认关闭。
+完成验证后移除本轮辅助 worktree，保留研究分支和实验构件，不 push。
