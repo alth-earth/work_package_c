@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from arctic_route_planning.planners.non_fifo_feasibility import (
+    NonFifoBusinessEvidence,
     NonFifoParetoTransition,
     NonFifoSearchStatus,
     NonFifoTransition,
@@ -452,3 +453,101 @@ def test_pareto_cycle_hits_frozen_label_limit_instead_of_looping() -> None:
     assert result.status is NonFifoSearchStatus.RESOURCE_LIMIT
     assert result.label is None
     assert result.reason == "search_limit_exceeded"
+
+
+def test_business_evidence_is_preserved_and_digest_bound() -> None:
+    evidence = NonFifoBusinessEvidence(
+        speed_knots=10.5,
+        risk_score=0.25,
+        maximum_risk=0.4,
+        confidence=0.9,
+        source_ids=("risk-a", "risk-b"),
+    )
+
+    def evaluate(_start: str, _end: str, arrival: datetime):
+        return NonFifoParetoTransition(
+            arrival + timedelta(hours=1),
+            (1.0, 2.0),
+            business=evidence,
+        )
+
+    result = search_non_fifo_pareto(
+        start="start",
+        goal="goal",
+        departure_time=T0,
+        neighbors=lambda _node: ("goal",),
+        evaluate_edge=evaluate,
+        objective_count=2,
+    )
+    repeat = search_non_fifo_pareto(
+        start="start",
+        goal="goal",
+        departure_time=T0,
+        neighbors=lambda _node: ("goal",),
+        evaluate_edge=evaluate,
+        objective_count=2,
+    )
+
+    assert result.status is NonFifoSearchStatus.GOAL_FOUND
+    assert result.label is not None
+    assert result.label.business_evidence == (evidence,)
+    assert result.semantic_digest == repeat.semantic_digest
+    assert result.edge_evaluations == repeat.edge_evaluations == 1
+
+
+def test_edge_evaluation_limit_is_explicit_and_fail_closed() -> None:
+    graph = {"start": ("a", "b"), "a": (), "b": ()}
+
+    result = search_non_fifo_pareto(
+        start="start",
+        goal="goal",
+        departure_time=T0,
+        neighbors=graph.__getitem__,
+        evaluate_edge=lambda _start, _end, arrival: NonFifoTransition(
+            arrival + timedelta(hours=1), 1.0
+        ),
+        max_edge_evaluations=1,
+    )
+
+    assert result.status is NonFifoSearchStatus.RESOURCE_LIMIT
+    assert result.label is None
+    assert result.edge_evaluations == 2
+    assert result.reason == "search_limit_exceeded"
+
+
+def test_scalar_edge_evaluation_limit_is_reported() -> None:
+    graph = {"start": ("a", "b"), "a": (), "b": ()}
+
+    result = search_non_fifo(
+        start="start",
+        goal="goal",
+        departure_time=T0,
+        neighbors=graph.__getitem__,
+        evaluate_edge=lambda _start, _end, arrival: NonFifoTransition(
+            arrival + timedelta(hours=1), 1.0
+        ),
+        max_edge_evaluations=1,
+    )
+
+    assert result.status is NonFifoSearchStatus.RESOURCE_LIMIT
+    assert result.label is None
+    assert result.edge_evaluations == 2
+    assert result.reason == "search_limit_exceeded"
+
+
+def test_hard_mask_business_evidence_is_not_a_successful_edge() -> None:
+    result = search_non_fifo_pareto(
+        start="start",
+        goal="goal",
+        departure_time=T0,
+        neighbors=lambda _node: ("goal",),
+        evaluate_edge=lambda _start, _end, arrival: NonFifoTransition(
+            arrival + timedelta(hours=1),
+            1.0,
+            business=NonFifoBusinessEvidence(hard_mask=True),
+        ),
+    )
+
+    assert result.status is NonFifoSearchStatus.EVALUATOR_FAILURE
+    assert result.label is None
+    assert result.evaluator_errors == ("NonFifoEvaluationError:hard_mask",)

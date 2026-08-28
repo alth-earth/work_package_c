@@ -33,12 +33,45 @@ class NonFifoEvaluationError(RuntimeError):
 
 
 @dataclass(frozen=True, slots=True)
+class NonFifoBusinessEvidence:
+    """Optional route-field evidence carried by one research transition.
+
+    The production route schema is deliberately not imported here.  These
+    fields let a finite fixture prove that a non-FIFO search preserves the
+    business observations supplied by its edge evaluator instead of comparing
+    only node names and scalar costs.
+    """
+
+    speed_knots: float | None = None
+    risk_score: float | None = None
+    maximum_risk: float | None = None
+    confidence: float | None = None
+    source_ids: tuple[str, ...] = ()
+    hard_mask: bool = False
+
+    def __post_init__(self) -> None:
+        for name in ("speed_knots", "risk_score", "maximum_risk", "confidence"):
+            value = getattr(self, name)
+            if value is not None and (not isfinite(value) or value < 0.0):
+                raise ValueError(f"{name} must be finite and non-negative when present")
+        if self.confidence is not None and self.confidence > 1.0:
+            raise ValueError("confidence must be at most one when present")
+        source_ids = tuple(self.source_ids)
+        if any(not isinstance(source_id, str) or not source_id for source_id in source_ids):
+            raise ValueError("source_ids must contain non-empty strings")
+        object.__setattr__(self, "source_ids", source_ids)
+        if not isinstance(self.hard_mask, bool):
+            raise ValueError("hard_mask must be a boolean")
+
+
+@dataclass(frozen=True, slots=True)
 class NonFifoTransition:
     """One exact-arrival edge result supplied by a test fixture."""
 
     arrival_time: datetime
     cost: float
     payload: Mapping[str, Any] | None = None
+    business: NonFifoBusinessEvidence | None = None
 
     def __post_init__(self) -> None:
         if self.arrival_time.tzinfo is None or self.arrival_time.utcoffset() is None:
@@ -47,6 +80,8 @@ class NonFifoTransition:
         if not isfinite(self.cost) or self.cost < 0.0:
             raise ValueError("non-FIFO transition cost must be finite and non-negative")
         object.__setattr__(self, "payload", dict(self.payload or {}))
+        if self.business is not None and not isinstance(self.business, NonFifoBusinessEvidence):
+            raise ValueError("business must be NonFifoBusinessEvidence when present")
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +98,7 @@ class NonFifoParetoTransition:
     arrival_time: datetime
     costs: tuple[float, ...]
     payload: Mapping[str, Any] | None = None
+    business: NonFifoBusinessEvidence | None = None
 
     def __post_init__(self) -> None:
         if self.arrival_time.tzinfo is None or self.arrival_time.utcoffset() is None:
@@ -73,6 +109,8 @@ class NonFifoParetoTransition:
             raise ValueError("non-FIFO Pareto transition costs must be finite and non-negative")
         object.__setattr__(self, "costs", costs)
         object.__setattr__(self, "payload", dict(self.payload or {}))
+        if self.business is not None and not isinstance(self.business, NonFifoBusinessEvidence):
+            raise ValueError("business must be NonFifoBusinessEvidence when present")
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +133,16 @@ class NonFifoLabel:
     @property
     def exact_key(self) -> tuple[Any, datetime]:
         return self.node, self.arrival_time
+
+    @property
+    def business_evidence(self) -> tuple[NonFifoBusinessEvidence, ...]:
+        """Return the edge evidence retained by this route label."""
+
+        return tuple(
+            transition.business
+            for transition in self.transitions
+            if transition.business is not None
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,6 +170,16 @@ class NonFifoParetoLabel:
     def exact_key(self) -> tuple[Any, datetime]:
         return self.node, self.arrival_time
 
+    @property
+    def business_evidence(self) -> tuple[NonFifoBusinessEvidence, ...]:
+        """Return the edge evidence retained by this route label."""
+
+        return tuple(
+            transition.business
+            for transition in self.transitions
+            if transition.business is not None
+        )
+
     def dominates(self, other: NonFifoParetoLabel) -> bool:
         """Return safe same-exact-state Pareto dominance.
 
@@ -145,6 +203,7 @@ class NonFifoSearchResult:
     expanded: int
     generated: int
     queue_peak: int
+    edge_evaluations: int = 0
     evaluator_errors: tuple[str, ...] = ()
     reason: str | None = None
     pareto_pruned: int = 0
@@ -174,6 +233,7 @@ class NonFifoParetoSearchResult:
     expanded: int
     generated: int
     queue_peak: int
+    edge_evaluations: int = 0
     pareto_pruned: int = 0
     evaluator_errors: tuple[str, ...] = ()
     reason: str | None = None
@@ -222,6 +282,7 @@ def search_non_fifo(
     max_expansions: int = 50_000,
     max_labels: int = 100_000,
     max_queue: int = 50_000,
+    max_edge_evaluations: int = 400_000,
     cancel_check: Callable[[], bool] | None = None,
     maximum_elapsed: timedelta | None = None,
 ) -> NonFifoSearchResult:
@@ -237,10 +298,13 @@ def search_non_fifo(
 
     if departure_time.tzinfo is None or departure_time.utcoffset() is None:
         raise ValueError("departure_time must be timezone-aware")
-    if any(
-        isinstance(value, bool) or value < 1 for value in (max_expansions, max_labels, max_queue)
-    ):
-        raise ValueError("non-FIFO search limits must be positive integers")
+    _validate_non_fifo_limits(
+        objective_count=1,
+        max_expansions=max_expansions,
+        max_labels=max_labels,
+        max_queue=max_queue,
+        max_edge_evaluations=max_edge_evaluations,
+    )
     departure = departure_time.astimezone(UTC)
     initial = NonFifoLabel(start, departure, 0.0, (start,))
     queue: list[tuple[float, datetime, int, NonFifoLabel]] = [(0.0, departure, 0, initial)]
@@ -249,6 +313,7 @@ def search_non_fifo(
     expanded = 0
     generated = 0
     queue_peak = 1
+    edge_evaluations = 0
     errors: list[str] = []
     best_goal: NonFifoLabel | None = None
     bounded = False
@@ -262,6 +327,7 @@ def search_non_fifo(
                 expanded,
                 generated,
                 queue_peak,
+                edge_evaluations,
                 errors,
                 "cancelled",
             )
@@ -287,13 +353,20 @@ def search_non_fifo(
                     expanded,
                     generated,
                     queue_peak,
+                    edge_evaluations,
                     errors,
                     "cancelled",
                 )
+            edge_evaluations += 1
+            if edge_evaluations > max_edge_evaluations:
+                bounded = True
+                break
             try:
                 transition = evaluate_edge(label.node, neighbor, label.arrival_time)
                 if not isinstance(transition, NonFifoTransition):
                     raise TypeError("non-FIFO evaluator must return NonFifoTransition")
+                if transition.business is not None and transition.business.hard_mask:
+                    raise NonFifoEvaluationError("hard_mask")
             except Exception as error:
                 errors.append(f"{type(error).__name__}:{error}")
                 continue
@@ -342,7 +415,17 @@ def search_non_fifo(
     else:
         status = NonFifoSearchStatus.EXHAUSTED
         reason = "no_route"
-    return _result(status, best_goal, by_key, expanded, generated, queue_peak, errors, reason)
+    return _result(
+        status,
+        best_goal,
+        by_key,
+        expanded,
+        generated,
+        queue_peak,
+        edge_evaluations,
+        errors,
+        reason,
+    )
 
 
 def search_non_fifo_pareto(
@@ -357,6 +440,7 @@ def search_non_fifo_pareto(
     max_expansions: int = 50_000,
     max_labels: int = 100_000,
     max_queue: int = 50_000,
+    max_edge_evaluations: int = 400_000,
     cancel_check: Callable[[], bool] | None = None,
     maximum_elapsed: timedelta | None = None,
 ) -> NonFifoParetoSearchResult:
@@ -382,6 +466,7 @@ def search_non_fifo_pareto(
         max_expansions=max_expansions,
         max_labels=max_labels,
         max_queue=max_queue,
+        max_edge_evaluations=max_edge_evaluations,
     )
     if departure_time.tzinfo is None or departure_time.utcoffset() is None:
         raise ValueError("departure_time must be timezone-aware")
@@ -400,6 +485,7 @@ def search_non_fifo_pareto(
     expanded = 0
     generated = 0
     queue_peak = 1
+    edge_evaluations = 0
     total_labels = 1
     pareto_pruned = 0
     errors: list[str] = []
@@ -415,6 +501,7 @@ def search_non_fifo_pareto(
                 expanded,
                 generated,
                 queue_peak,
+                edge_evaluations,
                 pareto_pruned,
                 errors,
                 "cancelled",
@@ -445,10 +532,15 @@ def search_non_fifo_pareto(
                     expanded,
                     generated,
                     queue_peak,
+                    edge_evaluations,
                     pareto_pruned,
                     errors,
                     "cancelled",
                 )
+            edge_evaluations += 1
+            if edge_evaluations > max_edge_evaluations:
+                bounded = True
+                break
             try:
                 transition = evaluate_edge(label.node, neighbor, label.arrival_time)
                 transition = _coerce_pareto_transition(transition, objective_count)
@@ -514,6 +606,7 @@ def search_non_fifo_pareto(
         expanded,
         generated,
         queue_peak,
+        edge_evaluations,
         pareto_pruned,
         errors,
         reason,
@@ -521,7 +614,12 @@ def search_non_fifo_pareto(
 
 
 def _validate_non_fifo_limits(
-    *, objective_count: int, max_expansions: int, max_labels: int, max_queue: int
+    *,
+    objective_count: int,
+    max_expansions: int,
+    max_labels: int,
+    max_queue: int,
+    max_edge_evaluations: int,
 ) -> None:
     if (
         isinstance(objective_count, bool)
@@ -531,7 +629,12 @@ def _validate_non_fifo_limits(
         raise ValueError("objective_count must be a positive integer")
     if any(
         isinstance(value, bool) or not isinstance(value, int) or value < 1
-        for value in (max_expansions, max_labels, max_queue)
+        for value in (
+            max_expansions,
+            max_labels,
+            max_queue,
+            max_edge_evaluations,
+        )
     ):
         raise ValueError("non-FIFO search limits must be positive integers")
 
@@ -542,12 +645,19 @@ def _coerce_pareto_transition(
     if isinstance(transition, NonFifoParetoTransition):
         if len(transition.costs) != objective_count:
             raise NonFifoEvaluationError("objective_dimension_mismatch")
+        if transition.business is not None and transition.business.hard_mask:
+            raise NonFifoEvaluationError("hard_mask")
         return transition
     if isinstance(transition, NonFifoTransition):
         if objective_count != 1:
             raise NonFifoEvaluationError("scalar_transition_for_vector_objective")
+        if transition.business is not None and transition.business.hard_mask:
+            raise NonFifoEvaluationError("hard_mask")
         return NonFifoParetoTransition(
-            transition.arrival_time, (transition.cost,), transition.payload
+            transition.arrival_time,
+            (transition.cost,),
+            transition.payload,
+            transition.business,
         )
     raise TypeError("non-FIFO evaluator must return a Pareto transition")
 
@@ -573,6 +683,7 @@ def _pareto_result(
     expanded: int,
     generated: int,
     queue_peak: int,
+    edge_evaluations: int,
     pareto_pruned: int,
     errors: Iterable[str],
     reason: str | None,
@@ -596,6 +707,7 @@ def _pareto_result(
         expanded=expanded,
         generated=generated,
         queue_peak=queue_peak,
+        edge_evaluations=edge_evaluations,
         pareto_pruned=pareto_pruned,
         evaluator_errors=tuple(errors),
         reason=reason,
@@ -609,6 +721,7 @@ def _result(
     expanded: int,
     generated: int,
     queue_peak: int,
+    edge_evaluations: int,
     errors: Iterable[str],
     reason: str | None,
 ) -> NonFifoSearchResult:
@@ -620,6 +733,7 @@ def _result(
         expanded=expanded,
         generated=generated,
         queue_peak=queue_peak,
+        edge_evaluations=edge_evaluations,
         evaluator_errors=tuple(errors),
         reason=reason,
     )
@@ -628,17 +742,28 @@ def _result(
 def _jsonable(value: Any) -> Any:
     if isinstance(value, datetime):
         return value.astimezone(UTC).isoformat(timespec="microseconds")
+    if isinstance(value, NonFifoBusinessEvidence):
+        return {
+            "speed_knots": value.speed_knots,
+            "risk_score": value.risk_score,
+            "maximum_risk": value.maximum_risk,
+            "confidence": value.confidence,
+            "source_ids": value.source_ids,
+            "hard_mask": value.hard_mask,
+        }
     if isinstance(value, NonFifoTransition):
         return {
             "arrival_time": _jsonable(value.arrival_time),
             "cost": value.cost,
             "payload": _jsonable(value.payload),
+            "business": _jsonable(value.business),
         }
     if isinstance(value, NonFifoParetoTransition):
         return {
             "arrival_time": _jsonable(value.arrival_time),
             "costs": value.costs,
             "payload": _jsonable(value.payload),
+            "business": _jsonable(value.business),
         }
     if isinstance(value, Mapping):
         return {str(key): _jsonable(item) for key, item in value.items()}
@@ -648,6 +773,7 @@ def _jsonable(value: Any) -> Any:
 
 
 __all__ = [
+    "NonFifoBusinessEvidence",
     "NonFifoEvaluationError",
     "NonFifoLabel",
     "NonFifoParetoLabel",
