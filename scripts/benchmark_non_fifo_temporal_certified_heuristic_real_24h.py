@@ -18,13 +18,14 @@ import json
 import os
 import subprocess
 import sys
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from arctic_route_planning.domain.models import ObjectiveMode
 
-SCHEMA_VERSION = "c.p0.2-temporal-certified-heuristic-real-24h.v1"
+SCHEMA_VERSION = "c.p0.2-temporal-certified-heuristic-real-24h.v2"
 SEGMENT = "rolling_0_24h"
 OBJECTIVES = tuple(ObjectiveMode)
 LIMITS = {
@@ -132,18 +133,122 @@ def _fixture_args(args: argparse.Namespace) -> argparse.Namespace:
     )
 
 
-def _worker(args: argparse.Namespace) -> dict[str, Any]:
-    """Run one isolated case through the audited M8 worker implementation."""
+def _worker_phase(args: argparse.Namespace) -> dict[str, Any]:
+    """Run one baseline/candidate/reference phase in its own process.
 
-    record = dict(_load_m8_runner()._worker(args))
-    record["schema_version"] = SCHEMA_VERSION
-    record["adapter_mode"] = "non_fifo_certified_graph_heuristic_24h_v1"
-    record["segment"] = SEGMENT
-    return record
+    The M8 combined worker is appropriate for the short 6-hour diagnostic, but
+    a long-horizon zero-heuristic baseline can consume the whole deadline
+    before the candidate is exercised.  Phase isolation makes that distinction
+    explicit without changing the search implementation.
+    """
+
+    m8 = _load_m8_runner()
+    point = m8._load_script("benchmark_temporal_dominance_real.py", f"c_m9_point_{args.phase}")
+    fixture = point._load_fixture(_fixture_args(args))
+    objective = ObjectiveMode(args.objective)
+    m8._set_cpu(args.cpu)
+    before = point._resource_snapshot()
+    started = m8.perf_counter()
+    baseline = None
+    candidate = None
+    reference = None
+    topology = None
+    certificate = None
+    errors: dict[str, str] = {}
+    session_identity = None
+    try:
+        if args.phase == "baseline":
+            planner = point._build_planner(fixture, objective)
+            request = replace(point._request(fixture, objective), use_heuristic=False)
+            session_identity = m8.TemporalSessionIdentity.from_planner(
+                planner,
+                request,
+                risk_window_content_digest=fixture.commit["content_digest"],
+                risk_window_commit_id=fixture.commit["commit_id"],
+            )
+            baseline = m8.run_non_fifo_temporal_search(planner, request, identity=session_identity)
+        elif args.phase == "candidate":
+            planner, request, evidence = m8._certificate(point, fixture, objective)
+            topology, certificate = evidence
+            planner.heuristic_certificate = certificate
+            session_identity = m8.TemporalSessionIdentity.from_planner(
+                planner,
+                request,
+                risk_window_content_digest=fixture.commit["content_digest"],
+                risk_window_commit_id=fixture.commit["commit_id"],
+            )
+            candidate = m8.run_non_fifo_temporal_certified_heuristic_search(
+                planner, request, certificate, identity=session_identity
+            )
+        elif args.phase == "reference":
+            planner = point._build_planner(fixture, objective)
+            request = replace(point._request(fixture, objective), use_heuristic=False)
+            session_identity = m8.TemporalSessionIdentity.from_planner(
+                planner,
+                request,
+                risk_window_content_digest=fixture.commit["content_digest"],
+                risk_window_commit_id=fixture.commit["commit_id"],
+            )
+            reference = point._reference_search(planner, request)
+        else:  # pragma: no cover - argparse and worker command constrain this
+            raise ValueError(f"unknown phase: {args.phase}")
+    except Exception as error:  # pragma: no cover - isolated evaluator boundary
+        errors[args.phase] = f"{type(error).__name__}: {error}"
+    after = point._resource_snapshot()
+    result = baseline or candidate
+    if args.phase == "reference":
+        phase_status = "PASS" if reference is not None else "ERROR"
+    elif result is None:
+        phase_status = "ERROR"
+    else:
+        phase_status = result.status.value
+    semantic = None if result is None else point._route_semantic(result)
+    diagnostics = None if result is None else _jsonable(result.diagnostics)
+    resource_clean = point._resource_clean(before, after)
+    resource_evidence_complete = point._resource_evidence_complete(
+        {"resources_before": before, "resources_after": after}, cpu=args.cpu
+    )
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "status": phase_status,
+        "phase": args.phase,
+        "input": fixture.input_name,
+        "segment": SEGMENT,
+        "objective": objective.value,
+        "repetition": args.repetition,
+        "adapter_mode": "non_fifo_certified_graph_heuristic_24h_v2",
+        "baseline_status": None if baseline is None else baseline.status.value,
+        "candidate_status": None if candidate is None else candidate.status.value,
+        "baseline_semantic_digest": None if baseline is None else baseline.semantic_digest,
+        "candidate_semantic_digest": None if candidate is None else candidate.semantic_digest,
+        "semantic": semantic,
+        "reference": reference,
+        "diagnostics": diagnostics,
+        "heuristic_policy": None if candidate is None else candidate.diagnostics.heuristic_policy,
+        "heuristic_certificate_digest": None if certificate is None else certificate.digest,
+        "heuristic_proof_digest": None if certificate is None else certificate.proof_digest,
+        "heuristic_scope_match": False
+        if candidate is None
+        else candidate.diagnostics.heuristic_scope_match,
+        "heuristic_rejected": 0 if candidate is None else candidate.diagnostics.heuristic_rejected,
+        "topology_digest": None if topology is None else topology.digest,
+        "session_identity": None if session_identity is None else session_identity.digest,
+        "errors": errors,
+        "wall_seconds": m8.perf_counter() - started,
+        "resources_before": before,
+        "resources_after": after,
+        "resource_clean": resource_clean,
+        "resource_evidence_complete": resource_evidence_complete,
+        "cpu": args.cpu,
+        "production_candidate_enabled": False,
+    }
 
 
 def _worker_command(
-    args: argparse.Namespace, objective: ObjectiveMode, repetition: int
+    args: argparse.Namespace,
+    objective: ObjectiveMode,
+    repetition: int,
+    phase: str,
 ) -> list[str]:
     return [
         sys.executable,
@@ -161,6 +266,8 @@ def _worker_command(
         str(args.output_dir),
         "--objective",
         objective.value,
+        "--phase",
+        phase,
         "--repetition",
         str(repetition),
         "--cpu",
@@ -169,14 +276,17 @@ def _worker_command(
 
 
 def _run_worker(
-    args: argparse.Namespace, objective: ObjectiveMode, repetition: int
+    args: argparse.Namespace,
+    objective: ObjectiveMode,
+    repetition: int,
+    phase: str,
 ) -> dict[str, Any]:
     root = Path(__file__).resolve().parents[1]
     env = os.environ.copy()
     env["PYTHONPATH"] = str(root / "src") + os.pathsep + env.get("PYTHONPATH", "")
     try:
         completed = subprocess.run(
-            _worker_command(args, objective, repetition),
+            _worker_command(args, objective, repetition, phase),
             check=False,
             capture_output=True,
             text=True,
@@ -190,6 +300,7 @@ def _run_worker(
             "objective": objective.value,
             "repetition": repetition,
             "segment": SEGMENT,
+            "phase": phase,
             "reason": str(error),
         }
     if completed.returncode != 0:
@@ -199,6 +310,7 @@ def _run_worker(
             "objective": objective.value,
             "repetition": repetition,
             "segment": SEGMENT,
+            "phase": phase,
             "reason": completed.stderr[-4000:] or completed.stdout[-4000:],
         }
     try:
@@ -210,11 +322,140 @@ def _run_worker(
             "objective": objective.value,
             "repetition": repetition,
             "segment": SEGMENT,
+            "phase": phase,
             "reason": f"worker JSON decode failed: {error}",
         }
     if not isinstance(record, dict):
         raise RuntimeError("worker emitted a non-object JSON record")
     return record
+
+
+def _combine_case(
+    baseline: dict[str, Any],
+    candidate: dict[str, Any],
+    reference: dict[str, Any],
+    *,
+    objective: ObjectiveMode,
+    repetition: int,
+    experiment_id: str,
+) -> dict[str, Any]:
+    """Join independent phase evidence without hiding a missing phase."""
+
+    m8 = _load_m8_runner()
+    point = m8._load_script("benchmark_temporal_dominance_real.py", "c_m9_point_comparator")
+    baseline_semantic = baseline.get("semantic")
+    candidate_semantic = candidate.get("semantic")
+    reference_value = reference.get("reference")
+    baseline_match = (
+        baseline_semantic is not None
+        and reference_value is not None
+        and point._reference_matches(baseline_semantic, reference_value)
+    )
+    candidate_match = (
+        candidate_semantic is not None
+        and reference_value is not None
+        and point._reference_matches(candidate_semantic, reference_value)
+    )
+    semantic_match = (
+        baseline.get("status") == "GOAL_FOUND"
+        and candidate.get("status") == "GOAL_FOUND"
+        and baseline.get("candidate_semantic_digest") is None
+        and baseline.get("baseline_semantic_digest") == candidate.get("candidate_semantic_digest")
+        and baseline.get("baseline_semantic_digest") is not None
+    )
+    phase_records = {
+        "baseline": baseline,
+        "candidate": candidate,
+        "reference": reference,
+    }
+    resource_clean = all(phase.get("resource_clean") is True for phase in phase_records.values())
+    resource_evidence_complete = all(
+        phase.get("resource_evidence_complete") is True for phase in phase_records.values()
+    )
+    errors: dict[str, Any] = {}
+    for phase_name, phase in phase_records.items():
+        if phase.get("errors"):
+            errors[phase_name] = phase["errors"]
+        elif phase.get("status") not in {"PASS", "GOAL_FOUND"}:
+            errors[phase_name] = phase.get("reason", phase.get("status"))
+    status = (
+        "PASS"
+        if (
+            all(phase.get("status") in {"PASS", "GOAL_FOUND"} for phase in phase_records.values())
+            and semantic_match
+            and baseline_match
+            and candidate_match
+            and candidate.get("heuristic_scope_match") is True
+            and candidate.get("heuristic_rejected") == 0
+            and (candidate.get("diagnostics") or {}).get("dominance_pruned", 0) == 0
+            and (candidate.get("diagnostics") or {}).get("state_bound_pruned", 0) == 0
+            and resource_clean
+            and resource_evidence_complete
+        )
+        else "REAL_INPUT_24H_RESOURCE_FAIL"
+        if any(
+            phase.get("status") in {"TIMEOUT", "RESOURCE_LIMIT"} for phase in phase_records.values()
+        )
+        else "FAIL"
+    )
+    baseline_diagnostics = baseline.get("diagnostics") or {}
+    candidate_diagnostics = candidate.get("diagnostics") or {}
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "status": status,
+        "experiment_id": experiment_id,
+        "input": baseline.get("input") or candidate.get("input"),
+        "segment": SEGMENT,
+        "objective": objective.value,
+        "repetition": repetition,
+        "adapter_mode": "non_fifo_certified_graph_heuristic_24h_v2",
+        "phase_statuses": {name: phase.get("status") for name, phase in phase_records.items()},
+        "baseline_status": baseline.get("status"),
+        "candidate_status": candidate.get("status"),
+        "reference_status": reference.get("status"),
+        "baseline_semantic_digest": baseline.get("baseline_semantic_digest"),
+        "candidate_semantic_digest": candidate.get("candidate_semantic_digest"),
+        "semantic_match": semantic_match,
+        "reference_match": baseline_match and candidate_match,
+        "baseline_reference_match": baseline_match,
+        "candidate_reference_match": candidate_match,
+        "baseline_semantic": baseline_semantic,
+        "candidate_semantic": candidate_semantic,
+        "reference": reference_value,
+        "baseline_diagnostics": baseline_diagnostics,
+        "candidate_diagnostics": candidate_diagnostics,
+        "baseline_expanded_labels": int(baseline_diagnostics.get("expanded_labels", 0)),
+        "candidate_expanded_labels": int(candidate_diagnostics.get("expanded_labels", 0)),
+        "baseline_queue_peak": int(baseline_diagnostics.get("queue_peak", 0)),
+        "candidate_queue_peak": int(candidate_diagnostics.get("queue_peak", 0)),
+        "heuristic_policy": candidate.get("heuristic_policy"),
+        "heuristic_certificate_digest": candidate.get("heuristic_certificate_digest"),
+        "heuristic_proof_digest": candidate.get("heuristic_proof_digest"),
+        "heuristic_scope_match": candidate.get("heuristic_scope_match", False),
+        "heuristic_rejected": candidate.get("heuristic_rejected", 0),
+        "topology_digest": candidate.get("topology_digest"),
+        "session_identities": {
+            name: phase.get("session_identity") for name, phase in phase_records.items()
+        },
+        "phase_records": phase_records,
+        "errors": errors,
+        "wall_seconds": sum(
+            float(phase.get("wall_seconds", 0.0)) for phase in phase_records.values()
+        ),
+        "resource_clean": resource_clean,
+        "resource_evidence_complete": resource_evidence_complete,
+        "resources_by_phase": {
+            name: {
+                "before": phase.get("resources_before"),
+                "after": phase.get("resources_after"),
+            }
+            for name, phase in phase_records.items()
+        },
+        "cpu": candidate.get("cpu", baseline.get("cpu")),
+        "known_fifo_status": "REAL_INPUT_FIFO_VIOLATED",
+        "production_candidate_enabled": False,
+        "reason": None if status == "PASS" else "independent 24h phase gate failed",
+    }
 
 
 def _identity(
@@ -247,7 +488,7 @@ def _identity(
         "repetitions": args.repetitions,
         "worker_timeout_seconds": args.worker_timeout_seconds,
         "cpu": args.cpu,
-        "adapter_mode": "non_fifo_certified_graph_heuristic_24h_v1",
+        "adapter_mode": "non_fifo_certified_graph_heuristic_24h_v2",
         "heuristic_method": "graph-topological-objective-lower-bound-v1",
         "heuristic_evaluator": "certified:cost-model-graph-lower-bound-v1",
         "dominance_policy": "disabled",
@@ -273,8 +514,12 @@ def _summary(
     deterministic = True
     for objective in selected:
         records = [case for case in cases if case.get("objective") == objective]
-        digests = {case.get("candidate_semantic_digest") for case in records}
-        if len(records) != int(identity["repetitions"]) or len(digests) != 1:
+        digests = {
+            case.get("candidate_semantic_digest")
+            for case in records
+            if case.get("candidate_status") in {"GOAL_FOUND", "PASS"}
+        }
+        if len(records) != int(identity["repetitions"]) or len(digests) != 1 or None in digests:
             deterministic = False
     deltas = [
         {
@@ -335,6 +580,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--objective", choices=tuple(item.value for item in OBJECTIVES))
     parser.add_argument("--repetition", type=int, default=1)
+    parser.add_argument(
+        "--phase",
+        choices=("baseline", "candidate", "reference"),
+        help=argparse.SUPPRESS,
+    )
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     return parser
 
@@ -346,9 +596,9 @@ def _run(args: argparse.Namespace) -> int:
         raise SystemExit(f"M9 only supports {SEGMENT}")
     root = Path(__file__).resolve().parents[1]
     if args.worker:
-        if args.objective is None:
-            raise SystemExit("worker requires --objective")
-        print(json.dumps(_jsonable(_worker(args)), ensure_ascii=False, sort_keys=True))
+        if args.objective is None or args.phase is None:
+            raise SystemExit("worker requires --objective and --phase")
+        print(json.dumps(_jsonable(_worker_phase(args)), ensure_ascii=False, sort_keys=True))
         return 0
     m8 = _load_m8_runner()
     point = m8._load_script("benchmark_temporal_dominance_real.py", "c_m9_point_runner")
@@ -401,7 +651,18 @@ def _run(args: argparse.Namespace) -> int:
                 key = (objective.value, repetition)
                 if key in existing:
                     continue
-                record = _run_worker(args, objective, repetition)
+                phases = {
+                    phase: _run_worker(args, objective, repetition, phase)
+                    for phase in ("baseline", "candidate", "reference")
+                }
+                record = _combine_case(
+                    phases["baseline"],
+                    phases["candidate"],
+                    phases["reference"],
+                    objective=objective,
+                    repetition=repetition,
+                    experiment_id=identity["experiment_id"],
+                )
                 record.update(
                     {
                         "experiment_id": identity["experiment_id"],
