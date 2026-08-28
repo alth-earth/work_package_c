@@ -366,10 +366,26 @@ def _scan_objective(
     deterministic = True
     for edge_index, edge in enumerate(edges):
         key = (objective_name, edge_index)
+        edge_scope = TemporalScope.from_mapping({**scope.mapping, "edge_id": edge})
         if key in existing:
             record = existing[key]
+            probe_records = record.get("probe_records")
+            if (
+                record.get("schema_version") != SCHEMA_VERSION
+                or record.get("input") != fixture.input_name
+                or record.get("segment") != fixture.segment
+                or record.get("objective") != objective_name
+                or record.get("edge_id") != [list(edge[0]), list(edge[1])]
+                or record.get("scope_digest") != edge_scope.digest
+                or record.get("dominance_policy") != "disabled"
+                or record.get("dominance_pruned") != 0
+                or not isinstance(probe_records, list)
+                or len(probe_records) != len(probes)
+                or record.get("probe_count") != len(probes)
+            ):
+                raise RuntimeError("resume evidence contains an identity-mismatched edge record")
             intervals.append(record)
-            for probe_record in record.get("probe_records", []):
+            for probe_record in probe_records:
                 evidence = probe_record.get("evidence", {})
                 status = evidence.get("status")
                 if isinstance(status, str):
@@ -389,7 +405,6 @@ def _scan_objective(
             edge[0], edge[1], minimum_samples=request.edge_sample_count
         )[0]
         domain = _edge_domain(planner, edge, fixture.segment)
-        edge_scope = TemporalScope.from_mapping({**scope.mapping, "edge_id": edge})
         evaluator = TemporalEtaIntervalEvaluator(
             planner.risk_sampler,
             planner.vessel_model,
