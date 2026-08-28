@@ -1477,3 +1477,35 @@ expanded test-only feasibility evidence），不等于生产实现或 candidate 
 默认关闭和所有 Winter/P2.1/P3/ARA* 冻结不变。下一步只能另立带业务字段/取消协议/资源
 预算的 P0.2 bounded implementation 计划，或继续研究 evaluator/interval 证明；不得自动
 进入真实 planner、Winter 或 production。
+
+### 【2026-08-29 | PLANNED】P0.2-M1：bounded 非 FIFO 业务语义与资源边界
+
+P0.2-M0 已证明有限状态域的 exact-arrival label-correcting/Pareto 可行，但仍缺少可审计
+的边评估计数、业务语义载荷和更清晰的 bounded failure 证据。本轮从 clean `4fa935a`
+建立隔离分支 `research/p02-m1-nonfifo-bounded-20260829`，只扩展 C 内部研究 sidecar；
+不修改 B/C、C/D 合同、ingress/service、公共 planner、正式 `plan()`、默认
+`TemporalDominancePolicy.disabled()`，不启动真实 runner、Winter、P2.1、P3、ARA* 或
+candidate。
+
+**算法边界。** 保留节点 + exact UTC arrival 的标签键和无 FIFO 假设的 label-correcting
+队列。为 scalar/vector transition 增加统一的可审计业务载荷（ETA、speed、risk、cost、
+confidence、source IDs 等只作为研究证据），语义 digest 必须涵盖路径、到达、目标向量和
+载荷。新增 `edge_evaluations` 硬上限及确定性计数；expansion/label/queue/edge 上限触顶
+统一返回 `RESOURCE_LIMIT`，不返回部分 route。取消、horizon、非有限/非法 evaluator 和
+hard-mask 异常均保持 fail-closed。
+
+**Pareto 安全规则。** `pareto_pruning=False` 继续为默认；显式开启时只能丢弃同一 exact
+state 上新生成且严格逐分量支配的标签。不同精确到达、相同成本不同路径、已扩展标签和
+旧 frontier 永不删除。目标结果使用稳定 lexicographic 选择，同时保留完整 goal frontier，
+并以独立 zero-heuristic exact-arrival Dijkstra 对照路线、ETA、成本和业务载荷。
+
+**验收矩阵。** 补充 2×2 非 FIFO 后到达更优、同桶不同 exact ETA、同 exact state 的 vector
+支配与 equal-cost 审计、周期/重复标签、edge/label/queue/expansion 上限、取消、horizon、
+hard-mask/evaluator failure、业务载荷和 semantic digest determinism。所有失败结果必须
+没有成功 route；正式 planner 回归和 active/archive 导入边界必须不变。
+
+**收口分支。** 矩阵、oracle、业务载荷、资源计数和 fail-closed 全部通过时仅记为
+`READY_FOR_P0.2_IMPLEMENTATION_PLAN` 的 strengthened research evidence；不代表真实
+输入可用或生产资格。任一误剪枝、语义/计数不一致、identity 漂移或公共路径变化均为
+`NO_PERFORMANCE_PROOF/FAIL` 或 `INVALID/PENDING`。实验构件如需生成只写
+`.runtime/experiments/`，完成 clean 验证后删除辅助 worktree，保留本地分支，不 push。
