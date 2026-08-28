@@ -180,7 +180,7 @@ def search_non_fifo(
                 transition = evaluate_edge(label.node, neighbor, label.arrival_time)
                 if not isinstance(transition, NonFifoTransition):
                     raise TypeError("non-FIFO evaluator must return NonFifoTransition")
-            except Exception as error:  # noqa: BLE001 - evidence must retain fixture failures
+            except Exception as error:
                 errors.append(f"{type(error).__name__}:{error}")
                 continue
             if transition.arrival_time < departure:
