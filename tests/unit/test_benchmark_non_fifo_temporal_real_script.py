@@ -19,7 +19,7 @@ _SPEC.loader.exec_module(_MODULE)
 
 def test_runner_has_explicit_real_adapter_schema_and_safe_defaults() -> None:
     assert _MODULE.SCHEMA_VERSION == "c.p0.2-temporal-adapter-real.v1"
-    assert _MODULE.SEGMENTS == {"executable_0_6h", "rolling_0_24h"}
+    assert {"executable_0_6h", "rolling_0_24h"} == _MODULE.SEGMENTS
     assert _MODULE._parser().parse_args(
         [
             "--risk-window-commit",
