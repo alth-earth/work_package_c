@@ -228,6 +228,49 @@ def _resource_clean(before: dict[str, Any], after: dict[str, Any]) -> bool:
     return True
 
 
+def _resource_evidence_complete(record: dict[str, Any], cpu: int) -> bool:
+    """Require the snapshots needed to audit one bounded worker."""
+
+    before = record.get("resources_before")
+    after = record.get("resources_after")
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return False
+    required = {"process_swap_kib", "host_swap_pages", "cpu_affinity", "max_rss_kib", "cgroup"}
+    if not required.issubset(before) or not required.issubset(after):
+        return False
+    if not isinstance(before["cpu_affinity"], list) or not before["cpu_affinity"]:
+        return False
+    if before["cpu_affinity"] != after["cpu_affinity"]:
+        return False
+    if cpu >= 0 and before["cpu_affinity"] != [cpu]:
+        return False
+    if not isinstance(before["max_rss_kib"], int) or before["max_rss_kib"] <= 0:
+        return False
+    if not isinstance(after["max_rss_kib"], int) or after["max_rss_kib"] <= 0:
+        return False
+    for snapshot in (before, after):
+        swap_pages = snapshot["host_swap_pages"]
+        if not isinstance(swap_pages, dict) or not all(
+            isinstance(swap_pages.get(key), int) and swap_pages[key] >= 0
+            for key in ("pswpin", "pswpout")
+        ):
+            return False
+        if snapshot["process_swap_kib"] is not None and not isinstance(
+            snapshot["process_swap_kib"], int
+        ):
+            return False
+        cgroup = snapshot["cgroup"]
+        if not isinstance(cgroup, dict):
+            return False
+        events = cgroup.get("memory_events")
+        if not isinstance(events, dict) or not all(
+            isinstance(events.get(key), int)
+            for key in ("oom", "oom_kill", "oom_group_kill")
+        ):
+            return False
+    return True
+
+
 def _fixture_args(args: argparse.Namespace) -> argparse.Namespace:
     return argparse.Namespace(
         mode="resource-frontier",
@@ -579,6 +622,9 @@ def _summary(cases: list[dict[str, Any]], identity: dict[str, Any]) -> dict[str,
         for case in cases
     )
     resource = bool(cases) and all(case.get("resource_clean") is True for case in cases)
+    resource_evidence = bool(cases) and all(
+        _resource_evidence_complete(case, int(identity["cpu"])) for case in cases
+    )
     pruning = sum(int(case.get("state_bound_pruned", 0)) for case in cases)
     deterministic = True
     for objective in OBJECTIVES:
@@ -594,7 +640,13 @@ def _summary(cases: list[dict[str, Any]], identity: dict[str, Any]) -> dict[str,
             deterministic = False
     if not complete:
         status = "INVALID/PENDING"
-    elif not semantic or not resource or not deterministic or pruning == 0:
+    elif (
+        not semantic
+        or not resource
+        or not resource_evidence
+        or not deterministic
+        or pruning == 0
+    ):
         status = "NO_PERFORMANCE_PROOF/FAIL"
     else:
         status = "READY_FOR_P0.2-ADAPTER_RESOURCE_BOUND_PLAN"
@@ -606,6 +658,7 @@ def _summary(cases: list[dict[str, Any]], identity: dict[str, Any]) -> dict[str,
         "case_count": len(cases),
         "semantic_match": semantic,
         "resource_clean": resource,
+        "resource_evidence_complete": resource_evidence,
         "deterministic": deterministic,
         "observed_state_bound_pruning": pruning,
         "dominance_policy": "disabled",
