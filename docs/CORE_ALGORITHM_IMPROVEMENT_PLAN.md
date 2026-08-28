@@ -1429,7 +1429,7 @@ Winter 或 candidate。
 本轮从正式 clean `1ec20c7` 建立隔离分支
 `research/p02-m0-nonfifo-label-correcting-20260829`，先提交计划
 `5f1a966`，实现与测试提交为 `5589aaf`，随后以 `d18a81f` 修正隔离环境下独立
-oracle 的测试导入并冻结默认边界。改动只位于 C 内部
+oracle 的测试导入；`1ded502` 冻结默认关闭边界。改动只位于 C 内部
 `planners/non_fifo_feasibility.py` 和对应 test-only fixture；没有修改 B/C、C/D 合同、
 ingress/service、公共 planner、正式 `TemporalLabelAStar.plan()`、默认
 `TemporalDominancePolicy.disabled()`、Winter/P2.1/P3/ARA* 或生产 candidate，没有写
