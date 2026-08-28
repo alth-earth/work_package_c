@@ -195,13 +195,19 @@ def _scope(
     probes: tuple[datetime, ...],
     policy: EtaRefinementPolicy,
 ) -> TemporalScope:
-    base = planner.temporal_scope(request, edge_ids=edges, probe_times=probes)
+    # Keep the per-edge certificate scope compact.  The complete qualification
+    # domain is still identity-bound by stable digests; putting thousands of
+    # edge/probe values directly into every scope would make every digest
+    # comparison quadratic in the scan size.
+    base = planner.temporal_scope(request)
     return TemporalScope.from_mapping(
         {
             **base.mapping,
             "eta_policy_digest": canonical_digest(policy),
             "edge_evaluator_digest": "explicit:real-analytic-eta-v1",
             "evaluator_certification": "uncertified:real-risk-window-v1",
+            "edge_set_digest": canonical_digest(edges),
+            "probe_set_digest": canonical_digest(probes),
             "fifo_tolerance_seconds": FIFO_TOLERANCE_SECONDS,
             "interval_probe_minutes": BASE_PROBE_MINUTES,
             "boundary_refinement_levels": MAX_REFINEMENT_LEVELS,
@@ -381,11 +387,12 @@ def _scan_objective(
             edge[0], edge[1], minimum_samples=request.edge_sample_count
         )[0]
         domain = _edge_domain(planner, edge, fixture.segment)
+        edge_scope = TemporalScope.from_mapping({**scope.mapping, "edge_id": edge})
         evaluator = TemporalEtaIntervalEvaluator(
             planner.risk_sampler,
             planner.vessel_model,
             request,
-            scope,
+            edge_scope,
             edge_sample_points=points,
             edge_distance_km=distance,
             planner_config=fixture.planner_config,
@@ -396,7 +403,7 @@ def _scan_objective(
         )
         probe_records: list[dict[str, Any]] = []
         for probe in probes:
-            evidence = evaluator.evaluate_analytic(probe, domain, scope=scope)
+            evidence = evaluator.evaluate_analytic(probe, domain, scope=edge_scope)
             serialized = _serialize_evidence(evidence)
             status_counts[evidence.status.value] += 1
             if evidence.reason:
@@ -419,7 +426,7 @@ def _scan_objective(
             "edge_id": [list(edge[0]), list(edge[1])],
             "edge_index": edge_index,
             "probe_count": len(probe_records),
-            "scope_digest": scope.digest,
+            "scope_digest": edge_scope.digest,
             "dominance_policy": "disabled",
             "dominance_pruned": 0,
             "probe_records": probe_records,
