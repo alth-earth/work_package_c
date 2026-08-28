@@ -1423,3 +1423,54 @@ failure、arrival-before-departure、取消、horizon 和各资源上限；每�
 失效或 identity 漂移记为 `NO_PERFORMANCE_PROOF/FAIL` 或 `INVALID/PENDING`。实验构件只写
 `.runtime/experiments/`，本地提交后移除辅助 worktree，不 push，不自动进入真实 runner、
 Winter 或 candidate。
+
+### 【2026-08-29 | COMPLETED】P0.2-M0：非 FIFO label-correcting/Pareto 可行性扩展
+
+本轮从正式 clean `1ec20c7` 建立隔离分支
+`research/p02-m0-nonfifo-label-correcting-20260829`，先提交计划
+`5f1a966`，实现与测试提交为 `5589aaf`。改动只位于 C 内部
+`planners/non_fifo_feasibility.py` 和对应 test-only fixture；没有修改 B/C、C/D 合同、
+ingress/service、公共 planner、正式 `TemporalLabelAStar.plan()`、默认
+`TemporalDominancePolicy.disabled()`、Winter/P2.1/P3/ARA* 或生产 candidate，没有写
+formal latest、replanning baseline 或 frozen artifact，也没有 push。
+
+**label-correcting/Pareto 语义。** 新增向量目标的
+`NonFifoParetoTransition`、`NonFifoParetoLabel`、`NonFifoParetoSearchResult` 和显式
+`search_non_fifo_pareto(...)` 研究接口。标签状态包含节点和 exact UTC arrival；不同精确
+到达即使落在同一时间桶也不可互相支配。Pareto 过滤只在同一 exact state 对“新生成”且
+逐分量被支配的标签生效，旧标签（包括已扩展标签）不删除；`pareto_pruning=False`
+可用于完全保守的有限域枚举。搜索以 lexicographic objective vector 选取结果，但保留
+完整 goal frontier，未引入 FIFO 假设或近似/beam 剪枝。
+
+**失败和终止语义。** `GOAL_FOUND`、`EXHAUSTED`、`RESOURCE_LIMIT`、`CANCELLED` 和
+`EVALUATOR_FAILURE` 均显式返回；资源仍受正整数的 expansion/label/queue 上限约束。
+取消、资源超限、非法/非有限 evaluator、arrival 不严格晚于当前标签、horizon 超限和
+hard-mask 类异常均 fail-closed，失败结果不携带部分成功 route。semantic digest 采用
+可复现的 UTC/transition 序列编码。
+
+**可复现验证矩阵。** `tests/unit/test_non_fifo_feasibility.py` 的非 FIFO 聚焦矩阵为
+`15 passed`，覆盖：
+
+- 2×2 后到达更优 suffix，以及同节点不同 exact arrival 的跨时刻不剪枝；
+- 同 exact arrival 的二维 Pareto 新标签安全剪枝和 goal frontier；
+- 同一 fixture 两次运行的 semantic digest、生成计数和剪枝计数确定一致；
+- 独立 `tests/reference_temporal_oracle.py` zero-heuristic Dijkstra 的路线、到达和成本
+  对照；
+- 周期/重复状态的 label 上限、取消、horizon、arrival-before-departure、严格到达和
+  evaluator failure。
+
+相关 temporal label/qualification/corridor/oracle 聚焦测试共 `93 passed`；全量 C 测试
+为 `432 passed, 3 skipped`，跳过仅因并行 orchestrator worktree 中退休的 M2J 诊断脚本
+不存在。变更文件 Ruff/format、全量 `ruff check src tests`、`uv lock --check --offline`、
+CLI smoke 和 `git diff --check` 通过。隔离 worktree 的 `UV_OFFLINE=1 make check` 因
+其本地没有 `.mamba-env/bin/uv` 在 Makefile lint 前置处退出；未修改环境或 lock，直接
+pytest/Ruff/lock 检查作为等价证据保留。
+
+**最终状态和边界。** 本轮仅证明有限非 FIFO 状态域可以在 exact-arrival 标签下进行
+保守、可终止、可取消、可审计的研究搜索，仍不宣称连续海洋模型全局最优，也未把
+sidecar 接入真实 runner。状态保持 `READY_FOR_P0.2_IMPLEMENTATION_PLAN`（现在有
+expanded test-only feasibility evidence），不等于生产实现或 candidate 资格；真实输入
+`REAL_INPUT_FIFO_VIOLATED`、24h `REAL_INPUT_6H_FEASIBLE_24H_RESOURCE_FAIL`、dominance
+默认关闭和所有 Winter/P2.1/P3/ARA* 冻结不变。下一步只能另立带业务字段/取消协议/资源
+预算的 P0.2 bounded implementation 计划，或继续研究 evaluator/interval 证明；不得自动
+进入真实 planner、Winter 或 production。
