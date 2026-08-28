@@ -1429,7 +1429,8 @@ Winter 或 candidate。
 本轮从正式 clean `1ec20c7` 建立隔离分支
 `research/p02-m0-nonfifo-label-correcting-20260829`，先提交计划
 `5f1a966`，实现与测试提交为 `5589aaf`，随后以 `d18a81f` 修正隔离环境下独立
-oracle 的测试导入；`1ded502` 冻结默认关闭边界。改动只位于 C 内部
+oracle 的测试导入；`1ded502` 冻结默认关闭边界，`03845cd` 保留 equal-cost 路径审计。
+改动只位于 C 内部
 `planners/non_fifo_feasibility.py` 和对应 test-only fixture；没有修改 B/C、C/D 合同、
 ingress/service、公共 planner、正式 `TemporalLabelAStar.plan()`、默认
 `TemporalDominancePolicy.disabled()`、Winter/P2.1/P3/ARA* 或生产 candidate，没有写
@@ -1451,7 +1452,7 @@ hard-mask 类异常均 fail-closed，失败结果不携带部分成功 route。s
 可复现的 UTC/transition 序列编码。
 
 **可复现验证矩阵。** `tests/unit/test_non_fifo_feasibility.py` 的非 FIFO 聚焦矩阵为
-`15 passed`，覆盖：
+`16 passed`，覆盖：
 
 - 2×2 后到达更优 suffix，以及同节点不同 exact arrival 的跨时刻不剪枝；
 - 同 exact arrival 的二维 Pareto 新标签安全剪枝和 goal frontier；
@@ -1461,8 +1462,8 @@ hard-mask 类异常均 fail-closed，失败结果不携带部分成功 route。s
 - 周期/重复状态的 label 上限、取消、horizon、arrival-before-departure、严格到达和
   evaluator failure。
 
-相关 temporal label/qualification/corridor/oracle 聚焦测试共 `93 passed`；正式工作树上
-`UV_OFFLINE=1 make check` 最终为 `435 passed`，无跳过；变更文件 Ruff/format、全量
+相关 temporal label/qualification/corridor/oracle 聚焦测试共 `94 passed`；正式工作树上
+`UV_OFFLINE=1 make check` 最终为 `436 passed`，无跳过；变更文件 Ruff/format、全量
 `ruff check src tests`、`uv lock --check --offline`、offline sync、CLI smoke 和
 `git diff --check` 均通过。隔离 worktree 的第一次 Make 尝试曾因其本地没有
 `.mamba-env/bin/uv` 在 lint 前置处退出，未修改环境或 lock；集成后的正式工作树复跑已
