@@ -2023,3 +2023,46 @@ identity `c.p0.2-temporal-topological-bound-real.v1-a94a3308989c700c`，`6/6 PAS
 `READY_FOR_P0.2-TOPOLOGICAL-ARRIVAL-BOUND-REAL-REVIEW`，仅可用于另立更强资源/走廊计划；
 candidate、Winter、P2.1、P3、ARA* 和 dominance 继续默认关闭。完成验证后移除辅助 worktree，
 保留研究分支和实验构件。
+
+### 【2026-08-29 | PLANNED】P0.2-M8：certified reverse-graph heuristic ordering
+
+M7 的真实 6h 结果表明，拓扑 arrival envelope 与 M6 在当前矩形网格上产生相同的 pruning；
+而 M4 的 24h 失败发生在 non-FIFO 适配器强制零启发式之后的 exact-arrival 队列增长。本轮
+不再增加一种 label 剪枝，而是研究一个独立的出队排序改进：把已经审计的反向拓扑 travel
+lower bound 转换为 objective lower-bound heuristic。启发式只改变优先级，不删除 label、
+不改变 arrival state 语义；zero-heuristic exact-arrival Dijkstra 仍是正确性 oracle，真实
+FIFO 反例和 24h 资源失败事实不覆盖。
+
+**治理与边界。** 从当前 clean M7 tip `1e13cec` 建立分支
+`research/p02-m8-certified-heuristic-20260829` 和独立 worktree，先提交本段计划。新增
+C 内部 `TemporalHeuristicCertificate`、planner/session identity fence 和显式
+`run_non_fifo_temporal_certified_heuristic_search(...)` 研究适配器；
+`TemporalDominancePolicy.disabled()`、普通 non-FIFO adapter、正式 `plan()` 默认行为、
+B/C 与 C/D 合同、ingress/service、公共 planner、candidate/Winter/P2.1/P3/ARA* 全部保持
+不变。启发式证书只接受完整有限 graph universe、scope/evaluator 完全匹配、反向 lower-bound
+map 完备、cost weights 非负且 consistency 已证明的输入；任何缺失、未知、scope/policy/
+checkpoint 漂移均 fail-closed，并退化为明确失败而不是默默宣称 heuristic 生效。
+
+**正确性规则。** 对每个节点的 `h(v)` 只由保守反向 travel lower bound 和当前
+`CostModel` 的非负 travel/distance 权重计算；edge lower-bound adjacency 闭包保证
+`h(u) <= c(u,v) + h(v)`，因此在有限 exact-arrival label 图上保持 admissible/consistent。
+启发式不参与节点/到达包络排除，也不删除已扩展 label；同一 request 先以
+`use_heuristic=False` 完成 baseline，再以证书化 heuristic 运行 candidate。candidate 必须与
+baseline 和独立 zero-heuristic oracle 的路线、ETA、速度、风险、成本、confidence、source IDs
+和失败语义一致，确定性、checkpoint slice→restore 一致，且 dominance/state-bound pruning
+统计均为零。scope、objective、grid/vessel/config、ETA/search limits、evaluator 和证书 digest
+均写入 session identity。
+
+**验证顺序。** 先跑 synthetic small/medium/stress × 三 objective 的 certified、scope
+mismatch、incomplete、non-admissible/unknown-evaluator 矩阵；certified 至少观察到 priority
+ordering 的 expansion/queue 改善或明确记录“无改善”，但不以合成速度替代真实结论；所有拒绝
+场景 heuristic 生效标志和任何 pruning 必须为零。synthetic 全通过且 clean identity 不漂移
+后，仅对已有完整 145 帧 holdout `executable_0_6h` 做新的 2-repeat dominance-disabled
+诊断，不启动 24h、不提高 `50k/100k/50k/400k` 限制。runner 只写新的
+`.runtime/experiments/` 目录并保存 manifest/cases/summary/heartbeat/终态标记。
+
+**收口分支。** 若所有语义、determinism、fail-closed、identity 和资源证据通过，仅标记
+`READY_FOR_P0.2-CERTIFIED-HEURISTIC-REAL-REVIEW`；若证书不一致、语义变化、启发式不一致或
+资源证据缺失，标记 `NO_PERFORMANCE_PROOF/FAIL` 或 `INVALID/PENDING`。即使真实 6h 有改善，
+也只能另立 24h 资源审计计划，不自动重跑 Winter 或启用 candidate。完成后移除 M8 辅助 worktree，
+保留本地研究分支和实验构件，不 push。
