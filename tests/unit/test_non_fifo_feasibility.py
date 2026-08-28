@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import sys
 from datetime import UTC, datetime, timedelta
+from importlib.util import module_from_spec, spec_from_file_location
+from pathlib import Path
 
 import pytest
 
@@ -13,6 +16,18 @@ from arctic_route_planning.planners.non_fifo_feasibility import (
     search_non_fifo,
     search_non_fifo_pareto,
 )
+
+_REFERENCE_SPEC = spec_from_file_location(
+    "c_non_fifo_reference_oracle",
+    Path(__file__).parents[1].joinpath("reference_temporal_oracle.py"),
+)
+if _REFERENCE_SPEC is None or _REFERENCE_SPEC.loader is None:
+    raise RuntimeError("unable to load the reference temporal oracle")
+_REFERENCE = module_from_spec(_REFERENCE_SPEC)
+sys.modules[_REFERENCE_SPEC.name] = _REFERENCE
+_REFERENCE_SPEC.loader.exec_module(_REFERENCE)
+OracleEdge = _REFERENCE.OracleEdge
+ReferenceTemporalOracle = _REFERENCE.ReferenceTemporalOracle
 
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -301,8 +316,6 @@ def test_pareto_never_cross_prunes_different_exact_arrivals() -> None:
 
 
 def test_pareto_scalar_mode_matches_independent_non_fifo_oracle() -> None:
-    from tests.reference_temporal_oracle import OracleEdge, ReferenceTemporalOracle
-
     graph = {
         "s": ("u", "x"),
         "x": ("u",),
