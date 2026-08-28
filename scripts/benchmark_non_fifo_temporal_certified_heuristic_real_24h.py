@@ -361,7 +361,6 @@ def _combine_case(
     semantic_match = (
         baseline.get("status") == "GOAL_FOUND"
         and candidate.get("status") == "GOAL_FOUND"
-        and baseline.get("candidate_semantic_digest") is None
         and baseline.get("baseline_semantic_digest") == candidate.get("candidate_semantic_digest")
         and baseline.get("baseline_semantic_digest") is not None
     )

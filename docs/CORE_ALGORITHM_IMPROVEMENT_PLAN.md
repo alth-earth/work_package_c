@@ -2145,13 +2145,14 @@ state-bound/arrival pruning、beam/近似剪枝或 reference route 注入；所�
 剪枝计数必须为零。真实输入已知 `REAL_INPUT_FIFO_VIOLATED`，本轮不重新判定 FIFO、不授权
 dominance，Dijkstra 只作正确性 oracle。
 
-**执行顺序。** 新增独立 `c.p0.2-temporal-certified-heuristic-real-24h.v1` runner，支持
+**执行顺序。** 新增独立 `c.p0.2-temporal-certified-heuristic-real-24h.v2` runner，支持
 `rolling_0_24h`、`--resume`、固定 CPU 和 4 GiB `MemoryMax`/0 swap cgroup，逐 case fsync
-保存 manifest/cases/resource-frontier/summary/heartbeat/终态标记。先以 holdout fastest 单目标
-短探针确认 24h worker 能启动并持续产出证据；短探针通过后按交替顺序运行 holdout 三目标，随后
-仅在资源和身份均正常时运行 development 三目标。任何单目标 timeout/RESOURCE_LIMIT 只停止
-该 case，继续其他 case；身份漂移、语义与 oracle 不一致、fail-open pruning 或资源污染立即
-停止全局实验。绝不启动 full-voyage 或 Winter 复测。
+保存 manifest/cases/resource-frontier/summary/heartbeat/终态标记。baseline、candidate 和
+reference 必须分别在独立 phase worker 中运行，避免 baseline 超时掩盖 candidate 证据。先以
+holdout fastest 单目标短探针确认 24h worker 能启动并持续产出证据；短探针通过后按交替顺序
+运行 holdout 三目标，随后仅在资源和身份均正常时运行 development 三目标。任何单目标
+timeout/RESOURCE_LIMIT 只停止该 case，继续其他 case；身份漂移、语义与 oracle 不一致、
+fail-open pruning 或资源污染立即停止全局实验。绝不启动 full-voyage 或 Winter 复测。
 
 **通过与失败。** 每个完成 case 必须同时满足 baseline/candidate/reference 语义一致、
 deterministic、heuristic scope match、rejection=0、dominance/state-bound pruning=0，且
@@ -2164,3 +2165,47 @@ CPU/RSS/swap/OOM/timeout 证据完整。所有目标均完成则状态为
 **收口。** 只在独立实验完成后追加本段的 COMPLETED/INVALID 证据，保留 M0–M8 历史和原始
 构件；运行聚焦测试、正式 `UV_OFFLINE=1 make check`、Ruff、lock/sync、CLI smoke 和
 `git diff --check`，本地 fast-forward 集成后移除辅助 worktree，保留研究分支和实验目录，不 push。
+
+### 【2026-08-29 | COMPLETED】P0.2-M9：certified heuristic long-horizon resource audit
+
+本轮从 M8 clean tip `99c4b28` 建立隔离分支
+`research/p02-m9-heuristic-24h-20260829` 和 worktree，先提交计划
+`eee2529`。24h runner 初版为 `21485e6`，修正冻结 fixture loader 为 `e54ba26`；随后发现
+baseline/参考搜索在长时限内会阻塞 candidate，故在不改变算法语义的前提下以
+`0279922`、`2f3c389` 将 runner 升级为 v2 phase-isolated：baseline、certified candidate、
+zero-heuristic reference 各自独立进程、deadline、RSS/cgroup 快照和失败记录。所有提交均只
+涉及 C 内部研究 runner/test/docs；未修改合同、ingress/service、正式 planner 或默认路径，未
+启用 candidate/Winter/P2.1/P3/ARA*，未提高 `50k/100k/50k/400k` 限制，也未 push。
+
+**执行围栏。** 复用完整 145 帧 holdout/development RiskFrame 和冻结 24h route-plan-set，
+`rolling_0_24h` 起点/目标由 fixture 自动解析；每个 phase 使用 CPU=2、`MemoryMax=4G`、
+`MemorySwapMax=0`，所有资源快照 `resource_clean=true`、`resource_evidence_complete=true`。
+candidate 仍只安装已通过 M8 的反向图 objective lower-bound certificate，所有记录
+`heuristic_scope_match=true`、`heuristic_rejected=0`、`dominance_pruned=0`、
+`state_bound_pruned=0`。
+
+**holdout 24h。** 权威 v2 构件分别为
+`/root/my_project/.runtime/experiments/c-p02-m9-certified-heuristic-real-holdout-24h-phased-fastest-20260829-r2/`、
+`...-phased-low-risk-20260829-r1/` 和
+`...-phased-recommended-20260829-r1/`。三项目 baseline 均在冻结 `queue=50,000` 处
+`RESOURCE_LIMIT`（expanded 分别为 `8146/8151/8156`），reference 均因同一 queue 上限失败。
+candidate fastest 找到 `GOAL_FOUND`（expanded `3645`、queue peak `24867`）；low_risk 和
+recommended 分别在 queue 上限处 `RESOURCE_LIMIT`（expanded `7600`、`7366`）。因为 baseline
+和 reference 没有完成路线，不能宣称 24h candidate 的语义等价或性能通过；三份汇总均为
+`REAL_INPUT_24H_RESOURCE_FAIL`。
+
+**development 24h。** 权威构件为
+`/root/my_project/.runtime/experiments/c-p02-m9-certified-heuristic-real-development-24h-phased-all-20260829-r1/`，
+三项目均保留完整 phase 证据并汇总为 `REAL_INPUT_24H_RESOURCE_FAIL`。baseline expanded
+为 `8459/8562/8499` 且 queue=`50000`；candidate fastest 与 recommended 找到
+`GOAL_FOUND`（分别 expanded `2486`/`6763`、queue `16376`/`42503`），low_risk 在 queue
+上限处 `RESOURCE_LIMIT`（expanded `8188`）；reference 三项目均触及 queue 上限。由于缺少
+baseline/reference 完成路线，development 也不满足语义门。
+
+**结论与下一步。** M9 证明证书化启发式能在部分真实 24h 输入/目标中独立推进并显著降低
+queue/expansion，但在冻结资源和非 FIFO 语义下仍不能使所有目标完成，综合状态固定为
+`REAL_INPUT_24H_RESOURCE_FAIL`，不覆盖 M4 的历史结论。真实 FIFO
+`REAL_INPUT_FIFO_VIOLATED` 不变；不把 candidate-only 路线包装成正确性或性能通过，不启动
+full-voyage/Winter，也不启用 candidate。下一步应另立“带完整 baseline/reference 证据的
+24h 资源限界”或 proof-carrying corridor/state envelope 计划，继续默认关闭并保持当前资源上限。
+完成验证后移除本轮辅助 worktree，保留研究分支和实验构件，不 push。
