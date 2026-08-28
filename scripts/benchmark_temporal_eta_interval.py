@@ -324,6 +324,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("synthetic", "real"), default="synthetic")
     parser.add_argument("--profile", choices=tuple(PROFILES), default="small")
+    parser.add_argument("--all-profiles", action="store_true")
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--risk-window-commit", type=Path)
     parser.add_argument("--route-plan-set", type=Path)
@@ -336,10 +337,11 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _identity(args: argparse.Namespace, root: Path) -> dict[str, Any]:
+    profiles = tuple(PROFILES) if args.all_profiles else (args.profile,)
     identity: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "mode": args.mode,
-        "profile": args.profile if args.mode == "synthetic" else None,
+        "profiles": profiles if args.mode == "synthetic" else None,
         "segment": args.segment,
         "implementation": _implementation_identity(root),
         "git": _git_identity(root),
@@ -356,13 +358,16 @@ def _identity(args: argparse.Namespace, root: Path) -> dict[str, Any]:
             "sha256": _tree_digest(config_root),
         }
     else:
-        identity["profile_shape"] = PROFILES[args.profile]
+        identity["profile_shapes"] = {
+            profile: PROFILES[profile] for profile in profiles
+        }
     identity["experiment_id"] = f"{SCHEMA_VERSION}-{_digest(identity)[:16]}"
     return identity
 
 
 def _run(args: argparse.Namespace) -> int:
     root = Path(__file__).resolve().parents[1]
+    profiles = tuple(PROFILES) if args.all_profiles else (args.profile,)
     output = args.output_dir.resolve()
     output.mkdir(parents=True, exist_ok=True)
     required_real_args = ("risk_window_commit", "route_plan_set", "config_root", "segment")
@@ -415,21 +420,22 @@ def _run(args: argparse.Namespace) -> int:
             "hard_mask_discontinuity",
         )
         existing = {
-            (item.get("objective"), item.get("scenario"))
+            (item.get("profile"), item.get("objective"), item.get("scenario"))
             for item in _read_jsonl(cases_path)
         }
-        for objective in OBJECTIVES:
-            for scenario in scenarios:
-                key = (objective, scenario)
-                if key in existing:
-                    continue
-                case = _synthetic_case(args.profile, objective, scenario)
-                cases.append(case)
-                _append_jsonl(cases_path, case)
-                _append_jsonl(interval_path, case)
-                _heartbeat(heartbeat_path, status="RUNNING", completed_cases=len(cases))
+        for profile in profiles:
+            for objective in OBJECTIVES:
+                for scenario in scenarios:
+                    key = (profile, objective, scenario)
+                    if key in existing:
+                        continue
+                    case = _synthetic_case(profile, objective, scenario)
+                    cases.append(case)
+                    _append_jsonl(cases_path, case)
+                    _append_jsonl(interval_path, case)
+                    _heartbeat(heartbeat_path, status="RUNNING", completed_cases=len(cases))
         all_cases = _read_jsonl(cases_path)
-        expected = len(OBJECTIVES) * len(scenarios)
+        expected = len(profiles) * len(OBJECTIVES) * len(scenarios)
         matrix_pass = len(all_cases) == expected and all(
             item.get("status") == item.get("expected_status") for item in all_cases
         )
