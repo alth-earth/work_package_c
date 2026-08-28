@@ -6,6 +6,7 @@ from datetime import timedelta
 
 import pytest
 
+from arctic_route_planning.planners.eta_refinement import EtaRefinementPolicy
 from arctic_route_planning.planners.temporal_bounds import (
     TemporalStateBoundCertificate,
     TemporalStateBoundStatus,
@@ -428,6 +429,19 @@ def test_checkpoint_restore_rejects_dominance_policy_change() -> None:
             coverage_complete=True,
         )
     )
+
+    with pytest.raises(TemporalSessionIdentityMismatch, match="identity fence"):
+        planner.restore_session(checkpoint, request=request)
+
+
+def test_checkpoint_restore_rejects_eta_policy_change() -> None:
+    planner = _planner()
+    request = PlanningRequest(start=(1, 0), goal=(1, 3), departure_time=T0)
+    session = planner.create_session(request)
+    assert planner.advance_session(session, expansion_slice=1) is None
+    checkpoint = planner.checkpoint_session(session)
+
+    planner.eta_policy = EtaRefinementPolicy(method="bounded")
 
     with pytest.raises(TemporalSessionIdentityMismatch, match="identity fence"):
         planner.restore_session(checkpoint, request=request)
