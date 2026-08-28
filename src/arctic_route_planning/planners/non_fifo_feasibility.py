@@ -50,6 +50,32 @@ class NonFifoTransition:
 
 
 @dataclass(frozen=True, slots=True)
+class NonFifoParetoTransition:
+    """A finite non-FIFO transition with a vector-valued route objective.
+
+    This type is intentionally local to the research sidecar.  The vector is
+    not exported to the production route contract: it only lets the finite
+    feasibility search check that a label is discarded when (and only when) a
+    newly generated label is component-wise dominated at the *same exact
+    arrival state*.
+    """
+
+    arrival_time: datetime
+    costs: tuple[float, ...]
+    payload: Mapping[str, Any] | None = None
+
+    def __post_init__(self) -> None:
+        if self.arrival_time.tzinfo is None or self.arrival_time.utcoffset() is None:
+            raise ValueError("non-FIFO Pareto transition arrival must be timezone-aware")
+        object.__setattr__(self, "arrival_time", self.arrival_time.astimezone(UTC))
+        costs = tuple(self.costs)
+        if not costs or any(not isfinite(value) or value < 0.0 for value in costs):
+            raise ValueError("non-FIFO Pareto transition costs must be finite and non-negative")
+        object.__setattr__(self, "costs", costs)
+        object.__setattr__(self, "payload", dict(self.payload or {}))
+
+
+@dataclass(frozen=True, slots=True)
 class NonFifoLabel:
     node: Any
     arrival_time: datetime
@@ -72,6 +98,46 @@ class NonFifoLabel:
 
 
 @dataclass(frozen=True, slots=True)
+class NonFifoParetoLabel:
+    """One exact-arrival label in the finite Pareto feasibility search."""
+
+    node: Any
+    arrival_time: datetime
+    costs: tuple[float, ...]
+    path: tuple[Any, ...]
+    transitions: tuple[NonFifoParetoTransition, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.arrival_time.tzinfo is None or self.arrival_time.utcoffset() is None:
+            raise ValueError("non-FIFO Pareto label arrival must be timezone-aware")
+        object.__setattr__(self, "arrival_time", self.arrival_time.astimezone(UTC))
+        costs = tuple(self.costs)
+        if not costs or any(not isfinite(value) or value < 0.0 for value in costs):
+            raise ValueError("non-FIFO Pareto label costs must be finite and non-negative")
+        object.__setattr__(self, "costs", costs)
+        object.__setattr__(self, "path", tuple(self.path))
+        object.__setattr__(self, "transitions", tuple(self.transitions))
+
+    @property
+    def exact_key(self) -> tuple[Any, datetime]:
+        return self.node, self.arrival_time
+
+    def dominates(self, other: NonFifoParetoLabel) -> bool:
+        """Return safe same-exact-state Pareto dominance.
+
+        Arrival time is part of the state.  Therefore a label at an earlier or
+        later exact instant never dominates another label merely because its
+        costs are lower; the future non-FIFO transition operator can differ.
+        """
+
+        if self.exact_key != other.exact_key or len(self.costs) != len(other.costs):
+            return False
+        return all(
+            left <= right for left, right in zip(self.costs, other.costs, strict=True)
+        ) and any(left < right for left, right in zip(self.costs, other.costs, strict=True))
+
+
+@dataclass(frozen=True, slots=True)
 class NonFifoSearchResult:
     status: NonFifoSearchStatus
     label: NonFifoLabel | None
@@ -81,6 +147,7 @@ class NonFifoSearchResult:
     queue_peak: int
     evaluator_errors: tuple[str, ...] = ()
     reason: str | None = None
+    pareto_pruned: int = 0
 
     @property
     def semantic_digest(self) -> str | None:
@@ -90,6 +157,54 @@ class NonFifoSearchResult:
             "path": self.label.path,
             "arrival_time": self.label.arrival_time,
             "cost": self.label.cost,
+            "transitions": self.label.transitions,
+        }
+        return hashlib.sha256(
+            json.dumps(_jsonable(payload), sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class NonFifoParetoSearchResult:
+    """Result of the bounded, test-only vector-label search."""
+
+    status: NonFifoSearchStatus
+    label: NonFifoParetoLabel | None
+    labels: tuple[NonFifoParetoLabel, ...]
+    expanded: int
+    generated: int
+    queue_peak: int
+    pareto_pruned: int = 0
+    evaluator_errors: tuple[str, ...] = ()
+    reason: str | None = None
+
+    @property
+    def goal_labels(self) -> tuple[NonFifoParetoLabel, ...]:
+        """All retained goal labels, ordered by objective vector."""
+
+        if self.label is None:
+            return ()
+        return tuple(label for label in self.labels if label.node == self.label.node)
+
+    @property
+    def goal_frontier(self) -> tuple[NonFifoParetoLabel, ...]:
+        """The safe frontier; different exact arrivals remain incomparable."""
+
+        goals = self.goal_labels
+        return tuple(
+            candidate
+            for candidate in goals
+            if not any(other is not candidate and other.dominates(candidate) for other in goals)
+        )
+
+    @property
+    def semantic_digest(self) -> str | None:
+        if self.label is None:
+            return None
+        payload = {
+            "path": self.label.path,
+            "arrival_time": self.label.arrival_time,
+            "costs": self.label.costs,
             "transitions": self.label.transitions,
         }
         return hashlib.sha256(
@@ -123,8 +238,7 @@ def search_non_fifo(
     if departure_time.tzinfo is None or departure_time.utcoffset() is None:
         raise ValueError("departure_time must be timezone-aware")
     if any(
-        isinstance(value, bool) or value < 1
-        for value in (max_expansions, max_labels, max_queue)
+        isinstance(value, bool) or value < 1 for value in (max_expansions, max_labels, max_queue)
     ):
         raise ValueError("non-FIFO search limits must be positive integers")
     departure = departure_time.astimezone(UTC)
@@ -231,6 +345,266 @@ def search_non_fifo(
     return _result(status, best_goal, by_key, expanded, generated, queue_peak, errors, reason)
 
 
+def search_non_fifo_pareto(
+    *,
+    start: Any,
+    goal: Any,
+    departure_time: datetime,
+    neighbors: Callable[[Any], Iterable[Any]],
+    evaluate_edge: Callable[[Any, Any, datetime], NonFifoTransition | NonFifoParetoTransition],
+    objective_count: int = 1,
+    pareto_pruning: bool = True,
+    max_expansions: int = 50_000,
+    max_labels: int = 100_000,
+    max_queue: int = 50_000,
+    cancel_check: Callable[[], bool] | None = None,
+    maximum_elapsed: timedelta | None = None,
+) -> NonFifoParetoSearchResult:
+    """Explore a finite non-FIFO graph with exact-arrival Pareto labels.
+
+    This is a C-internal research sidecar, not a production planner.  A
+    label's exact ``(node, arrival_time)`` is part of its state, so Pareto
+    pruning is limited to a newly generated label at the same exact state.
+    Existing labels are never deleted, including labels that have already
+    been expanded.  This conservative rule makes the safety boundary visible
+    and avoids importing FIFO assumptions into a non-FIFO transition system.
+
+    ``pareto_pruning`` is deliberately explicit.  When disabled, every
+    finite label is retained until a frozen resource bound is reached.  When
+    enabled, only a newly generated component-wise dominated label is
+    discarded; an older label is never removed in response to a later label.
+    Any evaluator error, cancellation, or resource limit is a non-success
+    result and never returns a partial route.
+    """
+
+    _validate_non_fifo_limits(
+        objective_count=objective_count,
+        max_expansions=max_expansions,
+        max_labels=max_labels,
+        max_queue=max_queue,
+    )
+    if departure_time.tzinfo is None or departure_time.utcoffset() is None:
+        raise ValueError("departure_time must be timezone-aware")
+    if maximum_elapsed is not None and maximum_elapsed <= timedelta(0):
+        raise ValueError("maximum_elapsed must be positive")
+
+    departure = departure_time.astimezone(UTC)
+    initial = NonFifoParetoLabel(start, departure, (0.0,) * objective_count, (start,))
+    queue: list[tuple[tuple[float, ...], datetime, int, NonFifoParetoLabel]] = [
+        (initial.costs, departure, 0, initial)
+    ]
+    labels_by_key: dict[tuple[Any, datetime], list[NonFifoParetoLabel]] = {
+        initial.exact_key: [initial]
+    }
+    serial = 0
+    expanded = 0
+    generated = 0
+    queue_peak = 1
+    total_labels = 1
+    pareto_pruned = 0
+    errors: list[str] = []
+    goals: list[NonFifoParetoLabel] = []
+    bounded = False
+
+    while queue:
+        if _cancelled(cancel_check):
+            return _pareto_result(
+                NonFifoSearchStatus.CANCELLED,
+                goals,
+                labels_by_key,
+                expanded,
+                generated,
+                queue_peak,
+                pareto_pruned,
+                errors,
+                "cancelled",
+            )
+        _, _, _, label = heappop(queue)
+        if not _contains_label(labels_by_key[label.exact_key], label):
+            continue
+        expanded += 1
+        if expanded > max_expansions:
+            bounded = True
+            break
+        if label.node == goal:
+            goals.append(label)
+            # Do not expand a goal, but drain other labels.  In a non-FIFO
+            # system a later-arriving label can still have a cheaper vector.
+            continue
+        try:
+            neighbours = tuple(neighbors(label.node))
+        except Exception as error:
+            errors.append(f"{type(error).__name__}:{error}")
+            continue
+        for neighbor in neighbours:
+            if _cancelled(cancel_check):
+                return _pareto_result(
+                    NonFifoSearchStatus.CANCELLED,
+                    goals,
+                    labels_by_key,
+                    expanded,
+                    generated,
+                    queue_peak,
+                    pareto_pruned,
+                    errors,
+                    "cancelled",
+                )
+            try:
+                transition = evaluate_edge(label.node, neighbor, label.arrival_time)
+                transition = _coerce_pareto_transition(transition, objective_count)
+                if transition.arrival_time <= label.arrival_time:
+                    raise NonFifoEvaluationError("arrival_not_strictly_later")
+                if transition.arrival_time < departure:
+                    raise NonFifoEvaluationError("arrival_before_departure")
+            except Exception as error:
+                errors.append(f"{type(error).__name__}:{error}")
+                continue
+            if maximum_elapsed is not None and (
+                transition.arrival_time - departure > maximum_elapsed
+            ):
+                continue
+            next_label = NonFifoParetoLabel(
+                neighbor,
+                transition.arrival_time,
+                tuple(
+                    left + right for left, right in zip(label.costs, transition.costs, strict=True)
+                ),
+                (*label.path, neighbor),
+                (*label.transitions, transition),
+            )
+            frontier = labels_by_key.setdefault(next_label.exact_key, [])
+            if pareto_pruning and any(
+                existing.dominates(next_label) or existing.costs == next_label.costs
+                for existing in frontier
+            ):
+                pareto_pruned += 1
+                continue
+            if total_labels >= max_labels:
+                bounded = True
+                break
+            frontier.append(next_label)
+            total_labels += 1
+            serial += 1
+            heappush(queue, (next_label.costs, next_label.arrival_time, serial, next_label))
+            generated += 1
+            queue_peak = max(queue_peak, len(queue))
+            if len(queue) > max_queue:
+                bounded = True
+                break
+        if bounded:
+            break
+
+    if bounded:
+        status = NonFifoSearchStatus.RESOURCE_LIMIT
+        reason = "search_limit_exceeded"
+        selected: NonFifoParetoLabel | None = None
+    elif errors:
+        status = NonFifoSearchStatus.EVALUATOR_FAILURE
+        reason = "evaluator_failure"
+        selected = None
+    elif goals:
+        status = NonFifoSearchStatus.GOAL_FOUND
+        reason = None
+        selected = min(goals, key=lambda item: (item.costs, item.arrival_time, repr(item.path)))
+    else:
+        status = NonFifoSearchStatus.EXHAUSTED
+        reason = "no_route"
+        selected = None
+    return _pareto_result(
+        status,
+        [selected] if selected is not None else goals,
+        labels_by_key,
+        expanded,
+        generated,
+        queue_peak,
+        pareto_pruned,
+        errors,
+        reason,
+    )
+
+
+def _validate_non_fifo_limits(
+    *, objective_count: int, max_expansions: int, max_labels: int, max_queue: int
+) -> None:
+    if (
+        isinstance(objective_count, bool)
+        or not isinstance(objective_count, int)
+        or objective_count < 1
+    ):
+        raise ValueError("objective_count must be a positive integer")
+    if any(
+        isinstance(value, bool) or not isinstance(value, int) or value < 1
+        for value in (max_expansions, max_labels, max_queue)
+    ):
+        raise ValueError("non-FIFO search limits must be positive integers")
+
+
+def _coerce_pareto_transition(
+    transition: NonFifoTransition | NonFifoParetoTransition, objective_count: int
+) -> NonFifoParetoTransition:
+    if isinstance(transition, NonFifoParetoTransition):
+        if len(transition.costs) != objective_count:
+            raise NonFifoEvaluationError("objective_dimension_mismatch")
+        return transition
+    if isinstance(transition, NonFifoTransition):
+        if objective_count != 1:
+            raise NonFifoEvaluationError("scalar_transition_for_vector_objective")
+        return NonFifoParetoTransition(
+            transition.arrival_time, (transition.cost,), transition.payload
+        )
+    raise TypeError("non-FIFO evaluator must return a Pareto transition")
+
+
+def _contains_label(labels: Iterable[NonFifoParetoLabel], candidate: NonFifoParetoLabel) -> bool:
+    return any(existing == candidate for existing in labels)
+
+
+def _flatten_labels(
+    labels_by_key: Mapping[tuple[Any, datetime], Iterable[NonFifoParetoLabel]],
+) -> tuple[NonFifoParetoLabel, ...]:
+    return tuple(label for labels in labels_by_key.values() for label in labels)
+
+
+def _cancelled(cancel_check: Callable[[], bool] | None) -> bool:
+    return cancel_check is not None and cancel_check()
+
+
+def _pareto_result(
+    status: NonFifoSearchStatus,
+    goals: Iterable[NonFifoParetoLabel],
+    labels_by_key: Mapping[tuple[Any, datetime], Iterable[NonFifoParetoLabel]],
+    expanded: int,
+    generated: int,
+    queue_peak: int,
+    pareto_pruned: int,
+    errors: Iterable[str],
+    reason: str | None,
+) -> NonFifoParetoSearchResult:
+    goal_list = tuple(goals)
+    selected = (
+        min(goal_list, key=lambda item: (item.costs, item.arrival_time, repr(item.path)))
+        if status is NonFifoSearchStatus.GOAL_FOUND and goal_list
+        else None
+    )
+    ordered = tuple(
+        sorted(
+            _flatten_labels(labels_by_key),
+            key=lambda item: (item.costs, item.arrival_time, repr(item.node), repr(item.path)),
+        )
+    )
+    return NonFifoParetoSearchResult(
+        status=status,
+        label=selected,
+        labels=ordered,
+        expanded=expanded,
+        generated=generated,
+        queue_peak=queue_peak,
+        pareto_pruned=pareto_pruned,
+        evaluator_errors=tuple(errors),
+        reason=reason,
+    )
+
+
 def _result(
     status: NonFifoSearchStatus,
     label: NonFifoLabel | None,
@@ -259,9 +633,15 @@ def _jsonable(value: Any) -> Any:
         return value.astimezone(UTC).isoformat(timespec="microseconds")
     if isinstance(value, NonFifoTransition):
         return {
-            "arrival_time": value.arrival_time,
+            "arrival_time": _jsonable(value.arrival_time),
             "cost": value.cost,
-            "payload": value.payload,
+            "payload": _jsonable(value.payload),
+        }
+    if isinstance(value, NonFifoParetoTransition):
+        return {
+            "arrival_time": _jsonable(value.arrival_time),
+            "costs": value.costs,
+            "payload": _jsonable(value.payload),
         }
     if isinstance(value, Mapping):
         return {str(key): _jsonable(item) for key, item in value.items()}
@@ -273,8 +653,12 @@ def _jsonable(value: Any) -> Any:
 __all__ = [
     "NonFifoEvaluationError",
     "NonFifoLabel",
+    "NonFifoParetoLabel",
+    "NonFifoParetoSearchResult",
+    "NonFifoParetoTransition",
     "NonFifoSearchResult",
     "NonFifoSearchStatus",
     "NonFifoTransition",
     "search_non_fifo",
+    "search_non_fifo_pareto",
 ]

@@ -7,9 +7,11 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from arctic_route_planning.planners.non_fifo_feasibility import (
+    NonFifoParetoTransition,
     NonFifoSearchStatus,
     NonFifoTransition,
     search_non_fifo,
+    search_non_fifo_pareto,
 )
 
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
@@ -182,3 +184,231 @@ def test_maximum_elapsed_is_a_explicit_no_route_boundary() -> None:
     assert result.status is NonFifoSearchStatus.EXHAUSTED
     assert result.label is None
     assert result.reason == "no_route"
+
+
+def test_pareto_keeps_later_exact_arrival_with_better_non_fifo_suffix() -> None:
+    graph = {
+        "start": ("early", "late"),
+        "early": ("goal",),
+        "late": ("goal",),
+        "goal": (),
+    }
+
+    def evaluate(start: str, end: str, arrival: datetime):
+        if (start, end) == ("start", "early"):
+            return NonFifoParetoTransition(arrival + timedelta(hours=1), (1.0, 1.0))
+        if (start, end) == ("start", "late"):
+            return NonFifoParetoTransition(arrival + timedelta(hours=2), (5.0, 5.0))
+        if end == "goal":
+            suffix = 0.1 if arrival >= T0 + timedelta(hours=2) else 5.0
+            return NonFifoParetoTransition(
+                arrival + timedelta(hours=suffix),
+                (suffix, suffix),
+            )
+        raise AssertionError((start, end))
+
+    result = search_non_fifo_pareto(
+        start="start",
+        goal="goal",
+        departure_time=T0,
+        neighbors=graph.__getitem__,
+        evaluate_edge=evaluate,
+        objective_count=2,
+    )
+
+    assert result.status is NonFifoSearchStatus.GOAL_FOUND
+    assert result.label is not None
+    assert result.label.path == ("start", "late", "goal")
+    assert result.label.costs == pytest.approx((5.1, 5.1))
+    assert {label.arrival_time for label in result.labels if label.node == "late"} == {
+        T0 + timedelta(hours=2)
+    }
+
+    repeat = search_non_fifo_pareto(
+        start="start",
+        goal="goal",
+        departure_time=T0,
+        neighbors=graph.__getitem__,
+        evaluate_edge=evaluate,
+        objective_count=2,
+    )
+    assert repeat.semantic_digest == result.semantic_digest
+    assert repeat.generated == result.generated
+    assert repeat.pareto_pruned == result.pareto_pruned
+
+
+def test_pareto_prunes_only_new_dominated_label_at_same_exact_state() -> None:
+    graph = {"start": ("join", "join"), "join": ()}
+    calls = 0
+
+    def evaluate(_start: str, _end: str, arrival: datetime):
+        nonlocal calls
+        calls += 1
+        costs = (1.0, 5.0) if calls == 1 else (2.0, 6.0)
+        return NonFifoParetoTransition(arrival + timedelta(hours=1), costs)
+
+    result = search_non_fifo_pareto(
+        start="start",
+        goal="join",
+        departure_time=T0,
+        neighbors=graph.__getitem__,
+        evaluate_edge=evaluate,
+        objective_count=2,
+    )
+
+    assert result.status is NonFifoSearchStatus.GOAL_FOUND
+    assert result.pareto_pruned == 1
+    assert len([label for label in result.labels if label.node == "join"]) == 1
+    assert result.label is not None
+    assert result.label.costs == pytest.approx((1.0, 5.0))
+
+
+def test_pareto_never_cross_prunes_different_exact_arrivals() -> None:
+    graph = {"start": ("join", "join"), "join": ("goal",), "goal": ()}
+    calls = 0
+
+    def evaluate(start: str, end: str, arrival: datetime):
+        nonlocal calls
+        if start == "start":
+            calls += 1
+            hours = 1.0 if calls == 1 else 2.0
+            costs = (1.0, 1.0) if hours == 1.0 else (2.0, 2.0)
+            return NonFifoParetoTransition(arrival + timedelta(hours=hours), costs)
+        if end == "goal":
+            suffix = 5.0 if arrival < T0 + timedelta(hours=2) else 0.1
+            return NonFifoParetoTransition(
+                arrival + timedelta(hours=suffix),
+                (suffix, suffix),
+            )
+        raise AssertionError((start, end))
+
+    result = search_non_fifo_pareto(
+        start="start",
+        goal="goal",
+        departure_time=T0,
+        neighbors=graph.__getitem__,
+        evaluate_edge=evaluate,
+        objective_count=2,
+    )
+
+    join_labels = [label for label in result.labels if label.node == "join"]
+    assert len(join_labels) == 2
+    assert result.pareto_pruned == 0
+    assert len(result.goal_frontier) == 2
+    assert result.label is not None
+    assert result.label.path == ("start", "join", "goal")
+    assert result.label.costs == pytest.approx((2.1, 2.1))
+
+
+def test_pareto_scalar_mode_matches_independent_non_fifo_oracle() -> None:
+    from tests.reference_temporal_oracle import OracleEdge, ReferenceTemporalOracle
+
+    graph = {
+        "s": ("u", "x"),
+        "x": ("u",),
+        "u": ("g",),
+        "g": (),
+    }
+
+    def evaluate(start: str, end: str, arrival: datetime):
+        if (start, end) in (("s", "u"), ("s", "x")):
+            return NonFifoTransition(arrival + timedelta(minutes=30), 0.5)
+        if (start, end) == ("x", "u"):
+            return NonFifoTransition(arrival + timedelta(minutes=30), 0.5)
+        if (start, end) == ("u", "g"):
+            if arrival >= T0 + timedelta(hours=1):
+                return NonFifoTransition(arrival + timedelta(minutes=30), 0.5)
+            return NonFifoTransition(arrival + timedelta(hours=3), 3.0)
+        raise AssertionError((start, end))
+
+    result = search_non_fifo_pareto(
+        start="s",
+        goal="g",
+        departure_time=T0,
+        neighbors=graph.__getitem__,
+        evaluate_edge=evaluate,
+    )
+
+    oracle = ReferenceTemporalOracle(
+        graph.__getitem__,
+        lambda state, end: OracleEdge(
+            evaluate(state[0], end, state[2]).arrival_time,
+            evaluate(state[0], end, state[2]).cost,
+        ),
+    ).search("s", "g", T0)
+
+    assert result.status is NonFifoSearchStatus.GOAL_FOUND
+    assert result.label is not None
+    assert result.label.path == oracle.nodes
+    assert result.label.arrival_time == oracle.arrival_times[-1]
+    assert result.label.costs[0] == pytest.approx(oracle.total_cost)
+
+
+def test_pareto_resource_limit_and_cancellation_never_return_partial_route() -> None:
+    graph = {"start": ("a", "b"), "a": ("goal",), "b": ("goal",), "goal": ()}
+
+    def evaluate(_start: str, _end: str, arrival: datetime):
+        return NonFifoParetoTransition(arrival + timedelta(hours=1), (1.0, 1.0))
+
+    limited = search_non_fifo_pareto(
+        start="start",
+        goal="goal",
+        departure_time=T0,
+        neighbors=graph.__getitem__,
+        evaluate_edge=evaluate,
+        objective_count=2,
+        pareto_pruning=False,
+        max_labels=2,
+    )
+    assert limited.status is NonFifoSearchStatus.RESOURCE_LIMIT
+    assert limited.label is None
+    assert limited.reason == "search_limit_exceeded"
+
+    cancelled = search_non_fifo_pareto(
+        start="start",
+        goal="goal",
+        departure_time=T0,
+        neighbors=graph.__getitem__,
+        evaluate_edge=evaluate,
+        objective_count=2,
+        cancel_check=lambda: True,
+    )
+    assert cancelled.status is NonFifoSearchStatus.CANCELLED
+    assert cancelled.label is None
+    assert cancelled.reason == "cancelled"
+
+
+def test_pareto_evaluator_failure_is_fail_closed() -> None:
+    result = search_non_fifo_pareto(
+        start="start",
+        goal="goal",
+        departure_time=T0,
+        neighbors=lambda _node: ("goal",),
+        evaluate_edge=lambda *_args: NonFifoTransition(T0, 1.0),
+    )
+
+    assert result.status is NonFifoSearchStatus.EVALUATOR_FAILURE
+    assert result.label is None
+    assert any("arrival_not_strictly_later" in error for error in result.evaluator_errors)
+
+
+def test_pareto_cycle_hits_frozen_label_limit_instead_of_looping() -> None:
+    graph = {"start": ("cycle",), "cycle": ("cycle", "goal"), "goal": ()}
+
+    def evaluate(_start: str, end: str, arrival: datetime):
+        hours = 1.0 if end == "cycle" else 2.0
+        return NonFifoParetoTransition(arrival + timedelta(hours=hours), (0.0, 0.0))
+
+    result = search_non_fifo_pareto(
+        start="start",
+        goal="goal",
+        departure_time=T0,
+        neighbors=graph.__getitem__,
+        evaluate_edge=evaluate,
+        objective_count=2,
+        max_labels=4,
+    )
+
+    assert result.status is NonFifoSearchStatus.RESOURCE_LIMIT
+    assert result.label is None
+    assert result.reason == "search_limit_exceeded"
