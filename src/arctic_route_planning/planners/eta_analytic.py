@@ -251,7 +251,7 @@ def qualify_analytic_eta(
                 + _interval_divide(phi_departure_slope, denominator).upper,
             )
         except ValueError:
-            reason = reason or "implicit_sensitivity_denominator_contains_zero"
+            fifo_reason = fifo_reason or "implicit_sensitivity_denominator_contains_zero"
 
     if navigation is NavigabilityStatus.ALWAYS_BLOCKED and reason is None:
         root_status = EtaIntervalStatus.ROOT_EXCLUDED
