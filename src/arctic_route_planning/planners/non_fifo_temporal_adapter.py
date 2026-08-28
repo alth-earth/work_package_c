@@ -29,6 +29,7 @@ from arctic_route_planning.errors import NoRouteError, PlanningCancelled
 
 from .errors import PlanningHorizonExceeded
 from .non_fifo_feasibility import NonFifoSearchStatus
+from .temporal_bounds import TemporalStateBoundCertificate
 from .temporal_label_astar import (
     TemporalCandidateResult,
     TemporalLabelAStar,
@@ -121,6 +122,7 @@ class NonFifoTemporalResearchCheckpoint:
     session_checkpoint: TemporalSessionCheckpoint
     mode_digest: str = _ADAPTER_MODE_DIGEST
     schema_version: str = _ADAPTER_SCHEMA_VERSION
+    state_bound_policy_digest: str = "temporal-state-bound-disabled"
     state_digest: str = ""
 
     def __post_init__(self) -> None:
@@ -130,6 +132,11 @@ class NonFifoTemporalResearchCheckpoint:
             raise NonFifoTemporalAdapterError("unsupported non-FIFO adapter checkpoint schema")
         if self.mode_digest != _ADAPTER_MODE_DIGEST:
             raise NonFifoTemporalAdapterError("non-FIFO adapter mode digest mismatch")
+        state_bound_digest = getattr(self, "state_bound_policy_digest", None)
+        if state_bound_digest != self.session_checkpoint.identity.state_bound_policy_digest:
+            raise NonFifoTemporalAdapterError(
+                "non-FIFO adapter state-bound policy digest mismatch"
+            )
         if self.session_checkpoint.state not in (
             TemporalSessionState.READY,
             TemporalSessionState.PAUSED,
@@ -147,6 +154,9 @@ class NonFifoTemporalResearchCheckpoint:
             {
                 "schema_version": self.schema_version,
                 "mode_digest": self.mode_digest,
+                "state_bound_policy_digest": getattr(
+                    self, "state_bound_policy_digest", None
+                ),
                 "session_checkpoint": self.session_checkpoint.state_digest,
             }
         )
@@ -158,6 +168,11 @@ class NonFifoTemporalResearchCheckpoint:
             raise NonFifoTemporalAdapterError("unsupported non-FIFO adapter checkpoint schema")
         if self.mode_digest != _ADAPTER_MODE_DIGEST:
             raise NonFifoTemporalAdapterError("non-FIFO adapter mode digest mismatch")
+        state_bound_digest = getattr(self, "state_bound_policy_digest", None)
+        if state_bound_digest != self.session_checkpoint.identity.state_bound_policy_digest:
+            raise NonFifoTemporalAdapterError(
+                "non-FIFO adapter state-bound policy digest mismatch"
+            )
         if self.state_digest != self._calculated_state_digest():
             raise TemporalSessionRestoreError("non-FIFO adapter checkpoint digest mismatch")
         self.session_checkpoint.assert_valid()
@@ -170,12 +185,20 @@ class NonFifoTemporalResearchCheckpoint:
 class NonFifoTemporalResearchSession:
     """Resumable wrapper around one actual exact-arrival temporal session."""
 
-    __slots__ = ("planner", "request", "session")
+    __slots__ = ("allow_state_bound", "planner", "request", "session")
 
-    def __init__(self, planner: TemporalLabelAStar, request: PlanningRequest, session: Any) -> None:
+    def __init__(
+        self,
+        planner: TemporalLabelAStar,
+        request: PlanningRequest,
+        session: Any,
+        *,
+        allow_state_bound: bool = False,
+    ) -> None:
         self.planner = planner
         self.request = request
         self.session = session
+        self.allow_state_bound = allow_state_bound
 
     @property
     def state(self) -> TemporalSessionState:
@@ -248,7 +271,11 @@ class NonFifoTemporalResearchSession:
                 reason="session_not_terminal",
                 error=RuntimeError("temporal session returned no result outside PAUSED state"),
             )
-        return _candidate_result(self.session_id, candidate)
+        return _candidate_result(
+            self.session_id,
+            candidate,
+            allow_state_bound=self.allow_state_bound,
+        )
 
     def run(self) -> NonFifoTemporalResearchResult:
         """Run until a terminal result, never treating a pause as success."""
@@ -273,6 +300,7 @@ class NonFifoTemporalResearchSession:
             )
         return NonFifoTemporalResearchCheckpoint(
             checkpoint_session(self.session),
+            state_bound_policy_digest=self.identity.state_bound_policy_digest,
         )
 
 
@@ -328,9 +356,88 @@ def restore_non_fifo_temporal_session(
     return NonFifoTemporalResearchSession(planner, request, session)
 
 
+def create_non_fifo_temporal_bounded_session(
+    planner: TemporalLabelAStar,
+    request: PlanningRequest,
+    certificate: TemporalStateBoundCertificate,
+    *,
+    identity: TemporalSessionIdentity | None = None,
+) -> NonFifoTemporalResearchSession:
+    """Create an explicitly certified, state-bound non-FIFO session.
+
+    The ordinary adapter deliberately rejects state bounds.  This separate
+    entry point is the only research path that may use one, and it requires
+    the immutable certificate to be installed on the supplied planner.  A
+    scope mismatch is left to the active session's fail-closed authorization
+    (and therefore produces zero pruning plus an explicit rejection).
+    """
+
+    _validate_bound_certificate(planner, certificate, request=request)
+    _validate_research_mode(planner, request, identity, allow_state_bound=True)
+    try:
+        session = planner.create_session(request, identity=identity)
+    except TemporalSessionIdentityMismatch as error:
+        raise NonFifoTemporalAdapterError(
+            f"temporal session identity fence rejected: {error}"
+        ) from error
+    return NonFifoTemporalResearchSession(
+        planner,
+        request,
+        session,
+        allow_state_bound=True,
+    )
+
+
+def restore_non_fifo_temporal_bounded_session(
+    planner: TemporalLabelAStar,
+    checkpoint: NonFifoTemporalResearchCheckpoint,
+    request: PlanningRequest,
+    certificate: TemporalStateBoundCertificate,
+    *,
+    identity: TemporalSessionIdentity | None = None,
+) -> NonFifoTemporalResearchSession:
+    """Restore a bounded session after checking its certificate identity."""
+
+    if not isinstance(checkpoint, NonFifoTemporalResearchCheckpoint):
+        raise NonFifoTemporalAdapterError(
+            "checkpoint must be a NonFifoTemporalResearchCheckpoint"
+        )
+    _validate_bound_certificate(planner, certificate, request=request)
+    try:
+        checkpoint.assert_valid()
+    except (NonFifoTemporalAdapterError, TemporalSessionRestoreError) as error:
+        raise NonFifoTemporalAdapterError(
+            f"non-FIFO temporal checkpoint fence rejected: {error}"
+        ) from error
+    if checkpoint.state_bound_policy_digest != certificate.digest:
+        raise NonFifoTemporalAdapterError(
+            "non-FIFO temporal checkpoint state-bound digest mismatch"
+        )
+    _validate_research_mode(planner, request, identity, allow_state_bound=True)
+    try:
+        session = restore_session(
+            planner,
+            checkpoint.session_checkpoint,
+            request=request,
+            identity=identity,
+        )
+    except (TemporalSessionIdentityMismatch, TemporalSessionRestoreError) as error:
+        raise NonFifoTemporalAdapterError(
+            f"non-FIFO temporal checkpoint fence rejected: {error}"
+        ) from error
+    return NonFifoTemporalResearchSession(
+        planner,
+        request,
+        session,
+        allow_state_bound=True,
+    )
+
+
 def _candidate_result(
     session_id: str,
     candidate: TemporalCandidateResult,
+    *,
+    allow_state_bound: bool = False,
 ) -> NonFifoTemporalResearchResult:
     diagnostics = candidate.diagnostics
     if (
@@ -338,8 +445,8 @@ def _candidate_result(
         or diagnostics.dominance_scope_match
         or diagnostics.dominance_checks
         or diagnostics.dominance_pruned
-        or diagnostics.state_bound_checks
-        or diagnostics.state_bound_pruned
+        or (not allow_state_bound and diagnostics.state_bound_checks)
+        or (not allow_state_bound and diagnostics.state_bound_pruned)
     ):
         violation = NonFifoTemporalSafetyViolation(
             "non-FIFO adapter observed forbidden dominance/state-bound pruning"
@@ -349,6 +456,28 @@ def _candidate_result(
             session_id,
             diagnostics,
             reason="unexpected_pruning",
+            error=violation,
+        )
+    if allow_state_bound and diagnostics.state_bound_rejected:
+        violation = NonFifoTemporalSafetyViolation(
+            "non-FIFO bounded adapter observed rejected state-bound certificate"
+        )
+        return _failure(
+            NonFifoSearchStatus.EVALUATOR_FAILURE,
+            session_id,
+            diagnostics,
+            reason="state_bound_rejected",
+            error=violation,
+        )
+    if allow_state_bound and diagnostics.state_bound_pruned > diagnostics.state_bound_checks:
+        violation = NonFifoTemporalSafetyViolation(
+            "non-FIFO bounded adapter observed invalid state-bound counters"
+        )
+        return _failure(
+            NonFifoSearchStatus.EVALUATOR_FAILURE,
+            session_id,
+            diagnostics,
+            reason="state_bound_counter_inconsistent",
             error=violation,
         )
     return NonFifoTemporalResearchResult(
@@ -417,10 +546,68 @@ def run_non_fifo_temporal_search(
     return research_session.run()
 
 
+def run_non_fifo_temporal_bounded_search(
+    planner: TemporalLabelAStar,
+    request: PlanningRequest,
+    certificate: TemporalStateBoundCertificate,
+    *,
+    identity: TemporalSessionIdentity | None = None,
+) -> NonFifoTemporalResearchResult:
+    """Run actual non-FIFO search with one explicit proof-carrying bound.
+
+    This opt-in function is intentionally separate from
+    :func:`run_non_fifo_temporal_search`.  It never enables temporal
+    dominance and it reports a rejected certificate as a failed research
+    result rather than treating an unbounded run as a bounded success.
+    """
+
+    try:
+        research_session = create_non_fifo_temporal_bounded_session(
+            planner,
+            request,
+            certificate,
+            identity=identity,
+        )
+    except NonFifoTemporalAdapterError:
+        raise
+    except PlanningCancelled as error:
+        return _failure(
+            NonFifoSearchStatus.CANCELLED,
+            None,
+            None,
+            reason="cancelled",
+            error=error,
+        )
+    except NoRouteError as error:
+        return _failure(
+            NonFifoSearchStatus.EXHAUSTED,
+            None,
+            None,
+            reason="no_route",
+            error=error,
+        )
+    except TemporalSessionIdentityMismatch as error:
+        raise NonFifoTemporalAdapterError(
+            f"temporal session identity fence rejected: {error}"
+        ) from error
+    except Exception as error:  # pragma: no cover - defensive creation fence
+        return _failure(
+            NonFifoSearchStatus.EVALUATOR_FAILURE,
+            None,
+            None,
+            reason="session_creation_failure",
+            error=error,
+        )
+
+    return research_session.run()
+
+
 def _validate_research_mode(
     planner: TemporalLabelAStar,
     request: PlanningRequest,
     identity: TemporalSessionIdentity | None,
+    *,
+    allow_state_bound: bool = False,
 ) -> None:
     if not isinstance(planner, TemporalLabelAStar):
         raise NonFifoTemporalAdapterError(
@@ -434,13 +621,67 @@ def _validate_research_mode(
         raise NonFifoTemporalAdapterError(
             "non-FIFO adapter requires TemporalDominancePolicy.disabled()"
         )
-    if planner.state_bound_certificate is not None:
+    if not allow_state_bound and planner.state_bound_certificate is not None:
         raise NonFifoTemporalAdapterError(
             "non-FIFO adapter does not accept a state-bound certificate"
+        )
+    if allow_state_bound and planner.state_bound_certificate is None:
+        raise NonFifoTemporalAdapterError(
+            "bounded non-FIFO adapter requires an explicit state-bound certificate"
         )
     if identity is not None and not isinstance(identity, TemporalSessionIdentity):
         raise NonFifoTemporalAdapterError(
             "identity must be a TemporalSessionIdentity when supplied"
+        )
+
+
+def _validate_bound_certificate(
+    planner: TemporalLabelAStar,
+    certificate: TemporalStateBoundCertificate,
+    *,
+    request: PlanningRequest,
+) -> None:
+    """Validate the immutable certificate/planner pairing before execution."""
+
+    if not isinstance(certificate, TemporalStateBoundCertificate):
+        raise NonFifoTemporalAdapterError(
+            "bounded non-FIFO adapter requires a TemporalStateBoundCertificate"
+        )
+    installed = planner.state_bound_certificate
+    if installed is None:
+        raise NonFifoTemporalAdapterError(
+            "bounded non-FIFO adapter requires the certificate on the planner"
+        )
+    if installed.digest != certificate.digest:
+        raise NonFifoTemporalAdapterError(
+            "bounded non-FIFO adapter certificate digest mismatch"
+        )
+    if not certificate.usable:
+        raise NonFifoTemporalAdapterError(
+            "bounded non-FIFO adapter requires a usable certified bound"
+        )
+    allowed = tuple(certificate.allowed_nodes)
+    excluded = tuple(certificate.excluded_nodes)
+    if len(set(allowed)) != len(allowed) or len(set(excluded)) != len(excluded):
+        raise NonFifoTemporalAdapterError(
+            "bounded non-FIFO adapter certificate has duplicate nodes"
+        )
+    if set(allowed).intersection(excluded):
+        raise NonFifoTemporalAdapterError(
+            "bounded non-FIFO adapter certificate overlaps allowed and excluded nodes"
+        )
+    universe = {
+        (row, column)
+        for row in range(planner.grid.shape[0])
+        for column in range(planner.grid.shape[1])
+    }
+    if set(allowed).union(excluded) != universe:
+        raise NonFifoTemporalAdapterError(
+            "bounded non-FIFO adapter certificate does not cover the finite grid"
+        )
+    if request.start not in set(allowed) or request.goal not in set(allowed):
+        raise NonFifoTemporalAdapterError(
+            "bounded non-FIFO adapter certificate excludes request endpoints"
         )
 
 
@@ -530,7 +771,10 @@ __all__ = [
     "NonFifoTemporalResearchSession",
     "NonFifoTemporalSafetyViolation",
     "NonFifoTemporalStepEvidence",
+    "create_non_fifo_temporal_bounded_session",
     "create_non_fifo_temporal_session",
+    "restore_non_fifo_temporal_bounded_session",
     "restore_non_fifo_temporal_session",
+    "run_non_fifo_temporal_bounded_search",
     "run_non_fifo_temporal_search",
 ]
