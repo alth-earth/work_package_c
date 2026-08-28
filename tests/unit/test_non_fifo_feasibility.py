@@ -144,3 +144,41 @@ def test_non_fifo_rejects_naive_non_positive_arrival() -> None:
 
     assert result.status is NonFifoSearchStatus.EVALUATOR_FAILURE
     assert any("arrival_before_departure" in error for error in result.evaluator_errors)
+
+
+def test_same_exact_arrival_replaces_only_a_more_expensive_label() -> None:
+    graph = {"start": ("join", "join"), "join": ()}
+    calls = 0
+
+    def evaluate(_start: str, _end: str, arrival: datetime) -> NonFifoTransition:
+        nonlocal calls
+        calls += 1
+        return NonFifoTransition(arrival + timedelta(hours=1), 2.0 if calls == 1 else 1.0)
+
+    result = search_non_fifo(
+        start="start",
+        goal="join",
+        departure_time=T0,
+        neighbors=graph.__getitem__,
+        evaluate_edge=evaluate,
+    )
+
+    assert result.status is NonFifoSearchStatus.GOAL_FOUND
+    assert result.label is not None
+    assert result.label.cost == 1.0
+    assert len([label for label in result.labels if label.node == "join"]) == 1
+
+
+def test_maximum_elapsed_is_a_explicit_no_route_boundary() -> None:
+    result = search_non_fifo(
+        start="start",
+        goal="goal",
+        departure_time=T0,
+        neighbors=lambda _node: ("goal",),
+        evaluate_edge=lambda *_args: _transition(2.0),
+        maximum_elapsed=timedelta(hours=1),
+    )
+
+    assert result.status is NonFifoSearchStatus.EXHAUSTED
+    assert result.label is None
+    assert result.reason == "no_route"
