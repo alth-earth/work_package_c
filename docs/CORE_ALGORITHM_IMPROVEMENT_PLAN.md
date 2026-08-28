@@ -1395,3 +1395,31 @@ Corridor test-only 通过，development 因未覆盖每目标 pruning 保持
 `NO_PERFORMANCE_PROOF/FAIL`。不启动 24h、full-voyage、Winter、P2.1、P3、ARA* 或 production
 candidate。后续只能从 clean local commit 另立：(a) P0.2 非 FIFO label-correcting/Pareto
 实现计划；(b) 证明型真实 corridor/envelope 扩展；或 (c) evaluator interval/连续性证明增强。
+
+### 【2026-08-29 | PLANNED】P0.2-M0：非 FIFO label-correcting/Pareto 可行性收口
+
+本轮由 M1.12 真实 holdout/development 的 interval 级负 travel-operator jump 触发；该
+证据说明真实 evaluator 不能安全套用 FIFO 时间支配，但不代表连续海洋模型上的全局非 FIFO
+最优性已经成立。工作仅在 C 内部、有限状态域和 test-only sidecar 中进行，默认
+`TemporalDominancePolicy.disabled()`、正式 `TemporalLabelAStar.plan()`、ingress/service、
+公共 planner、B/C 与 C/D 合同及 Winter/P2.1/P3/ARA* 全部不变。
+
+**实现边界。** 在现有 `non_fifo_feasibility` 研究参考上补齐显式的
+label-correcting/Pareto 语义：标签键至少包含节点与 exact UTC arrival，不能以时间桶或
+FIFO 假设跨到达删除标签；同 exact-arrival 仅允许更低成本替换。Pareto 过滤只允许使用
+可证明的逐分量支配，默认保守关闭；已扩展标签不得删除。有限域搜索必须显式报告
+`GOAL_FOUND`、`EXHAUSTED`、`RESOURCE_LIMIT`、`CANCELLED` 和 `EVALUATOR_FAILURE`，并冻结
+expansion/label/queue/edge-evaluation 上限。hard-mask、未知/非有限 evaluator、非法到达时间、
+周期 ETA 和 horizon 超限均 fail-closed，不返回部分 route 作为成功结果。
+
+**验收矩阵。** 以独立 zero-heuristic exact-arrival Dijkstra oracle 对照 2×2 非 FIFO 后到达
+更优 suffix、同桶不同 exact ETA、周期 ETA、重复 exact-arrival 成本替换、hard-mask/evaluator
+failure、arrival-before-departure、取消、horizon 和各资源上限；每个 fixture 要求路线、精确
+到达、成本、失败语义和 semantic digest 确定一致，且无误剪枝。重复运行必须 deterministic，
+不得将扫描未发现反例当作 FIFO 证明，不宣称连续模型全局最优。
+
+**收口分支。** 全部 adversarial、oracle、终止、取消、资源和 fail-closed 证据通过时仅记为
+`READY_FOR_P0.2_IMPLEMENTATION_PLAN`，另立生产候选计划；任一语义不一致、误剪枝、资源/取消
+失效或 identity 漂移记为 `NO_PERFORMANCE_PROOF/FAIL` 或 `INVALID/PENDING`。实验构件只写
+`.runtime/experiments/`，本地提交后移除辅助 worktree，不 push，不自动进入真实 runner、
+Winter 或 candidate。
