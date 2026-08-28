@@ -1646,3 +1646,35 @@ restore 的路线、精确 ETA、业务字段、semantic digest、资源计数�
 漂移，以及 active/archive 导入边界。结果仅为
 `READY_FOR_P0.2-ADAPTER_LONG-RUN_PLAN` 的研究证据，不代表真实输入资格、连续非 FIFO
 全局最优或 candidate 晋级。
+
+### 【2026-08-29 | COMPLETED】P0.2-M3：非 FIFO actual session 的可恢复执行围栏
+
+本轮从 P0.2-M2 集成 clean tip `3d408fb` 建立隔离分支
+`research/p02-m3-nonfifo-session-20260829`，先提交计划 `23ff175`，实现与测试提交为
+`f87925c`，随后 fast-forward 集成回正式 `research-validation-system`。辅助 worktree 已
+在集成验证后移除，研究分支保留，未 push。改动仍只在 C 内部
+`non_fifo_temporal_adapter` sidecar，不修改 B/C、C/D 合同、ingress/service、公共 planner、
+正式 `plan()` 默认行为、真实 runner、Winter/P2.1/P3/ARA* 或 production candidate。
+
+**可恢复执行。** adapter 新增显式的 `NonFifoTemporalResearchSession`、
+`NonFifoTemporalResearchCheckpoint`、`create_non_fifo_temporal_session(...)` 和
+`restore_non_fifo_temporal_session(...)`。session 支持 expansion slice 分片推进；只有
+底层状态为 `PAUSED` 时才返回暂停空值，暂停不会被当作成功。checkpoint 同时绑定 adapter
+schema/mode digest 与 active `TemporalSessionCheckpoint` state digest；恢复前重验嵌套
+checkpoint、request、ETA/search/evaluator identity、dominance policy digest 和 state-bound
+围栏。已扩展 exact-arrival label 不删除，未引入 FIFO 或时间桶跨到达剪枝。
+
+**失败语义与验证。** full-run 与 slice→checkpoint→restore 在实际 `_EdgeTraversal`
+非 FIFO fixture 上路线、精确 ETA、业务字段、semantic digest、expanded/edge 计数一致；
+取消、资源上限、horizon、evaluator failure、终止后禁止 checkpoint、mode/state/identity
+篡改均 fail-closed。adapter focused 矩阵为 `10 passed`，隔离 worktree 全量为
+`447 passed, 3 skipped`（skip 仍仅为退休 M2J orchestrator 脚本缺失）；集成正式工作树
+`UV_OFFLINE=1 make check` 为 `450 passed`，Ruff、`uv lock --check`、offline sync、CLI
+smoke、active/archive import boundary 和 `git diff --check` 全部通过。
+
+**收口结论。** 本轮仅把 actual temporal session 的非 FIFO 研究执行推进到可暂停、可恢复、
+可取消和可审计状态，仍不证明连续非 FIFO 海洋模型全局最优、真实输入资格或性能晋级。状态
+更新为 `READY_FOR_P0.2-ADAPTER_LONG-RUN_PLAN`；真实输入
+`REAL_INPUT_FIFO_VIOLATED`、24h queue 上限、dominance 默认关闭及 candidate/Winter/P2.1/
+P3/ARA* 冻结不变。后续必须另立长任务资源预算、真实输入 identity 和 oracle 证据计划，
+不得自动接入 production。
