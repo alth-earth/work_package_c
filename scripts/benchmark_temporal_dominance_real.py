@@ -70,6 +70,7 @@ MAX_REFINEMENT_LEVELS = 4
 IMPLEMENTATION_FILES = (
     "src/arctic_route_planning/planners/eta_refinement.py",
     "src/arctic_route_planning/planners/eta_interval.py",
+    "src/arctic_route_planning/planners/temporal_bounds.py",
     "src/arctic_route_planning/planners/temporal_qualification.py",
     "src/arctic_route_planning/planners/temporal_label_astar.py",
     "src/arctic_route_planning/planners/temporal_session.py",
