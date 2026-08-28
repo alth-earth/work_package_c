@@ -171,13 +171,30 @@ def _resource_snapshot(module: Any) -> dict[str, Any]:
     return module._resource_snapshot()
 
 
+def _complete_grid_nodes(fixture: Any) -> tuple[tuple[int, int], ...]:
+    """Return the full finite grid used by the projection certificate.
+
+    The dominance real runner intentionally exposes only its qualification
+    helpers and does not define a projection-specific ``_nodes`` function.
+    Test-only pruning must nevertheless use the same complete universe as the
+    projection runner, including nodes that are blocked at departure but may
+    become available in later frames.
+    """
+
+    return tuple(
+        (row, column)
+        for row in range(fixture.grid.shape[0])
+        for column in range(fixture.grid.shape[1])
+    )
+
+
 def _build_certificate(
     module: Any, fixture: Any, objective_name: str
 ) -> tuple[Any, Any, Any, tuple[Any, ...]]:
     objective = ObjectiveMode(objective_name)
     planner = module._build_planner(fixture, objective)
     request = module._request(fixture, objective)
-    nodes = module._nodes(fixture)
+    nodes = _complete_grid_nodes(fixture)
     scope = planner.temporal_scope(request)
     max_speed = planner.vessel_model.maximum_speed_knots * KNOT_TO_KM_PER_HOUR
     forward = {node: fixture.grid.distance_km(fixture.start, node) / max_speed for node in nodes}
