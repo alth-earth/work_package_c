@@ -278,7 +278,7 @@ def _worker(args: argparse.Namespace) -> dict[str, Any]:
             "resources_before": before,
             "resources_after": after,
         },
-        args.cpu,
+        cpu=args.cpu,
     )
     status = (
         "PASS"
