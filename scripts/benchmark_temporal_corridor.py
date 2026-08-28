@@ -353,6 +353,10 @@ def _run(args: argparse.Namespace) -> int:
                 case = existing.get(key)
                 if case is None:
                     case = _case(profile, objective, certificate_kind)
+                    repeat = _case(profile, objective, certificate_kind)
+                    case["deterministic"] = (
+                        case["deterministic_digest"] == repeat["deterministic_digest"]
+                    )
                     _append_jsonl(cases_path, case)
                 cases.append(case)
                 _atomic_json(
@@ -373,6 +377,7 @@ def _run(args: argparse.Namespace) -> int:
         and all(case["certificate_usable"] for case in certified)
         and all(not case["certificate_usable"] and case["actual_pruning"] == 0 for case in rejected)
         and all(case["actual_pruning"] > 0 for case in certified)
+        and all(case.get("deterministic", False) for case in cases)
     )
     summary = {
         "schema_version": SCHEMA_VERSION,
@@ -384,8 +389,7 @@ def _run(args: argparse.Namespace) -> int:
         "observed_certified_pruning": sum(case["actual_pruning"] for case in certified),
         "rejected_pruning_total": sum(case["actual_pruning"] for case in rejected),
         "semantic_match": all(case["semantic_match"] for case in cases),
-        "deterministic": len({case["deterministic_digest"] for case in cases})
-        == len({(case["profile"], case["objective"], case["certificate_kind"]) for case in cases}),
+        "deterministic": all(case.get("deterministic", False) for case in cases),
         "fail_closed": all(
             not case["certificate_usable"] and case["actual_pruning"] == 0
             for case in rejected
