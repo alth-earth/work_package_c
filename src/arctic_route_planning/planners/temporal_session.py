@@ -234,6 +234,7 @@ class TemporalSessionIdentity:
     search_limits_digest: str = ""
     edge_evaluator_digest: str = ""
     dominance_policy_digest: str = ""
+    state_bound_policy_digest: str = ""
     algorithm_version: str = _ALGORITHM_VERSION
 
     @classmethod
@@ -311,6 +312,11 @@ class TemporalSessionIdentity:
                 "dominance_policy_digest",
                 "temporal-dominance-disabled",
             ),
+            state_bound_policy_digest=getattr(
+                planner,
+                "state_bound_policy_digest",
+                "temporal-state-bound-disabled",
+            ),
         )
 
     @property
@@ -339,6 +345,7 @@ class TemporalSessionIdentity:
             self.search_limits_digest,
             self.edge_evaluator_digest,
             self.dominance_policy_digest,
+            self.state_bound_policy_digest,
         )
         if (
             self.objective is None
@@ -472,6 +479,11 @@ class TemporalSession:
             request,
             input_revision=identity.input_revision,
         )
+        planner._authorize_state_bound(
+            self.context,
+            request,
+            input_revision=identity.input_revision,
+        )
         planner._check_cancelled(request)
         planner._validate_request_nodes(request)
         self.start_sample = planner._sample_node(request.start, request.departure_time)
@@ -502,6 +514,7 @@ class TemporalSession:
         self.serial_consumed = 1
         self.context.diagnostics.heap_pushes = 1
         self.context.diagnostics.queue_peak = 1
+        self._observe_queue_profile(start_state)
         self.context.diagnostics.label_peak = 1
         self.incumbent_state = None
         self.incumbent_cost = float("inf")
@@ -620,6 +633,12 @@ class TemporalSession:
                         continue
                     heading_code = (neighbor[0] - node[0], neighbor[1] - node[1])
                     next_state = (neighbor, heading_code, traversal.arrival_time)
+                    if self.planner._should_prune_state_bound(
+                        next_state,
+                        self.request,
+                        context=self.context,
+                    ):
+                        continue
                     tentative_cost = current_cost + traversal.cost.total_equivalent_hours
                     if self.planner._dominance_maybe_applicable(
                         next_state,
@@ -637,6 +656,23 @@ class TemporalSession:
                         continue
                     if previous is None and len(self.labels) >= self.planner.limits.max_labels:
                         raise self.planner._limit("labels", self.planner.limits.max_labels)
+                    priority = self.planner._priority(
+                        neighbor,
+                        self.request.goal,
+                        self.request,
+                        self.cost_model,
+                        tentative_cost,
+                        context=self.context,
+                    )
+                    if (
+                        self.incumbent_state is not None
+                        and priority >= self.incumbent_cost - 1e-12
+                    ):
+                        # The planner's lower bound is admissible, so this
+                        # newly generated label cannot improve the incumbent.
+                        # Existing/expanded labels remain untouched.
+                        self.context.diagnostics.incumbent_pruned += 1
+                        continue
                     if previous is not None:
                         self.context.diagnostics.exact_state_replacements += 1
                     self.labels[next_state] = tentative_cost
@@ -644,10 +680,6 @@ class TemporalSession:
                     self.planner._register_temporal_label(
                         next_state,
                         tentative_cost,
-                        context=self.context,
-                    )
-                    priority = self.planner._priority(
-                        neighbor, self.request.goal, self.request, self.cost_model, tentative_cost,
                         context=self.context,
                     )
                     self.planner._ensure_queue_capacity(self.queue)
@@ -665,6 +697,7 @@ class TemporalSession:
                         self.context.diagnostics.queue_peak,
                         len(self.queue),
                     )
+                    self._observe_queue_profile(next_state)
                     self.context.diagnostics.label_peak = max(
                         self.context.diagnostics.label_peak,
                         len(self.labels),
@@ -681,6 +714,18 @@ class TemporalSession:
         finally:
             self.compute_ms += (perf_counter() - started) * 1000.0
             self.advance_started = None
+
+    def _observe_queue_profile(self, state: Any) -> None:
+        """Record queue growth by exact-arrival elapsed-time bucket."""
+
+        arrival_time = state[2]
+        elapsed_hours = max(
+            0.0,
+            (arrival_time - self.request.departure_time).total_seconds() / 3600.0,
+        )
+        bucket = int(elapsed_hours)
+        profile = self.context.diagnostics.queue_peak_by_elapsed_hour
+        profile[bucket] = max(profile.get(bucket, 0), len(self.queue))
 
     def _current_compute_ms(self) -> float:
         if self.advance_started is None:
@@ -704,6 +749,10 @@ class TemporalSession:
             return "speed"
         if isinstance(error, EtaRefinementError):
             self.context.diagnostics.eta_failures += 1
+            failure_class = error.failure_class
+            self.context.diagnostics.eta_failure_reasons[failure_class] = (
+                self.context.diagnostics.eta_failure_reasons.get(failure_class, 0) + 1
+            )
             return _eta_rejection_reason(error)
         if isinstance(error, _RejectedEdge):
             return error.reason
@@ -874,13 +923,25 @@ def restore_session(
         restored_request,
         input_revision=checkpoint.identity.input_revision,
     )
+    planner._authorize_state_bound(
+        session.context,
+        restored_request,
+        input_revision=checkpoint.identity.input_revision,
+    )
     from arctic_route_planning.planners.temporal_label_astar import _MutableDiagnostics
 
     session.context.diagnostics = _MutableDiagnostics(
         **{
             field.name: (
                 dict(getattr(checkpoint.diagnostics, field.name))
-                if field.name in {"rejection_reasons", "dominance_rejection_reasons"}
+                if field.name
+                in {
+                    "rejection_reasons",
+                    "eta_failure_reasons",
+                    "dominance_rejection_reasons",
+                    "queue_peak_by_elapsed_hour",
+                    "state_bound_rejection_reasons",
+                }
                 else getattr(checkpoint.diagnostics, field.name)
             )
             for field in fields(checkpoint.diagnostics)

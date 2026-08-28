@@ -209,6 +209,26 @@ def test_goal_incumbent_waits_for_active_open_lower_bound() -> None:
 
     assert result.nodes == ((0, 0), (1, 0), (1, 1), (1, 2), (0, 2))
     assert result.total_cost_hours < 1.0
+    assert result.diagnostics.queue_peak_by_elapsed_hour
+
+
+def test_eta_failure_class_is_preserved_in_session_diagnostics() -> None:
+    def failing_edge(*_args):
+        raise EtaRefinementError(
+            "no_bracket_found",
+            {"proof_status": "uncertain_no_bracket", "message": "diagnostic"},
+        )
+
+    planner = _planner(rows=2, columns=2, edge_evaluator=failing_edge)
+    request = PlanningRequest(start=(0, 0), goal=(0, 1), departure_time=T0)
+    session = planner.create_session(request)
+
+    with pytest.raises(NoRouteError, match="no exact-arrival route"):
+        planner.advance_session(session)
+
+    assert session.context.diagnostics.eta_failure_reasons == {
+        "fixed_point_uncertain": 3
+    }
 
 
 def test_same_bucket_exact_arrivals_are_not_cross_dominated() -> None:

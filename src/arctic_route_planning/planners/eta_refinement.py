@@ -18,6 +18,7 @@ _ALLOWED_ERROR_REASONS = frozenset(
         "max_iterations",
         "terminal_mismatch",
         "invalid_operator",
+        "no_bracket_found",
         "no_fixed_point",
     }
 )
@@ -31,10 +32,12 @@ class EtaRefinementPolicy:
     ``method="damped"`` keeps the historical damped fixed-point iteration.
     ``method="bounded"`` uses an interval-contraction (bisection-like) search
     that first brackets a sign change of ``implied(t) - t``; it converges on
-    oscillatory fields where damping diverges, and reports ``no_fixed_point``
-    (fail-closed) when no sign change exists on the search interval instead of
-    silently returning a non-fixed point.  ``max_iterations`` bounds the
-    bisection steps.
+    oscillatory fields where damping diverges.  If the finite search interval
+    has no sign change it reports ``no_bracket_found`` (fail-closed): that is
+    uncertainty about the global fixed-point domain, not proof that no root
+    exists.  The reserved ``no_fixed_point`` reason is only valid when a
+    caller supplies an independently certified global exclusion proof.
+    ``max_iterations`` bounds the bisection steps.
     """
 
     max_iterations: int = 12
@@ -96,6 +99,29 @@ class EtaRefinementError(RuntimeError):
         detail = self.diagnostics.get("message", "ETA refinement failed")
         super().__init__(f"{reason}: {detail}")
 
+    @property
+    def failure_class(self) -> str:
+        """Return a stable evidence class without overstating a root proof.
+
+        ``no_bracket_found`` means that the finite search did not find a
+        bracket; it must not be reported as a globally proven no-root result.
+        The stronger ``no_fixed_point`` value is reserved for callers that
+        attach an independently audited exclusion proof.
+        """
+
+        if self.reason == "no_bracket_found":
+            return "fixed_point_uncertain"
+        if self.reason == "no_fixed_point":
+            return "fixed_point_excluded"
+        if self.reason in {"cycle", "max_iterations", "terminal_mismatch"}:
+            return "fixed_point_uncertain"
+        if self.reason == "invalid_operator":
+            operator_exception = self.diagnostics.get("operator_exception")
+            if operator_exception in {"RiskCoverageError", "RiskSamplingError"}:
+                return "evaluator_coverage_failure"
+            return "operator_invalid"
+        return self.reason
+
 
 def refine_eta(
     initial_guess_hours: float,
@@ -114,8 +140,9 @@ def refine_eta(
     - ``"bounded"`` (C-ALG-03B): interval contraction over the ETA domain.
       Brackets a sign change of ``implied(t) - t`` and bisects to the
       tolerance; converges on oscillatory fields.  If no sign change exists on
-      the interval it fails closed with ``no_fixed_point`` instead of
-      returning a non-fixed point.
+      the finite search interval it fails closed with ``no_bracket_found``
+      instead of returning a non-fixed point.  This does not assert that no
+      root exists outside that interval.
 
     Once the *raw* residual is within tolerance, the operator is evaluated one
     more time at the raw ETA; only that terminal evaluation is returned to
@@ -267,9 +294,9 @@ def _refine_bounded(
     bracketed root) or the widening hits the iteration budget.  On a bracketed
     root the interval is bisected down to tolerance.  If no sign change is
     found on the searched interval the refinement fails closed with
-    ``no_fixed_point``: returning the closest sample would silently accept an
-    ETA that is not self-consistent, which is exactly the correctness debt the
-    bounded method exists to eliminate.
+    ``no_bracket_found``: returning the closest sample would silently accept
+    an ETA that is not self-consistent.  The finite scan is not a global proof
+    that no root exists, so this diagnostic preserves that uncertainty.
     """
 
     max_residual_seconds = 0.0
@@ -312,9 +339,12 @@ def _refine_bounded(
 
     bracketed = (left_g < 0.0) != (right_g < 0.0)
     if not bracketed:
-        # No sign change on the searched interval: no fixed point is provable.
+        # No sign change on the searched interval.  This is not a global
+        # no-root proof: the true fixed point may lie outside the finite
+        # bracket, or the operator may be discontinuous/non-monotone between
+        # probes.  Keep the result fail-closed but preserve that uncertainty.
         raise EtaRefinementError(
-            "no_fixed_point",
+            "no_bracket_found",
             {
                 "stage": "bounded_bracket",
                 "initial_guess_hours": initial,
@@ -324,7 +354,8 @@ def _refine_bounded(
                 "right_residual_seconds": right_g * 3600.0,
                 "iterations": expanded,
                 "max_residual_seconds": max_residual_seconds,
-                "message": "no ETA fixed point found on the searched interval",
+                "proof_status": "uncertain_no_bracket",
+                "message": "no ETA sign-change bracket found on the finite search interval",
             },
         )
 

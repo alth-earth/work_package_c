@@ -148,13 +148,13 @@ def test_bounded_method_converges_on_oscillatory_operator() -> None:
     assert abs(implied_at_return - result.travel_hours) * 3600.0 <= 1.0
 
 
-def test_bounded_method_fails_closed_when_no_fixed_point_exists() -> None:
-    """C-ALG-03B: no sign change means no fixed point is provable.
+def test_bounded_method_reports_missing_bracket_as_uncertain() -> None:
+    """C-ALG-03B: no finite sign change is not a global no-root proof.
 
-    An operator with ``implied(t) == t + 0.5`` everywhere has no fixed point;
-    the bounded method must fail closed with ``no_fixed_point`` instead of
-    silently returning a non-fixed point (the damped method would report
-    ``max_iterations``).
+    An operator with ``implied(t) == t + 0.5`` everywhere has no fixed point,
+    but the finite bracket search is not itself a proof of that fact.  The
+    bounded method must fail closed with ``no_bracket_found`` and preserve an
+    explicitly uncertain evidence class.
     """
     with pytest.raises(EtaRefinementError) as raised:
         refine_eta(
@@ -163,8 +163,29 @@ def test_bounded_method_fails_closed_when_no_fixed_point_exists() -> None:
             policy=EtaRefinementPolicy(method="bounded"),
         )
 
-    assert raised.value.reason == "no_fixed_point"
+    assert raised.value.reason == "no_bracket_found"
+    assert raised.value.failure_class == "fixed_point_uncertain"
+    assert raised.value.diagnostics["proof_status"] == "uncertain_no_bracket"
     assert raised.value.diagnostics["initial_guess_hours"] == 1.0
+
+
+def test_bounded_method_does_not_call_a_root_outside_finite_bracket_absent_proof() -> None:
+    """A root outside the searched interval must remain an uncertainty."""
+
+    def evaluate(guess: float) -> EtaEvaluation:
+        # The root is at 10h, while the default finite bracket from 1h never
+        # reaches it.  No-bracket is therefore the only sound conclusion.
+        return _evaluation(10.0)
+
+    with pytest.raises(EtaRefinementError) as raised:
+        refine_eta(
+            1.0,
+            evaluate,
+            policy=EtaRefinementPolicy(method="bounded"),
+        )
+
+    assert raised.value.reason == "no_bracket_found"
+    assert raised.value.failure_class == "fixed_point_uncertain"
 
 
 @pytest.mark.parametrize("bad_method", ["bogus", "", "damped2", None])

@@ -6,6 +6,9 @@ from datetime import timedelta
 
 import pytest
 
+from arctic_route_planning.planners.temporal_bounds import (
+    TemporalStateBoundCertificate,
+)
 from arctic_route_planning.planners.temporal_qualification import (
     DominanceMode,
     FifoCertificate,
@@ -422,6 +425,85 @@ def test_checkpoint_restore_rejects_dominance_policy_change() -> None:
             suffix_monotone=True,
             coverage_complete=True,
         )
+    )
+
+    with pytest.raises(TemporalSessionIdentityMismatch, match="identity fence"):
+        planner.restore_session(checkpoint, request=request)
+
+
+def test_state_bound_is_disabled_by_default_and_binds_identity() -> None:
+    planner = _planner()
+    request = PlanningRequest(start=(1, 0), goal=(1, 3), departure_time=T0)
+
+    identity = TemporalSessionIdentity.from_planner(planner, request)
+    result = planner.plan(request)
+
+    assert identity.state_bound_policy_digest == "temporal-state-bound-disabled"
+    assert result.diagnostics.state_bound_checks == 0
+    assert result.diagnostics.state_bound_pruned == 0
+
+
+def test_certified_state_bound_prunes_only_newly_generated_nodes() -> None:
+    planner = _planner()
+    request = PlanningRequest(start=(1, 0), goal=(1, 3), departure_time=T0)
+    scope = planner.temporal_scope(request)
+    planner.state_bound_certificate = TemporalStateBoundCertificate.certified(
+        scope,
+        allowed_nodes=((1, 0), (1, 1), (1, 2), (1, 3)),
+        proof_digest="corridor-proof-v1",
+    )
+    context = planner._new_execution_context()
+
+    assert planner._authorize_state_bound(context, request)
+    assert not planner._should_prune_state_bound(
+        ((1, 1), (0, 1), T0 + timedelta(minutes=10)),
+        request,
+        context=context,
+    )
+    assert planner._should_prune_state_bound(
+        ((0, 1), (0, 1), T0 + timedelta(minutes=10)),
+        request,
+        context=context,
+    )
+    assert context.diagnostics.state_bound_checks == 2
+    assert context.diagnostics.state_bound_pruned == 1
+    assert context.diagnostics.state_bound_rejected == 0
+
+
+def test_state_bound_scope_mismatch_is_fail_closed_and_recorded() -> None:
+    planner = _planner()
+    request = PlanningRequest(start=(1, 0), goal=(1, 3), departure_time=T0)
+    scope = planner.temporal_scope(request)
+    mismatched = dict(scope.mapping)
+    mismatched["goal"] = (0, 3)
+    planner.state_bound_certificate = TemporalStateBoundCertificate.certified(
+        mismatched,
+        allowed_nodes=((1, 0), (1, 1), (1, 2), (1, 3)),
+        proof_digest="corridor-proof-v1",
+    )
+    context = planner._new_execution_context()
+
+    assert not planner._authorize_state_bound(context, request)
+    assert context.diagnostics.state_bound_rejected == 1
+    assert context.diagnostics.state_bound_rejection_reasons == {"scope_mismatch": 1}
+    assert not planner._should_prune_state_bound(
+        ((0, 1), (0, 1), T0 + timedelta(minutes=10)),
+        request,
+        context=context,
+    )
+
+
+def test_checkpoint_restore_rejects_state_bound_policy_change() -> None:
+    planner = _planner()
+    request = PlanningRequest(start=(1, 0), goal=(1, 3), departure_time=T0)
+    session = planner.create_session(request)
+    assert planner.advance_session(session, expansion_slice=1) is None
+    checkpoint = planner.checkpoint_session(session)
+
+    planner.state_bound_certificate = TemporalStateBoundCertificate.certified(
+        planner.temporal_scope(request),
+        allowed_nodes=((1, 0), (1, 1), (1, 2), (1, 3)),
+        proof_digest="corridor-proof-v1",
     )
 
     with pytest.raises(TemporalSessionIdentityMismatch, match="identity fence"):

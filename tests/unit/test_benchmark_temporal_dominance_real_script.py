@@ -111,6 +111,12 @@ def test_resource_summary_requires_complete_deterministic_cells() -> None:
                 "semantic_digest": objective,
                 "compute_ms": 10.0,
                 "wall_seconds": 0.1,
+                "diagnostics": {
+                    "queue_peak_by_elapsed_hour": [[0, 2], [1, 5]],
+                    "incumbent_pruned": 3,
+                    "state_bound_pruned": 0,
+                    "eta_failure_reasons": [["fixed_point_uncertain", 1]],
+                },
             }
         )
     summary = _SCRIPT._resource_summary(cases, repetitions=1, cpu=2, ignored_records=0)
@@ -118,6 +124,11 @@ def test_resource_summary_requires_complete_deterministic_cells() -> None:
     assert summary["status"] == "RESOURCE_FRONTIER_PASS"
     assert summary["resource_evidence_complete"] is True
     assert summary["metrics"]["fastest"]["compute_ms"]["p95"] == pytest.approx(10.0)
+    assert summary["metrics"]["fastest"]["queue_peak_by_elapsed_hour"] == {
+        "0": 2,
+        "1": 5,
+    }
+    assert summary["metrics"]["fastest"]["incumbent_pruned_total"] == 3
 
 
 def test_resume_reuses_complete_cells_without_rerunning_workers(tmp_path, monkeypatch) -> None:

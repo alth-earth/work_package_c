@@ -43,6 +43,7 @@ from .eta_refinement import (
     EtaRefinementPolicy,
     refine_eta,
 )
+from .temporal_bounds import TemporalStateBoundCertificate, TemporalStateBoundStatus
 from .temporal_qualification import (
     TemporalDominancePolicy,
     TemporalScope,
@@ -150,6 +151,7 @@ class TemporalDiagnostics:
     eta_iterations: int = 0
     eta_resamples: int = 0
     eta_failures: int = 0
+    eta_failure_reasons: tuple[tuple[str, int], ...] = ()
     eta_max_residual_seconds: float = 0.0
     rejected_hard_edges: int = 0
     rejected_risk_edges: int = 0
@@ -166,6 +168,12 @@ class TemporalDiagnostics:
     dominance_pruned: int = 0
     dominance_rejected: int = 0
     dominance_rejection_reasons: tuple[tuple[str, int], ...] = ()
+    incumbent_pruned: int = 0
+    queue_peak_by_elapsed_hour: tuple[tuple[int, int], ...] = ()
+    state_bound_checks: int = 0
+    state_bound_pruned: int = 0
+    state_bound_rejected: int = 0
+    state_bound_rejection_reasons: tuple[tuple[str, int], ...] = ()
 
     @property
     def labels_peak(self) -> int:
@@ -207,6 +215,7 @@ class _MutableDiagnostics:
     eta_iterations: int = 0
     eta_resamples: int = 0
     eta_failures: int = 0
+    eta_failure_reasons: dict[str, int] = field(default_factory=dict)
     eta_max_residual_seconds: float = 0.0
     rejected_hard_edges: int = 0
     rejected_risk_edges: int = 0
@@ -223,6 +232,12 @@ class _MutableDiagnostics:
     dominance_pruned: int = 0
     dominance_rejected: int = 0
     dominance_rejection_reasons: dict[str, int] = field(default_factory=dict)
+    incumbent_pruned: int = 0
+    queue_peak_by_elapsed_hour: dict[int, int] = field(default_factory=dict)
+    state_bound_checks: int = 0
+    state_bound_pruned: int = 0
+    state_bound_rejected: int = 0
+    state_bound_rejection_reasons: dict[str, int] = field(default_factory=dict)
 
     def reject(self, reason: str) -> None:
         self.rejection_reasons[reason] = self.rejection_reasons.get(reason, 0) + 1
@@ -260,6 +275,7 @@ class _MutableDiagnostics:
             eta_iterations=self.eta_iterations,
             eta_resamples=self.eta_resamples,
             eta_failures=self.eta_failures,
+            eta_failure_reasons=tuple(sorted(self.eta_failure_reasons.items())),
             eta_max_residual_seconds=self.eta_max_residual_seconds,
             rejected_hard_edges=self.rejected_hard_edges,
             rejected_risk_edges=self.rejected_risk_edges,
@@ -277,6 +293,16 @@ class _MutableDiagnostics:
             dominance_rejected=self.dominance_rejected,
             dominance_rejection_reasons=tuple(
                 sorted(self.dominance_rejection_reasons.items())
+            ),
+            incumbent_pruned=self.incumbent_pruned,
+            queue_peak_by_elapsed_hour=tuple(
+                sorted(self.queue_peak_by_elapsed_hour.items())
+            ),
+            state_bound_checks=self.state_bound_checks,
+            state_bound_pruned=self.state_bound_pruned,
+            state_bound_rejected=self.state_bound_rejected,
+            state_bound_rejection_reasons=tuple(
+                sorted(self.state_bound_rejection_reasons.items())
             ),
         )
 
@@ -302,6 +328,8 @@ class _TemporalExecutionContext:
     dominance_authorized: bool | None = None
     dominance_tolerance_seconds: float = 0.0
     dominance_policy: TemporalDominancePolicy | None = None
+    state_bound_certificate: TemporalStateBoundCertificate | None = None
+    state_bound_authorized: bool | None = None
 
 
 class _RejectedEdge(Exception):
@@ -331,6 +359,7 @@ class TemporalLabelAStar(TimeDependentAStar):
         eta_policy: EtaRefinementPolicy | None = None,
         edge_evaluator: EdgeEvaluator | None = None,
         dominance_policy: TemporalDominancePolicy | None = None,
+        state_bound_certificate: TemporalStateBoundCertificate | None = None,
     ) -> None:
         super().__init__(
             grid,
@@ -344,12 +373,21 @@ class TemporalLabelAStar(TimeDependentAStar):
         self.eta_policy = eta_policy or EtaRefinementPolicy()
         self._injected_edge_evaluator = edge_evaluator
         self.dominance_policy = dominance_policy or TemporalDominancePolicy.disabled()
+        self.state_bound_certificate = state_bound_certificate
 
     @property
     def dominance_policy_digest(self) -> str:
         """Identity fence for the optional, default-off dominance policy."""
 
         return self.dominance_policy.digest
+
+    @property
+    def state_bound_policy_digest(self) -> str:
+        """Identity fence for the optional proof-carrying state bound."""
+
+        if self.state_bound_certificate is None:
+            return "temporal-state-bound-disabled"
+        return self.state_bound_certificate.digest
 
     def temporal_scope(
         self,
@@ -631,7 +669,84 @@ class TemporalLabelAStar(TimeDependentAStar):
         if certificate is not None:
             context.diagnostics.fifo_status = certificate.fifo_certificate.status.value
         context.dominance_policy = self.dominance_policy
+        context.state_bound_certificate = self.state_bound_certificate
         return context
+
+    def _authorize_state_bound(
+        self,
+        context: _TemporalExecutionContext,
+        request: PlanningRequest,
+        *,
+        input_revision: int = 0,
+    ) -> bool:
+        """Authorize a proof-carrying state bound for one search session.
+
+        A state bound is a research-only optimization.  Missing certificates,
+        incomplete proofs, unknown evaluators, and scope drift all remain
+        exact-label searches; the rejection is retained in diagnostics rather
+        than being silently treated as an empty corridor.
+        """
+
+        certificate = context.state_bound_certificate or self.state_bound_certificate
+        if certificate is None or certificate.status is TemporalStateBoundStatus.DISABLED:
+            context.state_bound_authorized = False
+            return False
+        if context.state_bound_authorized is None:
+            expected_scope = self.temporal_scope(
+                request,
+                input_revision=input_revision,
+            )
+            context.state_bound_authorized = certificate.permits(expected_scope)
+            if not context.state_bound_authorized:
+                diagnostics = context.diagnostics
+                diagnostics.state_bound_rejected += 1
+                reason = self._state_bound_rejection_reason(certificate, expected_scope)
+                diagnostics.state_bound_rejection_reasons[reason] = (
+                    diagnostics.state_bound_rejection_reasons.get(reason, 0) + 1
+                )
+        return bool(context.state_bound_authorized)
+
+    @staticmethod
+    def _state_bound_rejection_reason(
+        certificate: TemporalStateBoundCertificate,
+        expected_scope: TemporalScope,
+    ) -> str:
+        """Return a stable reason for refusing a state-bound certificate."""
+
+        if certificate.status is TemporalStateBoundStatus.REJECTED:
+            return certificate.reason or "certificate_rejected"
+        if not certificate.exclusion_proof:
+            return "missing_exclusion_proof"
+        if not certificate.proof_digest:
+            return "missing_proof_digest"
+        if (
+            not certificate.scope.evaluator_identity_known
+            or not expected_scope.evaluator_identity_known
+        ):
+            return "unknown_evaluator"
+        if not certificate.scope.matches(expected_scope):
+            return "scope_mismatch"
+        if not certificate.usable:
+            return certificate.reason or "certificate_unusable"
+        return "certificate_scope_or_status"
+
+    def _should_prune_state_bound(
+        self,
+        candidate_state: TemporalState,
+        request: PlanningRequest,
+        *,
+        context: _TemporalExecutionContext,
+    ) -> bool:
+        """Discard only a newly generated state outside a certified bound."""
+
+        if not self._authorize_state_bound(context, request):
+            return False
+        context.diagnostics.state_bound_checks += 1
+        certificate = context.state_bound_certificate or self.state_bound_certificate
+        if certificate is not None and not certificate.allows(candidate_state[0]):
+            context.diagnostics.state_bound_pruned += 1
+            return True
+        return False
 
     def _should_prune_dominated_label(
         self,

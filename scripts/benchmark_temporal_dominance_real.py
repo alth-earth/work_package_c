@@ -68,6 +68,8 @@ BASE_PROBE_MINUTES = 15
 NEAR_BOUNDARY_SECONDS = 60.0
 MAX_REFINEMENT_LEVELS = 4
 IMPLEMENTATION_FILES = (
+    "src/arctic_route_planning/planners/eta_refinement.py",
+    "src/arctic_route_planning/planners/eta_interval.py",
     "src/arctic_route_planning/planners/temporal_qualification.py",
     "src/arctic_route_planning/planners/temporal_label_astar.py",
     "src/arctic_route_planning/planners/temporal_session.py",
@@ -419,6 +421,24 @@ def _resource_metrics(cases: list[dict[str, Any]]) -> dict[str, Any]:
             if (case.get("resources_after") or {}).get("max_rss_kib") is not None
         ]
         semantic_digests = [case.get("semantic_digest") for case in objective_cases]
+        queue_profile: dict[str, int] = {}
+        incumbent_pruned = 0
+        state_bound_pruned = 0
+        eta_failure_reasons: dict[str, int] = {}
+        for case in objective_cases:
+            diagnostics = case.get("diagnostics") or {}
+            incumbent_pruned += int(diagnostics.get("incumbent_pruned", 0))
+            state_bound_pruned += int(diagnostics.get("state_bound_pruned", 0))
+            for raw_bucket, raw_peak in diagnostics.get(
+                "queue_peak_by_elapsed_hour", ()
+            ) or ():
+                bucket = str(raw_bucket)
+                queue_profile[bucket] = max(queue_profile.get(bucket, 0), int(raw_peak))
+            for raw_reason, raw_count in diagnostics.get("eta_failure_reasons", ()) or ():
+                reason = str(raw_reason)
+                eta_failure_reasons[reason] = (
+                    eta_failure_reasons.get(reason, 0) + int(raw_count)
+                )
         metrics[objective] = {
             "case_count": len(objective_cases),
             "compute_ms": {
@@ -436,6 +456,10 @@ def _resource_metrics(cases: list[dict[str, Any]]) -> dict[str, Any]:
             "deterministic": bool(semantic_digests)
             and len(set(semantic_digests)) == 1,
             "semantic_digests": semantic_digests,
+            "queue_peak_by_elapsed_hour": queue_profile,
+            "incumbent_pruned_total": incumbent_pruned,
+            "state_bound_pruned_total": state_bound_pruned,
+            "eta_failure_reasons": eta_failure_reasons,
         }
     return metrics
 
@@ -889,12 +913,15 @@ def _fifo_scan(args: argparse.Namespace) -> dict[str, Any]:
             value = traversal.arrival_time
         except Exception as error:
             value = None
+            failure_class = getattr(error, "failure_class", None)
             errors.append(
                 {
                     "edge": [list(edge[0]), list(edge[1])],
                     "departure": departure.astimezone(UTC).isoformat(timespec="microseconds"),
                     "error_type": type(error).__name__,
                     "error": str(error),
+                    "failure_class": failure_class,
+                    "diagnostics": dict(getattr(error, "diagnostics", {})),
                 }
             )
         cache[key] = value
@@ -955,6 +982,13 @@ def _fifo_scan(args: argparse.Namespace) -> dict[str, Any]:
         counterexample=counterexample,
         evaluation_errors=bool(errors),
     )
+    failure_classes = sorted(
+        {
+            str(item["failure_class"])
+            for item in errors
+            if item.get("failure_class") is not None
+        }
+    )
     return {
         "schema_version": SCHEMA_VERSION,
         "status": status,
@@ -967,6 +1001,7 @@ def _fifo_scan(args: argparse.Namespace) -> dict[str, Any]:
         "probe_count": len(probes),
         "evaluations": len(cache),
         "evaluation_errors": len(errors),
+        "evaluation_failure_classes": failure_classes,
         "evaluation_error_samples": errors[:20],
         "adaptive_insertions": adaptive_insertions,
         "counterexample": counterexample,
