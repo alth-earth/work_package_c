@@ -1944,3 +1944,33 @@ arrival pruning `84`。每个 worker 的 CPU affinity、RSS、无 swap、4 GiB c
 `READY_FOR_P0.2-ARRIVAL-BOUND-REAL-REVIEW`，仅可作为另立更严格资源/走廊计划的证据；
 candidate、Winter、P2.1、P3、ARA* 和 dominance 默认关闭。完成验证后移除此辅助 worktree，
 保留研究分支和上述实验构件。
+
+### 【2026-08-29 | PLANNED】P0.2-M7：proof-carrying graph-topological arrival envelope
+
+M6 已证明基于直线几何距离的 arrival envelope 在有限真实 6h non-FIFO adapter 中可以安全
+减少新生成 label，但该下界没有利用 planner 实际使用的有限网格邻接关系。M7 只研究一个
+更紧的必要条件：在完整有限网格上，以实际有向邻接边的距离和最大有效船速计算 forward/reverse
+graph lower bound，再生成 arrival upper envelope。该改进仍是 C 内部、显式 bounded adapter、
+默认关闭；不改变正式 `TemporalLabelAStar.plan()`、普通 non-FIFO adapter 或任何合同。
+
+**证书与 fail-closed。** 新增拓扑下界 sidecar，必须绑定完整 `TemporalScope`、有限 universe、
+逐节点邻接闭包、边距离 evaluator、最大速度、forward/reverse distance maps、horizon 和 proof
+digest。邻接节点越界、邻接枚举异常、边距离非有限/负值、不可达域、scope/evaluator/policy/
+checkpoint 漂移或证据不完整均拒绝证书并保持 pruning=0。Dijkstra 只用于计算保守下界和独立
+正确性证据，不注入 route；每条边 travel lower bound 使用 downward/outward rounding，arrival
+upper bound 使用 upward rounding；只允许丢弃新生成 label，不删除已扩展 label。
+
+**验证顺序。** 先在 synthetic small/medium/stress × 三目标验证完整拓扑、scope mismatch、
+邻接缺口、evaluator failure 和不可达域；certified profile 必须与无界 exact-arrival adapter
+及独立 zero-heuristic oracle 的路线、ETA、业务字段和 semantic digest 一致，并观察真实
+arrival pruning；所有 rejected profile pruning 必须为零。通过后仅对已有完整 145 帧 holdout
+`executable_0_6h` 做一次新的 topology-bound 2-repeat 诊断；不重跑 24h，不提高
+`50k/100k/50k/400k` 上限。实验产物只写 `.runtime/experiments/`，不写 formal latest、
+replanning baseline 或 frozen artifact。
+
+**收口分支。** 全部 synthetic 与真实 6h 语义、确定性、资源和 fail-closed 门通过时，仅标记
+`READY_FOR_P0.2-TOPOLOGICAL-ARRIVAL-BOUND-REVIEW`；任一误剪枝、identity 漂移、语义/资源
+失败为 `NO_PERFORMANCE_PROOF/FAIL` 或 `INVALID/PENDING`。真实 FIFO 仍保持
+`REAL_INPUT_FIFO_VIOLATED`，M4 的 24h 资源失败事实不被覆盖；candidate、Winter、P2.1、P3、
+ARA* 和 dominance 继续默认关闭。完成验证后移除辅助 worktree，保留研究分支和实验构件，
+不 push。
