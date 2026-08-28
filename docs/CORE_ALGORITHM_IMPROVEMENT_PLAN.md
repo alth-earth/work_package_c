@@ -1770,3 +1770,42 @@ import boundary 和 `git diff --check` 通过；该 worktree 原样 `UV_OFFLINE=
 `.mamba-env/bin/uv` 以 exit 127 阻塞，未修改环境。fast-forward 集成正式
 `research-validation-system` 后，`UV_OFFLINE=1 make check` 完整通过（Ruff、`456 passed`、
 lock/sync check 和 CLI smoke），因此最终 Git 收口验证以正式树结果为准。
+
+### 【2026-08-29 | PLANNED】P0.2-M5：proof-carrying corridor 与 non-FIFO adapter 资源限界
+
+M4 已证明实际 non-FIFO temporal adapter 在真实 6h 输入上可以保持 exact-arrival 业务语义，
+但 holdout/development 的 24h 三目标均在冻结预算内超时。M1.13 已有 synthetic
+`TemporalCorridorEvidence` 和真实 6h test-only replay，但该证书尚未与 non-FIFO adapter
+形成独立、可恢复、可审计的资源限界路径。本轮只推进这一 C 内部研究边界，不把真实 FIFO
+反例降级、不启用 dominance、不重开 Winter/P2.1/P3/ARA*，也不提高
+`50k expansions / 100k labels / 50k queue / 400k edge evaluations` 上限。
+
+**实现围栏。** 从正式 clean tip 建立独立 worktree 和本地分支；先提交本段计划，再新增
+显式的 proof-bound adapter/runner。既有 `run_non_fifo_temporal_search(...)`、正式
+`TemporalLabelAStar.plan()` 和默认 `TemporalStateBoundCertificate` 语义保持兼容；新路径
+必须显式传入完整、scope-matched、evaluator-certified 的 corridor certificate，默认不传
+即完全不剪枝。不得使用 beam/近似剪枝、FIFO/时间桶支配、reference route 注入，也不得
+删除已扩展 label；只允许在实际生成新 label 前依据证书排除节点，并记录
+`state_bound_checks/pruned/rejected/rejection_reasons`。
+
+**证书与恢复。** adapter 需要校验 certificate digest、完整 `TemporalScope`、bound/evaluator/
+proof digest、有限节点 universe、start/goal 包含和 coverage；状态 bound 只在所有围栏通过时
+授权，任何 scope、policy、ETA、request、search-limit、evaluator 或 checkpoint 漂移均
+fail-closed 并保持 pruning=0。checkpoint 必须绑定 state-bound digest；恢复后的 full-run
+与 slice→checkpoint→restore 必须在路线、精确 ETA、业务字段、semantic digest、资源计数和
+失败语义上相同。
+
+**验证与实验。** 先扩展 synthetic finite graph/oracle 矩阵，要求 certified bound 至少有
+一次真实安全 pruning，rejected/uncertain/non-admissible/scope mismatch/non-FIFO 场景
+pruning=0，且与独立 zero-heuristic exact-arrival oracle 完全一致。随后仅在 synthetic
+门通过且 clean identity 不漂移时，对既有 holdout/development `executable_0_6h` 做
+dominance-disabled、显式 bound adapter 的 2 次重复诊断；真实 24h 只保留 M4 的资源失败
+事实，不因 6h 结果自动启动。runner 继续写 manifest/cases/resource-frontier/summary/
+heartbeat 和终态标记，实验产物只写 `.runtime/experiments/`。
+
+**收口。** synthetic 与真实 6h 的语义、确定性、fail-closed、资源证据全部通过时，仅记为
+`READY_FOR_P0.2-ADAPTER_RESOURCE_BOUND_PLAN`；任一误剪枝、identity 漂移、语义不一致或
+资源证据缺失为 `NO_PERFORMANCE_PROOF/FAIL` 或 `INVALID/PENDING`。真实 FIFO 仍为
+`REAL_INPUT_FIFO_VIOLATED`，24h 仍为 `REAL_INPUT_6H_FEASIBLE_24H_RESOURCE_FAIL`；不宣称
+连续非 FIFO 全局最优，不启用 candidate，不写 formal latest/replanning baseline/frozen
+artifact，不 push。完成验证后移除辅助 worktree，保留研究分支和实验构件。
