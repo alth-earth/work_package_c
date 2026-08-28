@@ -4,11 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-_SOURCE = (
-    Path(__file__).parents[2]
-    / "scripts"
-    / "benchmark_non_fifo_temporal_arrival_bound_real.py"
-).read_text(encoding="utf-8")
+_SOURCE = (Path(__file__).parents[2] / "scripts" / "benchmark_non_fifo_temporal_arrival_bound_real.py").read_text(
+    encoding="utf-8"
+)
 
 
 def test_real_runner_uses_arrival_adapter_and_keeps_default_off() -> None:
