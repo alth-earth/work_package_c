@@ -1814,7 +1814,8 @@ artifact，不 push。完成验证后移除辅助 worktree，保留研究分支�
 
 本轮从正式 clean `5f1e96c` 建立隔离分支
 `research/p02-m5-proof-bound-20260829`，先提交治理计划 `4274da1`；实现、real runner
-和证据门提交为 `b3ce8c4`、`0bf1997`、`39d0db7`、`efe4751`、`239c13c`。本轮只增加
+和证据门提交为 `b3ce8c4`、`0bf1997`、`39d0db7`、`efe4751`、`239c13c`，最终格式化
+收口为 `16d3837`。本轮只增加
 C 内部显式 research adapter 和 synthetic/real evidence runner；未修改 B/C、C/D 合同、
 ingress/service、公共 planner、正式 `plan()` 默认行为或 production path，未启用
 dominance/candidate/Winter/P2.1/P3/ARA*，未写 formal latest/replanning baseline/frozen
@@ -1834,20 +1835,23 @@ small/medium/stress × fastest/low_risk/recommended × certified/scope-mismatch 
 完成 `36/36`。18 个 certified case 均与 independent zero-heuristic exact-arrival oracle
 和 unbounded adapter 的路线、精确 ETA、成本及 semantic digest 一致，并观察到共 `18` 次
 安全 pruning；18 个 scope-mismatch case 均为 `REJECTED_FAIL_CLOSED`，pruning 为 `0`。
-`deterministic=true`、`fail_closed=true`、`production_candidate_enabled=false`。构件目录为
-`/root/my_project/.runtime/experiments/c-p02-m5-bound-matrix-20260829-r1/`，experiment id
-为 `c.p0.2-temporal-adapter-bound.v1-ef7c2968ddace3eb`。
+`deterministic=true`、`fail_closed=true`、`production_candidate_enabled=false`。早期 `r1`
+构件使用格式化前实现，保留作历史审计但不计入最终结论；格式化后的 clean tip 重新运行
+权威 `r2`：`/root/my_project/.runtime/experiments/c-p02-m5-bound-matrix-20260829-r2/`，
+experiment id 为 `c.p0.2-temporal-adapter-bound.v1-b0ee4e2eeb63ec7d`。该构件 `36/36`
+完成，18 个 certified case 均有真实 pruning（累计 18），18 个 scope-mismatch case 均
+`REJECTED_FAIL_CLOSED` 且 pruning=0。
 
 **真实 holdout 6h。** 新 runner
 `scripts/benchmark_non_fifo_temporal_bound_real.py` 使用完整 145 帧、冻结
 `executable_0_6h` route-plan-set、最大有效船速 corridor proof 和 actual non-FIFO adapter；
 仍不启用 dominance，24h 不启动。首次 `r1` 因 child 漏传 parser 所需 `--output-dir` 而
 明确记录为 `INVALID/PENDING`；修复后的 `r2` 六个 case 实际均通过，但旧汇总器把唯一
-重复 digest 错判为 `deterministic=false`，因此不纳入结论。修正后以新 identity 的
-`r4` 构件作为权威：
+重复 digest 错判为 `deterministic=false`，因此不纳入结论。`r3`/`r4` 分别用于证据门和
+格式化前验证；格式化后的 clean tip 以新 identity 的最终 `r5` 构件作为权威：
 
-`/root/my_project/.runtime/experiments/c-p02-m5-bound-real-holdout-6h-20260829-r4/`
-（`c.p0.2-temporal-adapter-bound-real.v1-8089c90c469678e4`），三目标 × 两次重复共
+`/root/my_project/.runtime/experiments/c-p02-m5-bound-real-holdout-6h-20260829-r5/`
+（`c.p0.2-temporal-adapter-bound-real.v1-d7e1b91ada4a1f56`），三目标 × 两次重复共
 `6/6 PASS`；每个 case `GOAL_FOUND`、`state_bound_authorized=true`、
 `state_bound_checks=31`、`state_bound_pruned=7`、`state_bound_rejected=0`，路线、ETA、
 速度、风险、成本、confidence、source IDs 与 baseline/reference 一致，
