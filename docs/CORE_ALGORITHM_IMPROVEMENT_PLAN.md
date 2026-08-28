@@ -1711,3 +1711,54 @@ fail-open pruning、identity 漂移、dirty evidence worktree 或生产路径写
 输入仅表示 `READY_FOR_P0.2-ADAPTER_REAL-EVIDENCE_REVIEW`；资源失败保留为真实前沿边界，
 不得择优重跑、提高上限或自动启动 Winter。完成后只追加本 SSOT、做本地集成提交并移除辅助
 worktree，不 push。
+
+### 【2026-08-29 | COMPLETED】P0.2-M4：真实输入 non-FIFO temporal adapter 长任务资格审计
+
+本轮在隔离分支 `research/p02-m4-nonfifo-real-20260829` 完成，先提交治理计划
+`9efc42f`，新增 runner、测试和 worker 参数修复为 `80bd0fd`、`25e1533`；实验完成后
+未 push，未写 formal latest、replanning baseline 或 frozen artifact。辅助 worktree 仅用于
+实现与验证，后续按边界移除；实验构件保留在 `.runtime/experiments/`。
+
+**runner 与围栏。** 新增 C 内部 `scripts/benchmark_non_fifo_temporal_real.py`，以
+`c.p0.2-temporal-adapter-real.v1` 固定 schema 从已有 `bc.risk-window-commit.v1` 的完整
+145 帧 holdout/development 和冻结 four-layer route plan set 加载输入。每个
+input/segment/objective/repetition 在独立 worker 中调用显式
+`run_non_fifo_temporal_search(...)`，强制 `use_heuristic=False`、
+`TemporalDominancePolicy.disabled()`、state-bound absent；没有修改正式 planner、合同、
+ingress/service 或 production path。identity 绑定 implementation、`uv.lock`、config、
+风险帧逐帧 digest、route-plan-set、request/segment、adapter mode 和冻结搜索上限；输出
+manifest/cases/resource-frontier/summary/heartbeat，记录 CPU、RSS、swap、cgroup、超时和
+稳定 semantic digest，JSONL 每条完成记录 fsync，resume 拒绝 identity 或安全围栏漂移。
+
+**6h 证据。** holdout 实验
+`c-p02-m4-real-adapter-holdout-6h-20260829-r3`（identity
+`c.p0.2-temporal-adapter-real.v1-bd3c127708e4bbae`）和 development 实验
+`c-p02-m4-real-adapter-development-6h-20260829-r1`（identity
+`c.p0.2-temporal-adapter-real.v1-f7e0d7a574b86ff9`）均为 2 次重复、三目标
+`GOAL_FOUND`。两输入每个目标的两次 semantic digest 均一致；路线、精确 ETA、速度、风险、
+成本、confidence、source IDs 与独立 zero-heuristic exact-arrival reference 一致，
+`reference_match=true`，dominance/state-bound checks/pruning 均为 0。holdout 的目标级
+expanded labels 为 `36/38/38`、queue peak `26`、edge evaluations `272/288/288`；development
+为 `16/16/16`、queue peak `13`、edge evaluations `112/112/112`。CPU affinity、RSS、无 swap、
+cgroup 快照证据完整。两组汇总状态均为
+`READY_FOR_P0.2-ADAPTER_REAL-EVIDENCE_REVIEW`，仅表示真实 6h 研究证据可审计，不表示
+FIFO、dominance 或 candidate 资格。
+
+**24h 边界。** 由于两个输入的 6h 三目标均通过条件门，分别执行了单次 24h 三目标审计。
+`c-p02-m4-real-adapter-holdout-24h-20260829-r1`（identity
+`c.p0.2-temporal-adapter-real.v1-a27a77982487e3a7`）和
+`c-p02-m4-real-adapter-development-24h-20260829-r1`（identity
+`c.p0.2-temporal-adapter-real.v1-df2608e9f8d2d646`）的三个 worker 均在 120 秒 deadline
+内未完成，汇总为 `REAL_INPUT_ADAPTER_RESOURCE_FAIL`。超时记录没有 route 或业务语义，
+没有把超时当作成功，也没有提高 `50k expansions / 100k labels / 50k queue /
+400k edge evaluations` 上限；由于 worker 被 deadline 终止，不能把它解释为已经触达某一
+具体 queue 计数，只能报告 24h 在该预算下未完成。两输入均未再重试或启动 full-voyage。
+
+**收口。** 首次修复前的短暂 parser 参数遗漏构件
+`c-p02-m4-real-adapter-holdout-6h-20260829-r1` 仅为 `INVALID/PENDING` 诊断记录，未纳入
+上述结论；修复后 r2/r3 和两组 24h 构件均绑定 clean implementation commit。综合状态为
+`READY_FOR_P0.2-ADAPTER_REAL-EVIDENCE_REVIEW`（6h）与
+`REAL_INPUT_6H_FEASIBLE_24H_RESOURCE_FAIL`（24h）；真实 FIFO 既有
+`REAL_INPUT_FIFO_VIOLATED` 不变，dominance 仍默认关闭，candidate/Winter/P2.1/P3/ARA*
+继续冻结。下一步只能另立带资源限界或 corridor/envelope 证明的 P0.2 计划，不自动启用任何
+生产路径。
