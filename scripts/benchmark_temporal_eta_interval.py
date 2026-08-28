@@ -76,6 +76,16 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _tree_digest(root: Path) -> str:
+    digest = hashlib.sha256()
+    for path in sorted(item for item in root.rglob("*") if item.is_file()):
+        digest.update(str(path.relative_to(root)).encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
 def _atomic_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}")
@@ -326,9 +336,14 @@ def _identity(args: argparse.Namespace, root: Path) -> dict[str, Any]:
         "cpu": args.cpu,
     }
     if args.mode == "real":
-        for name in ("risk_window_commit", "route_plan_set", "config_root"):
+        for name in ("risk_window_commit", "route_plan_set"):
             path = getattr(args, name)
             identity[name] = {"path": str(path.resolve()), "sha256": _sha256(path)}
+        config_root = args.config_root.resolve()
+        identity["config_root"] = {
+            "path": str(config_root),
+            "sha256": _tree_digest(config_root),
+        }
     else:
         identity["profile_shape"] = PROFILES[args.profile]
     identity["experiment_id"] = f"{SCHEMA_VERSION}-{_digest(identity)[:16]}"
