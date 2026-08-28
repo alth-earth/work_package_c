@@ -1035,3 +1035,46 @@ orchestrator worktree 中退休的 M2J 诊断脚本缺失。聚焦 ETA/state-bou
 所有实验产物仍在 `.runtime/experiments/`，没有写入 formal/latest/frozen 路径。完成
 clean 验证后移除本轮辅助 worktree，保留本地分支和构件，等待下一份独立的 interval-proof、
 真实 dominance 资格或 P0.2 实现计划。
+
+### 【2026-08-28 | PLANNED】P0.1-M1.9：ETA 区间包络与真实 FIFO 资格审计
+
+本轮从 clean 基线 `067a28e` 建立集成分支
+`research/p01-m19-eta-interval-20260828`，以 cherry-pick 审计上一轮
+`7988e62^..424b4af` 的方式保留既有 M1.7/M1.8/P0.2 研究历史。主线聚焦于
+`RiskSampler` 的 C 内部区间包络和唯一根资格证明；state-bound 与非 FIFO 继续保持有界、
+test-only 研究。辅助 worktree 完成 clean 验证后移除，分支和实验构件保留，不 push、
+不自动合入正式工作树。
+
+**RiskSampler 区间原语。** 新增私有 `_sample_interval(start, end, longitude, latitude)`
+及 `RiskIntervalSample`，按所有 RiskFrame 边界切分，复用既有双线性空间贡献，数值字段
+采用时间端点保守包络和 outward rounding，hard-mask 保守 OR、confidence 保守下界，
+覆盖、source IDs、evaluator digest 和失败原因全部可审计。UTC、窗口/gap、非有限值、
+缺失和 evaluator 异常均 fail-closed；不改变 `sample()`、正式 `plan()` 或公共合同。
+
+**ETA interval evaluator。** 新增 C 内部 `TemporalEtaIntervalEvaluator`，以完整
+`TemporalScope`、显式 bounded ETA policy、edge sample points、vessel model 和
+`g(t)=implied_travel_hours(t)-t` 生成 `EtaOperatorIntervalEvidence`。只有完整覆盖、
+认证 evaluator、scope 完全匹配、无 hard-mask/连续性断点，且有独立 contraction
+`<1`、image 包含于 domain 的 `ROOT_EXISTS_UNIQUE` 才可授权；端点变号的 non-unique、
+finite no-bracket、discontinuity、coverage/evaluator failure 和无证明均为
+`UNCERTAIN_*`，不得转换为真实 dominance 资格。
+
+**Synthetic proof gate。** 使用独立 schema `c.p0.1-temporal-eta-proof.v1` runner，
+在 small/medium/stress × 三 objective 覆盖 unique、non-unique、excluded、no-bracket、
+hard-mask/RiskFrame discontinuity、coverage/evaluator failure、cycle、max-iterations、
+terminal mismatch、scope 和 checkpoint digest mismatch。所有端点/内部采样必须落在包络
+内；uncertain/discontinuous 场景授权和 pruning 均为零；必须保存 manifest/cases/
+eta-interval/comparison-summary/heartbeat 及 `ALL_DONE` 或 `STOPPED_HARD`。
+
+**真实输入审计。** Synthetic gate 全部通过且集成分支 clean 后，才对冻结 145 帧
+holdout/development 执行 6h、条件性 24h FIFO interval qualification；继续使用 15 分钟
+probe、1 秒 tolerance、最多四级边界细分，真实搜索始终 dominance-disabled。结果只允许
+`REAL_INPUT_FIFO_VIOLATED`、`REAL_INPUT_FIFO_UNCERTAIN_REQUIRES_INTERVAL_PROOF`、
+`READY_FOR_SEPARATE_REAL_DOMINANCE_PLAN` 或 `INVALID/PENDING`，不自动启用 candidate、
+不重开 Winter/P2.1/P3/ARA*，也不提高冻结资源上限。
+
+**验证和边界。** 先跑 RiskSampler/ETA/session/checkpoint/state-bound/non-FIFO/runner
+聚焦测试，再跑默认路径回归、active/archive import、Ruff、offline Make/lock/sync、CLI
+smoke 和 diff check。只追加本轮结果，保留 M0/M1/M1.5/M1.6/M1.7/M1.8、M2J/M2K、P3、
+ARA* 历史；实验产物写入新的 `.runtime/experiments/` 目录，不写 formal latest、
+replanning baseline 或 frozen artifact。
