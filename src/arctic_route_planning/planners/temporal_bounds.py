@@ -179,7 +179,11 @@ def qualify_state_bound(
         reason = "missing_proof_digest"
     else:
         reason = None
-    status = TemporalStateBoundStatus.CERTIFIED if reason is None else TemporalStateBoundStatus.REJECTED
+    status = (
+        TemporalStateBoundStatus.CERTIFIED
+        if reason is None
+        else TemporalStateBoundStatus.REJECTED
+    )
     return TemporalStateBoundCertificate(
         scope=active_scope,
         allowed_nodes=allowed,

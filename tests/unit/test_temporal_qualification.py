@@ -541,10 +541,22 @@ def test_state_bound_qualification_derives_excluded_nodes_and_proof_scope() -> N
 @pytest.mark.parametrize(
     ("kwargs", "reason"),
     (
-        ({"exclusion_proof": False, "coverage_complete": True, "evaluator_certified": True}, "missing_exclusion_proof"),
-        ({"exclusion_proof": True, "coverage_complete": False, "evaluator_certified": True}, "coverage_incomplete"),
-        ({"exclusion_proof": True, "coverage_complete": True, "evaluator_certified": False}, "unknown_evaluator"),
-        ({"exclusion_proof": True, "coverage_complete": True, "evaluator_certified": True}, "missing_proof_digest"),
+        (
+            {"exclusion_proof": False, "coverage_complete": True, "evaluator_certified": True},
+            "missing_exclusion_proof",
+        ),
+        (
+            {"exclusion_proof": True, "coverage_complete": False, "evaluator_certified": True},
+            "coverage_incomplete",
+        ),
+        (
+            {"exclusion_proof": True, "coverage_complete": True, "evaluator_certified": False},
+            "unknown_evaluator",
+        ),
+        (
+            {"exclusion_proof": True, "coverage_complete": True, "evaluator_certified": True},
+            "missing_proof_digest",
+        ),
     ),
 )
 def test_state_bound_qualification_rejects_incomplete_proof(kwargs, reason: str) -> None:
