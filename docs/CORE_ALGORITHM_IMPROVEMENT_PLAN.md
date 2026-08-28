@@ -1974,3 +1974,52 @@ replanning baseline 或 frozen artifact。
 `REAL_INPUT_FIFO_VIOLATED`，M4 的 24h 资源失败事实不被覆盖；candidate、Winter、P2.1、P3、
 ARA* 和 dominance 继续默认关闭。完成验证后移除辅助 worktree，保留研究分支和实验构件，
 不 push。
+
+### 【2026-08-29 | COMPLETED】P0.2-M7：proof-carrying graph-topological arrival envelope
+
+本轮从 M6 clean tip `ab9845d` 建立隔离分支
+`research/p02-m7-topological-envelope-20260829` 和独立 worktree，先提交计划
+`1b2bd07`。新增拓扑下界证书和 synthetic runner 的实现为 `46d26c4`，拒绝证据收口修复为
+`58fd367`，真实 holdout runner 为 `6a4e33a`。改动限于 C 内部研究 sidecar、测试和 runner，
+未修改 B/C、C/D 合同、ingress/service、公共 planner 或正式默认路径，未启用
+dominance/candidate/Winter/P2.1/P3/ARA*，未写 formal latest/replanning baseline/frozen artifact，
+也未 push。
+
+**拓扑下界证书。** 新增 `temporal_topology_bounds.py` 中的
+`TopologicalLowerBoundEvidence`/`qualify_topological_lower_bound(...)`：枚举完整有限有向网格
+邻接，使用实际边距离和最大有效船速计算 forward/reverse graph lower bounds；邻接越界、
+evaluator 异常、非有限/负边距离、未知 evaluator、不可达域和 identity 不完整均返回不可用
+证据。证书 proof digest 覆盖 adjacency、edge distances、lower-bound maps、speed、scope 和
+evaluator；边权与路径和向下取整。只通过已有显式 arrival-bounded adapter 生成包络，普通
+adapter、正式 `plan()` 和 `TemporalDominancePolicy.disabled()` 默认行为保持不变。
+
+**Synthetic gate。** 独立 `c.p0.2-temporal-topological-bound.v1` runner 在
+small/medium/stress × fastest/low_risk/recommended × certified/scope-mismatch/incomplete/
+adjacency-failure × 2 repeats 完成 `72/72`。18 个 certified case 与无界 exact-arrival adapter
+及独立 zero-heuristic oracle 语义一致，累计 `150` 次 arrival pruning；54 个拒绝 case 均
+`REJECTED_FAIL_CLOSED` 且 `state_bound_pruned=0`、`state_bound_arrival_pruned=0`。汇总
+`status=TEMPORAL_TOPOLOGICAL_BOUND_MATRIX_PASS`、`semantic_match=true`、
+`deterministic=true`、`fail_closed=true`、`production_candidate_enabled=false`。权威构件为
+`/root/my_project/.runtime/experiments/c-p02-m7-topological-bound-matrix-20260829-r1/`，
+identity `c.p0.2-temporal-topological-bound.v1-2791a67669e5c49c`。
+
+**真实 holdout 6h。** 在 synthetic gate 通过且 clean identity 下，使用完整 145 帧 holdout、
+冻结 `executable_0_6h` route-plan-set、固定 CPU=2、4 GiB `MemoryMax`、`MemorySwapMax=0`
+执行三目标 × 两次重复；dominance 仍关闭，candidate 仍关闭。权威构件为
+`/root/my_project/.runtime/experiments/c-p02-m7-topological-bound-real-holdout-6h-20260829-r1/`，
+identity `c.p0.2-temporal-topological-bound-real.v1-a94a3308989c700c`，`6/6 PASS`，汇总状态
+`READY_FOR_P0.2-TOPOLOGICAL-ARRIVAL-BOUND-REAL-REVIEW`。每个 case 均 `GOAL_FOUND`，路线、
+精确 ETA、速度、风险、成本、confidence、source IDs 与 baseline/reference 一致；
+`semantic_match=true`、`reference_match=true`、`deterministic=true`，每 case
+`state_bound_checks=22`、`state_bound_pruned=17`、`state_bound_arrival_pruned=14`、
+`state_bound_rejected=0`，累计 arrival pruning `84`。CPU affinity、RSS、无 swap、4 GiB cgroup
+和 OOM 事件证据完整，`resource_evidence_complete=true`、`resource_clean=true`。
+
+**边界与结论。** 本轮提升了 arrival envelope 的证明强度（从直线距离下界到实际网格拓扑
+下界），但该 holdout 的矩形网格没有带来相对于 M6 的额外实际 pruning；因此不宣称 24h
+资源问题已解决，也不宣称连续非 FIFO 全局最优、FIFO 资格或 production 性能。真实 FIFO
+`REAL_INPUT_FIFO_VIOLATED`、M4 的 `REAL_INPUT_6H_FEASIBLE_24H_RESOURCE_FAIL` 和冻结的
+`50k/100k/50k/400k` 上限均不变，24h 未重跑。综合状态为
+`READY_FOR_P0.2-TOPOLOGICAL-ARRIVAL-BOUND-REAL-REVIEW`，仅可用于另立更强资源/走廊计划；
+candidate、Winter、P2.1、P3、ARA* 和 dominance 继续默认关闭。完成验证后移除辅助 worktree，
+保留研究分支和实验构件。
