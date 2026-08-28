@@ -241,9 +241,10 @@ def _result(
     errors: Iterable[str],
     reason: str | None,
 ) -> NonFifoSearchResult:
+    result_label = label if status is NonFifoSearchStatus.GOAL_FOUND else None
     return NonFifoSearchResult(
         status=status,
-        label=label,
+        label=result_label,
         labels=tuple(sorted(by_key.values(), key=lambda item: (item.cost, item.arrival_time))),
         expanded=expanded,
         generated=generated,
