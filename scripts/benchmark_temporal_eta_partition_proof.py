@@ -363,6 +363,8 @@ def _run(args: argparse.Namespace) -> int:
         "case_count": len(cases),
         "expected_case_count": expected,
         "authorization_count": sum(item["authorization_usable"] for item in cases),
+        "partition_certified_count": sum(item["status"] == "PARTITION_CERTIFIED" for item in cases),
+        "partition_rejected_count": sum(item["status"] != "PARTITION_CERTIFIED" for item in cases),
         "deterministic": deterministic,
         "all_expected": expected_status,
         "fail_closed": fail_closed,
