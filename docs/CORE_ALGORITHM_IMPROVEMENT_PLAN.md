@@ -836,3 +836,72 @@ formal latest、replanning baseline 或 frozen artifact。P2.1 仍为
 **历史措辞更正。** 本文较早的 C-ALG-03/03B 记录曾把有限区间未发现符号翻转写作
 `no_fixed_point`；该名称保留用于有独立全局排除证明的调用。当前实现和后续证据统一使用
 `no_bracket_found` / `fixed_point_uncertain`，避免把有限扫描误报为全局无根结论。
+
+### 【2026-08-28 | COMPLETED】P0.1-M1.6 证书化边界与真实资源前沿收口
+
+本轮完成了 M1.6 的 C 内部实现审计和真实输入资源前沿测量。此前 r5 driver 虽然写出
+`ALL_DONE`，但因并行提交导致不同阶段 manifest 分别绑定 `26abfa8` 与 `1657fa2`，该
+混合 identity 不作为资格证据；r5 构件原样保留。唯一计入的 r6 来自 detached clean
+worktree `/root/my_project/work_package_c_p01_clean`，所有阶段均绑定同一 clean commit
+`1657fa23251c2c94e665e5c023f3016ac98c2fa2`，根目录状态为 `ALL_DONE` 且无
+`STOPPED_HARD`。
+
+**实现与身份。** bounded ETA 在有限区间无 bracket 时只报告
+`no_bracket_found`/`fixed_point_uncertain`，不宣称全局无根；新增的 ETA interval
+envelope/certificate、incumbent/admissible-lower-bound 诊断和 state-bound certificate
+均保持 C 内部、默认关闭、scope/evaluator/proof 不完整即 fail-closed。state-bound 只可
+丢弃新生成 label，checkpoint/session identity 绑定 state-bound policy digest；真实
+runner 只使用 `TemporalDominancePolicy.disabled()`。r6 共同 identity 为 implementation
+digest `24362c59dc91c0dd200b7265ec21eba69e5d7c633f89d234f9d799be5ded696c`、config tree
+digest `537e1a1d1ef3f8015402e9b57556518b92a2524993074b4ecc1ccf58143cded4`、`uv.lock`
+SHA256 `8893cb8387825ca4890ed808f4a98b02ba938337752971dacc3e77f859164f22`；两输入均为
+145 帧、冻结 route-plan-set、节点和时间窗，所有 manifest `git_dirty=false`。
+
+**FIFO 连续覆盖诊断。** 两个输入、两个 segment 均扫描 departure hard-mask 连通域的
+全部有向边，15 分钟 probe、1 秒 tolerance，均未插入额外 midpoint。没有可审计的后出发
+早到达反例，且 coverage/evaluator 不完整，故四个构件均为
+`FIFO_UNCERTAIN_EVALUATOR_FAILURE`，不能提升为 `FIFO_CERTIFIED`：
+
+| 输入 / segment | 有向边 | probes | edge evaluations | evaluator errors | failure classes | pruning |
+|---|---:|---:|---:|---:|---|---:|
+| holdout / `executable_0_6h` | 1388 | 25 | 34700 | 748 | `fixed_point_uncertain`, `operator_invalid` | 0 |
+| holdout / `rolling_0_24h` | 1388 | 97 | 134636 | 3569 | `fixed_point_uncertain`, `operator_invalid` | 0 |
+| development / `executable_0_6h` | 1540 | 25 | 38500 | 821 | `fixed_point_uncertain`, `operator_invalid` | 0 |
+| development / `rolling_0_24h` | 1540 | 97 | 149380 | 2944 | `fixed_point_uncertain`, `operator_invalid` | 0 |
+
+**6h exact-arrival 资源前沿。** 两输入各 3 objective × 2 independent workers（共 6/6
+valid），并以同一冻结 edge evaluator 运行 zero-heuristic exact-arrival Dijkstra 作为
+正确性证据。路线、精确 ETA、速度、风险、成本、confidence、source IDs、失败语义和
+semantic digest 均与 reference 一致且 deterministic；无 swap/OOM/timeout，dominance、
+incumbent 和 state-bound pruning 均为 0。
+
+| 输入 | fastest compute median/P95 ms | low-risk median/P95 ms | recommended median/P95 ms | RSS median 范围 KiB | 结果 |
+|---|---:|---:|---:|---:|---|
+| holdout | 82.05 / 93.62 | 190.61 / 223.31 | 67.31 / 68.61 | 120080--120208（peak 120336） | `RESOURCE_FRONTIER_PASS` (6/6) |
+| development | 31.77 / 31.96 | 108.52 / 112.82 | 41.86 / 49.67 | 120872--120898（peak 120924） | `RESOURCE_FRONTIER_PASS` (6/6) |
+
+该结果只证明 dominance-disabled exact-arrival 的真实输入可行性、正确性和资源观察，
+不构成 candidate 性能通过，也不把 Dijkstra 当作独立性能基线。
+
+**24h 条件分支。** 两输入均因 6h 通过而启动 24h；每个输入 3/3 记录完成但 0 个 valid
+case，均为 `RESOURCE_FRONTIER_PARTIAL` /
+`REAL_INPUT_6H_FEASIBLE_24H_RESOURCE_FAIL`。holdout fastest A* 完成约
+`89187 ms`，但 reference Dijkstra 触及冻结 `queue=50000`（峰值 queue `31948`）；
+low-risk/recommended A* 触及同一 queue 上限。development fastest A* 完成约
+`64219 ms`，reference 触及 `queue=50000`（峰值 queue `20115`）；low-risk/recommended
+A* 同样触及 queue 上限。失败均非 swap、OOM 或 worker timeout，且未放宽
+`50k expansions / 100k labels / 50k queue / 400k edge evaluations`。
+
+**收口与下一分支。** M1.6 结论固定为
+`REAL_INPUT_FIFO_UNCERTAIN_REQUIRES_INTERVAL_PROOF` 与
+`REAL_INPUT_6H_FEASIBLE_24H_RESOURCE_FAIL`；在取得 ETA 到达函数的可审计 interval
+monotonicity proof 或保守上下界前，真实输入继续禁止 certified dominance。若转向非 FIFO，
+另立 P0.2 label-correcting/Pareto 计划；若研究资源边界，另立带证书的 corridor/state
+bounding 计划。P2.1 仍为 `MEASUREMENT_INCONCLUSIVE / FORMAL_M2_FAIL_UNCHANGED`，P3
+SMO-A* 为 `DEFERRED/RETIRED`，ARA* 为 `M0_FAIL/DEFERRED`；未启用 candidate、未接入
+ingress/service、未写 formal latest、replanning baseline 或 frozen artifact，未 push。
+
+可审计构件保留于
+`/root/my_project/.runtime/experiments/c-p01-m15-real-qualification-20260828-r6/`，r5
+及更早中止构件不并入资格样本。代码回滚边界为 `1657fa2` 及其父提交；后续任何真实
+输入证据必须从新的 clean identity 启动。
