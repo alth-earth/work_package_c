@@ -204,7 +204,7 @@ def _build_certificate(
         scope=scope,
         method=BOUND_METHOD,
         evaluator_digest=BOUND_EVALUATOR_DIGEST,
-        proof_digest=module.canonical_digest(
+        proof_digest=module._canonical_digest(
             {
                 "method": BOUND_METHOD,
                 "max_speed_km_per_hour": max_speed,
