@@ -447,6 +447,8 @@ def _worker_command(
         str(args.config_root),
         "--segment",
         args.segment,
+        "--output-dir",
+        str(args.output_dir),
         "--objective",
         objective.value,
         "--repetition",
