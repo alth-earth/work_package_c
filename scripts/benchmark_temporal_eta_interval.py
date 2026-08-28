@@ -15,6 +15,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import signal
 import subprocess
 import sys
 from dataclasses import asdict, is_dataclass
@@ -125,6 +126,14 @@ def _implementation_identity(root: Path) -> dict[str, Any]:
 
 def _heartbeat(path: Path, **values: Any) -> None:
     _atomic_json(path, {"updated_at": datetime.now(UTC), **values})
+
+
+class _WorkerTimeout(RuntimeError):
+    """Raised when a real-input interval scan exceeds its deadline."""
+
+
+def _timeout_handler(_signum: int, _frame: Any) -> None:
+    raise _WorkerTimeout("ETA interval worker timeout")
 
 
 def _scope(profile: str, objective: str, scenario: str) -> TemporalScope:
@@ -443,7 +452,37 @@ def _run(args: argparse.Namespace) -> int:
             "cases": all_cases,
         }
     else:
-        case = _real_case(args)
+        previous_handler = signal.getsignal(signal.SIGALRM)
+        signal.signal(signal.SIGALRM, _timeout_handler)
+        signal.setitimer(signal.ITIMER_REAL, args.worker_timeout_seconds)
+        try:
+            case = _real_case(args)
+        except _WorkerTimeout as error:
+            summary = {
+                "schema_version": SCHEMA_VERSION,
+                "mode": "real",
+                "status": "STOPPED_HARD",
+                "reason": str(error),
+                "case_count": 0,
+                "proof_ready": False,
+                "dominance_usable": False,
+                "cases": [],
+            }
+            _atomic_json(output / "comparison-summary.json", summary)
+            manifest.update(
+                {
+                    "status": "STOPPED_HARD",
+                    "summary": summary,
+                    "completed_at": datetime.now(UTC),
+                }
+            )
+            _atomic_json(manifest_path, manifest)
+            _heartbeat(heartbeat_path, status="STOPPED_HARD", completed_cases=0)
+            (output / "STOPPED_HARD").write_text(str(error) + "\n", encoding="utf-8")
+            return 2
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, previous_handler)
         _append_jsonl(cases_path, case)
         _append_jsonl(interval_path, case)
         cases = [case]
