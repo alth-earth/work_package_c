@@ -262,9 +262,19 @@ def _run_scan(args: argparse.Namespace, output: Path) -> dict[str, Any]:
     request = module._request(fixture, ObjectiveMode.FASTEST)
     edges = module._edge_ids(fixture)
     probes = _probe_times(fixture)
-    scope = planner.temporal_scope(request, edge_ids=edges, probe_times=probes)
+    control_scope = planner.temporal_scope(request, edge_ids=edges, probe_times=probes)
     sampler = planner.risk_sampler
     policy = EtaRefinementPolicy(method="bounded")
+    # The formal planner scope carries its historical control ETA policy.
+    # Interval evidence is a separate research sidecar and must bind the
+    # explicit bounded policy rather than falsely reporting a policy mismatch.
+    scope = TemporalScope.from_mapping(
+        {
+            **control_scope.mapping,
+            "eta_policy_digest": canonical_digest(policy),
+            "edge_evaluator_digest": "explicit:real-eta-interval-v1",
+        }
+    )
     errors: Counter[str] = Counter()
     status_counts: Counter[str] = Counter()
     started = time.perf_counter()
