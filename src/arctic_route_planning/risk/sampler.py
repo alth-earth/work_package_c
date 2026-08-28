@@ -90,6 +90,12 @@ class RiskIntervalSample:
     evaluator_digest: str
     failure_reason: str | None = None
     schema_version: str = "c.risk-interval-sample.v1"
+    confidence_upper: float | None = None
+    risk_slope_lower: float | None = None
+    risk_slope_upper: float | None = None
+    environment_speed_factor_slope_lower: float | None = None
+    environment_speed_factor_slope_upper: float | None = None
+    navigability_status: str = "TRANSITION_OR_UNKNOWN"
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "start", _utc(self.start, field="interval.start"))
@@ -100,6 +106,12 @@ class RiskIntervalSample:
             raise ValueError("interval coordinates must be finite")
         if self.schema_version != "c.risk-interval-sample.v1":
             raise ValueError("unsupported risk interval sample schema")
+        if self.navigability_status not in {
+            "ALWAYS_NAVIGABLE",
+            "ALWAYS_BLOCKED",
+            "TRANSITION_OR_UNKNOWN",
+        }:
+            raise ValueError("unsupported interval navigability status")
         if not isinstance(self.hard_mask_possible, bool):
             raise ValueError("hard_mask_possible must be boolean")
         if not isinstance(self.coverage_complete, bool):
@@ -117,6 +129,7 @@ class RiskIntervalSample:
                 self.risk_lower,
                 self.risk_upper,
                 self.confidence_lower,
+                self.confidence_upper,
                 self.environment_speed_factor_lower,
                 self.environment_speed_factor_upper,
             )
@@ -130,6 +143,27 @@ class RiskIntervalSample:
                 raise ValueError("risk interval lower bound must not exceed upper bound")
             if self.environment_speed_factor_lower > self.environment_speed_factor_upper:
                 raise ValueError("speed-factor interval lower bound must not exceed upper bound")
+            slopes = (
+                self.risk_slope_lower,
+                self.risk_slope_upper,
+                self.environment_speed_factor_slope_lower,
+                self.environment_speed_factor_slope_upper,
+            )
+            if any(value is not None and not np.isfinite(value) for value in slopes):
+                raise ValueError("complete interval slope evidence must be finite")
+            if (
+                self.risk_slope_lower is not None
+                and self.risk_slope_upper is not None
+                and self.risk_slope_lower > self.risk_slope_upper
+            ):
+                raise ValueError("risk slope lower bound must not exceed upper bound")
+            if (
+                self.environment_speed_factor_slope_lower is not None
+                and self.environment_speed_factor_slope_upper is not None
+                and self.environment_speed_factor_slope_lower
+                > self.environment_speed_factor_slope_upper
+            ):
+                raise ValueError("speed-factor slope lower bound must not exceed upper bound")
 
     @property
     def reason(self) -> str | None:
@@ -388,6 +422,17 @@ class RiskSampler:
         risk_values = tuple(value.risk_score for value in values)
         confidence_values = tuple(value.confidence for value in values)
         speed_values = tuple(value.environment_speed_factor for value in values)
+        risk_slope_lower, risk_slope_upper = self._interval_slope_bounds(
+            values, frame_indices, variable="risk_score"
+        )
+        # The formal sampler takes the conservative minimum of the two frame
+        # speed factors in each bracket.  That is constant inside a frame
+        # segment; any change at a frame boundary is handled as a continuity
+        # failure by the analytic ETA sidecar rather than interpolated away.
+        speed_slope_lower, speed_slope_upper = self._interval_slope_bounds(
+            values, frame_indices, variable="environment_speed_factor"
+        )
+        navigability_status = self._interval_navigability(values)
         source_ids = tuple(
             dict.fromkeys(self._frames[index].risk_id for index in frame_indices)
         )
@@ -399,6 +444,7 @@ class RiskSampler:
             risk_lower=_outward_lower(min(risk_values), floor=0.0),
             risk_upper=_outward_upper(max(risk_values), ceiling=1.0),
             confidence_lower=_outward_lower(min(confidence_values), floor=0.0),
+            confidence_upper=_outward_upper(max(confidence_values), ceiling=1.0),
             environment_speed_factor_lower=_outward_lower(min(speed_values), floor=0.0),
             environment_speed_factor_upper=_outward_upper(max(speed_values), ceiling=1.0),
             hard_mask_possible=any(value.hard_mask for value in values),
@@ -406,7 +452,53 @@ class RiskSampler:
             covered_frame_times=tuple(self._frames[index].valid_time for index in frame_indices),
             coverage_complete=True,
             evaluator_digest=self.interval_evaluator_digest,
+            risk_slope_lower=risk_slope_lower,
+            risk_slope_upper=risk_slope_upper,
+            environment_speed_factor_slope_lower=speed_slope_lower,
+            environment_speed_factor_slope_upper=speed_slope_upper,
+            navigability_status=navigability_status,
         )
+
+    def _interval_slope_bounds(
+        self,
+        values: Sequence[_FrameSample],
+        frame_indices: Iterable[int],
+        *,
+        variable: str,
+    ) -> tuple[float, float]:
+        indices = tuple(frame_indices)
+        slopes: list[float] = []
+        if len(indices) <= 1:
+            return 0.0, 0.0
+        if variable == "environment_speed_factor":
+            # ``sample`` takes the minimum of the bracketing frame values, so
+            # its speed factor is constant within each frame segment.  A
+            # change between adjacent segments is a boundary discontinuity,
+            # not an interpolated slope.
+            return 0.0, 0.0
+        for left_position, left_index in enumerate(indices[:-1]):
+            right_index = indices[left_position + 1]
+            gap_hours = (
+                self._frames[right_index].valid_time
+                - self._frames[left_index].valid_time
+            ).total_seconds() / 3600.0
+            if gap_hours <= 0.0 or not np.isfinite(gap_hours):
+                raise RiskSamplingError("RiskFrame times must increase strictly")
+            left_value = float(getattr(values[left_position], variable))
+            right_value = float(getattr(values[left_position + 1], variable))
+            slopes.append((right_value - left_value) / gap_hours)
+        return _outward_lower(min(slopes)), _outward_upper(max(slopes))
+
+    @staticmethod
+    def _interval_navigability(values: Sequence[_FrameSample]) -> str:
+        if not values:
+            return "TRANSITION_OR_UNKNOWN"
+        masks = tuple(value.hard_mask for value in values)
+        if all(masks):
+            return "ALWAYS_BLOCKED"
+        if not any(masks):
+            return "ALWAYS_NAVIGABLE"
+        return "TRANSITION_OR_UNKNOWN"
 
     @property
     def interval_evaluator_digest(self) -> str:
