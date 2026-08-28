@@ -588,7 +588,9 @@ def _summary(cases: list[dict[str, Any]], identity: dict[str, Any]) -> dict[str,
             if case.get("objective") == objective.value
             and isinstance(case.get("bounded_semantic_digest"), str)
         }
-        if len(digests) != int(identity["repetitions"]):
+        if len(digests) != 1 or sum(
+            1 for case in cases if case.get("objective") == objective.value
+        ) != int(identity["repetitions"]):
             deterministic = False
     if not complete:
         status = "INVALID/PENDING"
