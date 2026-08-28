@@ -227,6 +227,7 @@ def _certificate(
         horizon_hours=horizon,
         objective=objective,
         bound_evidence=evidence,
+        include_arrival_upper_bounds=True,
     )
     if not corridor.certificate.usable or not corridor.certificate.arrival_bound_complete:
         raise RuntimeError("synthetic arrival corridor did not produce a complete certificate")

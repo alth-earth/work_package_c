@@ -34,8 +34,7 @@ def _bounds(
     # cells.  This gives the proof a measurable reduction without injecting
     # a route into the planner.
     forward = {
-        (row, col): row + col + (2 if row > 0 and col < cols - 1 else 0)
-        for row, col in universe
+        (row, col): row + col + (2 if row > 0 and col < cols - 1 else 0) for row, col in universe
     }
     reverse = {
         (row, col): goal[0] - row + goal[1] - col + (2 if row > 0 and col < cols - 1 else 0)
@@ -78,6 +77,24 @@ def test_derived_corridor_excludes_only_provably_unreachable_states() -> None:
     assert evidence.projected_label_reduction is not None
     assert evidence.projected_label_reduction > 0.2
     assert evidence.proof_digest
+    assert not evidence.certificate.arrival_bound_complete
+
+    arrival_evidence = derive_temporal_corridor(
+        scope=scope,
+        universe_nodes=universe,
+        start=(0, 0),
+        goal=(4, 4),
+        forward_lower_hours=forward,
+        reverse_lower_hours=reverse,
+        horizon_hours=8.0,
+        objective="fastest",
+        bound_evidence=_evidence(scope),
+        include_arrival_upper_bounds=True,
+    )
+    assert arrival_evidence.certificate.arrival_bound_complete
+    assert set(arrival_evidence.arrival_upper_bounds) == set(
+        arrival_evidence.certificate.arrival_upper_hours
+    )
 
 
 def test_missing_bound_proof_and_scope_mismatch_are_rejected() -> None:
