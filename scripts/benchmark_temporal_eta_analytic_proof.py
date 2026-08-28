@@ -222,7 +222,7 @@ def _case(profile: str, objective: str, scenario: str) -> dict[str, Any]:
         expected_status = EtaIntervalStatus.UNCERTAIN_DISCONTINUITY.value
     elif scenario == "incomplete_coverage":
         coverage = False
-        expected_status = EtaIntervalStatus.UNCERTAIN_DISCONTINUITY.value
+        expected_status = EtaIntervalStatus.UNCERTAIN_COVERAGE.value
         diagnostic_reason = "interval_domain_coverage_incomplete"
     elif scenario == "evaluator_failure":
         evaluator = False

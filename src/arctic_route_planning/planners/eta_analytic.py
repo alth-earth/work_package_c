@@ -290,11 +290,12 @@ def qualify_analytic_eta(
         fifo_status = FifoStatus.FIFO_UNCERTAIN
         reason = "continuous_endpoint_sign_change_without_contraction"
     else:
-        root_status = (
-            EtaIntervalStatus.UNCERTAIN_DISCONTINUITY
-            if not continuity_certified
-            else EtaIntervalStatus.UNCERTAIN_NO_INTERVAL_PROOF
-        )
+        if not coverage_complete:
+            root_status = EtaIntervalStatus.UNCERTAIN_COVERAGE
+        elif not continuity_certified:
+            root_status = EtaIntervalStatus.UNCERTAIN_DISCONTINUITY
+        else:
+            root_status = EtaIntervalStatus.UNCERTAIN_NO_INTERVAL_PROOF
         fifo_status = FifoStatus.FIFO_UNCERTAIN
         reason = reason or "missing_certified_contraction_or_fifo_slope_proof"
 
