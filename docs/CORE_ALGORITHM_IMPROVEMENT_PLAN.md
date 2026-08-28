@@ -905,3 +905,45 @@ ingress/service、未写 formal latest、replanning baseline 或 frozen artifact
 `/root/my_project/.runtime/experiments/c-p01-m15-real-qualification-20260828-r6/`，r5
 及更早中止构件不并入资格样本。代码回滚边界为 `1657fa2` 及其父提交；后续任何真实
 输入证据必须从新的 clean identity 启动。
+
+### 【2026-08-28 | PLANNED】P0.1-M1.7/M1.8 与 P0.2-M0：ETA 区间证明、资源限界与非 FIFO 可行性
+
+本轮承接真实输入的 `FIFO_UNCERTAIN_EVALUATOR_FAILURE` 和 24h
+`queue=50000` 资源边界，不重开 Winter、P2.1、P3 或 ARA*，不启用 candidate。继续保留
+清单 `2.1.1–4.2.2、6.1.1–6.2.1`，研究顺序固定为“先证明、再限界、最后非 FIFO”。
+
+**治理与身份。** 从 clean commit `067a28e` 的 C 侧隔离分支
+`research/p01-m17-eta-proof-20260828` 运行，复用已有 145 帧 holdout/development；每个
+实验绑定 implementation/config/`uv.lock`、RiskFrame 与 route-plan-set、scope、ETA policy、
+搜索限制和 evaluator digest。不得修改 B/C、C/D 合同、ingress/service、formal latest、
+replanning baseline 或 frozen artifact；最终 clean 验证后移除辅助 worktree，不 push。
+
+**P0.1-M1.7 ETA 区间证明。** 新增 C 内部 ETA interval qualification sidecar 和独立
+runner（schema `c.p0.1-temporal-eta-interval.v1`），以
+`g(t)=implied_travel_hours(t)-t` 为对象，按 RiskFrame 时间边界、hard-mask 变化和
+evaluator 域切分区间。只有 interval evaluator 覆盖完整、evaluator/continuity/scope 已
+认证，并满足 contraction 或连续端点符号变化时，才可生成可用证书；finite no-bracket、
+discontinuity、coverage 缺口、未知 evaluator 和失败均保持 `UNCERTAIN_*`。runner 必须
+持久化 manifest/cases/interval-summary/comparison-summary/heartbeat 及 `ALL_DONE` 或
+`STOPPED_HARD`。真实 6h/24h 仅做 FIFO interval qualification，不授权 dominance。
+
+**P0.1-M1.8 exact-arrival 资源限界。** 不提高 `50k expansions / 100k labels /
+50k queue / 400k edge evaluations`。研究带完整 `TemporalScope`、allowed nodes/region、
+排除证明和 `proof_digest` 的 state-bound/corridor envelope；只允许丢弃新生成 label，
+禁止删除已扩展 label、beam/近似剪枝或从 reference oracle 注入答案。先在 synthetic
+small/medium/stress 验证路线及全部业务字段与 exact-arrival oracle 一致、至少一次真实
+certified pruning，且 uncertain/scope mismatch/non-FIFO 场景 pruning=0；通过后才做真实
+6h 资源诊断。24h queue 超限保持 `EXACT_LABEL_RESOURCE_FAIL`，不放宽限制。
+
+**P0.2-M0 非 FIFO 可行性。** 只建立 C 内部设计和 test-only oracle，不接入真实 runner 或
+生产路径。定义有限状态域的 label-correcting/Pareto labels、终止/取消/重复状态/资源
+失败语义，并覆盖 2×2 非 FIFO、同桶不同精确 ETA、周期 ETA、hard-mask、evaluator failure
+和资源超限 fixture。M0 只有在语义、终止、adversarial 可复现、oracle 对照和 fail-closed
+矩阵完整时才标记 `READY_FOR_P0.2_IMPLEMENTATION_PLAN`。
+
+**固定分支与收口。** interval proof 通过只标记
+`READY_FOR_SEPARATE_REAL_DOMINANCE_PLAN`；真实输入仍须另立资格计划。interval 仍
+uncertain 时保持 `REAL_INPUT_FIFO_UNCERTAIN_REQUIRES_INTERVAL_PROOF`；state-bound 真实
+资源不足时标记 `REAL_INPUT_RESOURCE_BOUND_INSUFFICIENT`；发现真实 FIFO 反例才另立完整
+P0.2。全部实验和测试完成后仅追加结果与 commit/identity，保留 M0/M1/M1.5/M1.6、M2J/M2K、
+P3、ARA* 历史。
