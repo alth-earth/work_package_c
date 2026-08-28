@@ -19,6 +19,10 @@ from arctic_route_planning.planners import PlanningRequest
 from arctic_route_planning.planners.non_fifo_feasibility import NonFifoSearchStatus
 from arctic_route_planning.planners.non_fifo_temporal_adapter import (
     NonFifoTemporalAdapterError,
+    NonFifoTemporalResearchCheckpoint,
+    NonFifoTemporalResearchSession,
+    create_non_fifo_temporal_session,
+    restore_non_fifo_temporal_session,
     run_non_fifo_temporal_search,
 )
 from arctic_route_planning.planners.temporal_label_astar import (
@@ -328,3 +332,96 @@ def test_adapter_is_not_exported_as_a_formal_planner_api() -> None:
     import arctic_route_planning.planners as planners
 
     assert not hasattr(planners, "run_non_fifo_temporal_search")
+
+
+def test_resumable_adapter_checkpoint_restore_matches_full_run() -> None:
+    planner = _planner()
+    planner._injected_edge_evaluator = _scripted_edge(
+        planner,
+        lambda _start, _end, _departure: 0.25,
+    )
+    request = _research_request()
+    full = run_non_fifo_temporal_search(planner, request)
+    session = create_non_fifo_temporal_session(planner, request)
+
+    assert isinstance(session, NonFifoTemporalResearchSession)
+    assert session.advance(expansion_slice=1) is None
+    checkpoint = session.checkpoint()
+    assert isinstance(checkpoint, NonFifoTemporalResearchCheckpoint)
+    assert checkpoint.digest
+
+    restored = restore_non_fifo_temporal_session(planner, checkpoint, request)
+    assert restored.state.value == "PAUSED"
+    while True:
+        resumed = restored.advance(expansion_slice=1)
+        if resumed is not None:
+            break
+
+    assert resumed.status is NonFifoSearchStatus.GOAL_FOUND
+    assert resumed.semantic_digest == full.semantic_digest
+    assert resumed.planning_result is not None
+    assert full.planning_result is not None
+    assert resumed.planning_result.nodes == full.planning_result.nodes
+    assert resumed.planning_result.steps == full.planning_result.steps
+    assert resumed.diagnostics.expanded_labels == full.diagnostics.expanded_labels
+    assert resumed.diagnostics.edge_evaluations == full.diagnostics.edge_evaluations
+
+
+def test_adapter_checkpoint_rechecks_mode_state_and_identity_fences() -> None:
+    planner = _planner()
+    planner._injected_edge_evaluator = _scripted_edge(
+        planner,
+        lambda _start, _end, _departure: 0.25,
+    )
+    request = _research_request()
+    session = create_non_fifo_temporal_session(planner, request)
+    assert session.advance(expansion_slice=1) is None
+    checkpoint = session.checkpoint()
+
+    tampered_mode = object.__new__(NonFifoTemporalResearchCheckpoint)
+    object.__setattr__(tampered_mode, "session_checkpoint", checkpoint.session_checkpoint)
+    object.__setattr__(tampered_mode, "mode_digest", "tampered")
+    object.__setattr__(tampered_mode, "schema_version", checkpoint.schema_version)
+    object.__setattr__(tampered_mode, "state_digest", checkpoint.state_digest)
+    with pytest.raises(NonFifoTemporalAdapterError, match="checkpoint fence"):
+        restore_non_fifo_temporal_session(planner, tampered_mode, request)
+
+    drifted_identity = replace(session.identity, dominance_policy_digest="drifted")
+    with pytest.raises(NonFifoTemporalAdapterError, match="checkpoint fence"):
+        restore_non_fifo_temporal_session(
+            planner,
+            checkpoint,
+            request,
+            identity=drifted_identity,
+        )
+
+
+def test_resumable_adapter_cancellation_and_terminal_checkpoint_rules() -> None:
+    planner = _planner()
+    planner._injected_edge_evaluator = _scripted_edge(
+        planner,
+        lambda _start, _end, _departure: 0.25,
+    )
+    request = _research_request()
+    session = create_non_fifo_temporal_session(planner, request)
+    assert session.advance(expansion_slice=1) is None
+    checkpoint = session.checkpoint()
+
+    cancelled = restore_non_fifo_temporal_session(
+        planner,
+        checkpoint,
+        _research_request(cancel_check=lambda: True),
+    )
+    result = cancelled.advance(expansion_slice=1)
+    assert result is not None
+    assert result.status is NonFifoSearchStatus.CANCELLED
+
+    completed_session = create_non_fifo_temporal_session(planner, request)
+    completed = completed_session.run()
+    assert completed.status is NonFifoSearchStatus.GOAL_FOUND
+    with pytest.raises(NonFifoTemporalAdapterError, match="READY or PAUSED"):
+        completed_session.checkpoint()
+    # The paused session can still be resumed after the failed terminal-check
+    # assertion; no checkpoint operation deletes or rewrites its labels.
+    resumed = session.advance()
+    assert resumed is not None

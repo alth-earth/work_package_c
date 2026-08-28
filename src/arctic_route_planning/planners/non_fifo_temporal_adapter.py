@@ -34,8 +34,19 @@ from .temporal_label_astar import (
     TemporalLabelAStar,
     TemporalSearchLimitExceeded,
 )
-from .temporal_session import TemporalSessionIdentity, TemporalSessionIdentityMismatch
+from .temporal_session import (
+    TemporalSessionCheckpoint,
+    TemporalSessionIdentity,
+    TemporalSessionIdentityMismatch,
+    TemporalSessionRestoreError,
+    TemporalSessionState,
+    checkpoint_session,
+    restore_session,
+)
 from .time_dependent_astar import PlanningRequest, PlanningResult
+
+_ADAPTER_SCHEMA_VERSION = "c.p0.2-nonfifo-temporal-adapter.v2"
+_ADAPTER_MODE_DIGEST = hashlib.sha256(_ADAPTER_SCHEMA_VERSION.encode("utf-8")).hexdigest()
 
 
 class NonFifoTemporalAdapterError(ValueError):
@@ -103,6 +114,252 @@ class NonFifoTemporalResearchResult:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class NonFifoTemporalResearchCheckpoint:
+    """Adapter checkpoint with an independent research-mode identity fence."""
+
+    session_checkpoint: TemporalSessionCheckpoint
+    mode_digest: str = _ADAPTER_MODE_DIGEST
+    schema_version: str = _ADAPTER_SCHEMA_VERSION
+    state_digest: str = ""
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.session_checkpoint, TemporalSessionCheckpoint):
+            raise TypeError("session_checkpoint must be a TemporalSessionCheckpoint")
+        if self.schema_version != _ADAPTER_SCHEMA_VERSION:
+            raise NonFifoTemporalAdapterError("unsupported non-FIFO adapter checkpoint schema")
+        if self.mode_digest != _ADAPTER_MODE_DIGEST:
+            raise NonFifoTemporalAdapterError("non-FIFO adapter mode digest mismatch")
+        if self.session_checkpoint.state not in (
+            TemporalSessionState.READY,
+            TemporalSessionState.PAUSED,
+        ):
+            raise NonFifoTemporalAdapterError(
+                "only READY or PAUSED temporal sessions can be checkpointed"
+            )
+        expected = self._calculated_state_digest()
+        if self.state_digest and self.state_digest != expected:
+            raise TemporalSessionRestoreError("non-FIFO adapter checkpoint digest mismatch")
+        object.__setattr__(self, "state_digest", expected)
+
+    def _calculated_state_digest(self) -> str:
+        return _digest(
+            {
+                "schema_version": self.schema_version,
+                "mode_digest": self.mode_digest,
+                "session_checkpoint": self.session_checkpoint.state_digest,
+            }
+        )
+
+    def assert_valid(self) -> None:
+        """Re-check the wrapper and nested checkpoint before restoration."""
+
+        if self.schema_version != _ADAPTER_SCHEMA_VERSION:
+            raise NonFifoTemporalAdapterError("unsupported non-FIFO adapter checkpoint schema")
+        if self.mode_digest != _ADAPTER_MODE_DIGEST:
+            raise NonFifoTemporalAdapterError("non-FIFO adapter mode digest mismatch")
+        if self.state_digest != self._calculated_state_digest():
+            raise TemporalSessionRestoreError("non-FIFO adapter checkpoint digest mismatch")
+        self.session_checkpoint.assert_valid()
+
+    @property
+    def digest(self) -> str:
+        return self.state_digest
+
+
+class NonFifoTemporalResearchSession:
+    """Resumable wrapper around one actual exact-arrival temporal session."""
+
+    __slots__ = ("planner", "request", "session")
+
+    def __init__(self, planner: TemporalLabelAStar, request: PlanningRequest, session: Any) -> None:
+        self.planner = planner
+        self.request = request
+        self.session = session
+
+    @property
+    def state(self) -> TemporalSessionState:
+        return self.session.state
+
+    @property
+    def session_id(self) -> str:
+        return self.session.session_id
+
+    @property
+    def identity(self) -> TemporalSessionIdentity:
+        return self.session.identity
+
+    def advance(self, expansion_slice: int | None = None) -> NonFifoTemporalResearchResult | None:
+        """Advance the bounded search; return ``None`` only while paused."""
+
+        try:
+            candidate = self.planner.advance_session(
+                self.session,
+                expansion_slice=expansion_slice,
+            )
+        except TemporalSearchLimitExceeded as error:
+            return _failure(
+                NonFifoSearchStatus.RESOURCE_LIMIT,
+                self.session_id,
+                self.session.context.diagnostics.freeze(),
+                reason="search_limit_exceeded",
+                error=error,
+            )
+        except PlanningCancelled as error:
+            return _failure(
+                NonFifoSearchStatus.CANCELLED,
+                self.session_id,
+                self.session.context.diagnostics.freeze(),
+                reason="cancelled",
+                error=error,
+            )
+        except PlanningHorizonExceeded as error:
+            return _failure(
+                NonFifoSearchStatus.EXHAUSTED,
+                self.session_id,
+                self.session.context.diagnostics.freeze(),
+                reason="horizon_exceeded",
+                error=error,
+            )
+        except NoRouteError as error:
+            return _failure(
+                NonFifoSearchStatus.EXHAUSTED,
+                self.session_id,
+                self.session.context.diagnostics.freeze(),
+                reason="no_route",
+                error=error,
+            )
+        except Exception as error:  # pragma: no cover - defensive evaluator boundary
+            return _failure(
+                NonFifoSearchStatus.EVALUATOR_FAILURE,
+                self.session_id,
+                self.session.context.diagnostics.freeze(),
+                reason="evaluator_failure",
+                error=error,
+            )
+
+        if candidate is None:
+            if self.state is TemporalSessionState.PAUSED:
+                return None
+            return _failure(
+                NonFifoSearchStatus.EVALUATOR_FAILURE,
+                self.session_id,
+                self.session.context.diagnostics.freeze(),
+                reason="session_not_terminal",
+                error=RuntimeError("temporal session returned no result outside PAUSED state"),
+            )
+        return _candidate_result(self.session_id, candidate)
+
+    def run(self) -> NonFifoTemporalResearchResult:
+        """Run until a terminal result, never treating a pause as success."""
+
+        result = self.advance()
+        if result is None:
+            return _failure(
+                NonFifoSearchStatus.EVALUATOR_FAILURE,
+                self.session_id,
+                self.session.context.diagnostics.freeze(),
+                reason="session_not_terminal",
+                error=RuntimeError("unbounded temporal session returned PAUSED"),
+            )
+        return result
+
+    def checkpoint(self) -> NonFifoTemporalResearchCheckpoint:
+        """Capture a resumable adapter checkpoint only at READY/PAUSED."""
+
+        if self.state not in (TemporalSessionState.READY, TemporalSessionState.PAUSED):
+            raise NonFifoTemporalAdapterError(
+                "only READY or PAUSED temporal sessions can be checkpointed"
+            )
+        return NonFifoTemporalResearchCheckpoint(
+            checkpoint_session(self.session),
+        )
+
+
+def create_non_fifo_temporal_session(
+    planner: TemporalLabelAStar,
+    request: PlanningRequest,
+    *,
+    identity: TemporalSessionIdentity | None = None,
+) -> NonFifoTemporalResearchSession:
+    """Create a fenced, resumable actual-session research wrapper."""
+
+    _validate_research_mode(planner, request, identity)
+    try:
+        session = planner.create_session(request, identity=identity)
+    except TemporalSessionIdentityMismatch as error:
+        raise NonFifoTemporalAdapterError(
+            f"temporal session identity fence rejected: {error}"
+        ) from error
+    return NonFifoTemporalResearchSession(planner, request, session)
+
+
+def restore_non_fifo_temporal_session(
+    planner: TemporalLabelAStar,
+    checkpoint: NonFifoTemporalResearchCheckpoint,
+    request: PlanningRequest,
+    *,
+    identity: TemporalSessionIdentity | None = None,
+) -> NonFifoTemporalResearchSession:
+    """Restore a wrapper after checking adapter and active-session fences."""
+
+    if not isinstance(checkpoint, NonFifoTemporalResearchCheckpoint):
+        raise NonFifoTemporalAdapterError(
+            "checkpoint must be a NonFifoTemporalResearchCheckpoint"
+        )
+    try:
+        checkpoint.assert_valid()
+    except (NonFifoTemporalAdapterError, TemporalSessionRestoreError) as error:
+        raise NonFifoTemporalAdapterError(
+            f"non-FIFO temporal checkpoint fence rejected: {error}"
+        ) from error
+    _validate_research_mode(planner, request, identity)
+    try:
+        session = restore_session(
+            planner,
+            checkpoint.session_checkpoint,
+            request=request,
+            identity=identity,
+        )
+    except (TemporalSessionIdentityMismatch, TemporalSessionRestoreError) as error:
+        raise NonFifoTemporalAdapterError(
+            f"non-FIFO temporal checkpoint fence rejected: {error}"
+        ) from error
+    return NonFifoTemporalResearchSession(planner, request, session)
+
+
+def _candidate_result(
+    session_id: str,
+    candidate: TemporalCandidateResult,
+) -> NonFifoTemporalResearchResult:
+    diagnostics = candidate.diagnostics
+    if (
+        diagnostics.dominance_policy != "none"
+        or diagnostics.dominance_scope_match
+        or diagnostics.dominance_checks
+        or diagnostics.dominance_pruned
+        or diagnostics.state_bound_checks
+        or diagnostics.state_bound_pruned
+    ):
+        violation = NonFifoTemporalSafetyViolation(
+            "non-FIFO adapter observed forbidden dominance/state-bound pruning"
+        )
+        return _failure(
+            NonFifoSearchStatus.EVALUATOR_FAILURE,
+            session_id,
+            diagnostics,
+            reason="unexpected_pruning",
+            error=violation,
+        )
+    return NonFifoTemporalResearchResult(
+        status=NonFifoSearchStatus.GOAL_FOUND,
+        candidate=candidate,
+        session_id=session_id,
+        semantic_digest=_route_semantic_digest(candidate.planning_result),
+        diagnostics=diagnostics,
+    )
+
+
 def run_non_fifo_temporal_search(
     planner: TemporalLabelAStar,
     request: PlanningRequest,
@@ -120,9 +377,14 @@ def run_non_fifo_temporal_search(
     invalidity.
     """
 
-    _validate_research_mode(planner, request, identity)
     try:
-        session = planner.create_session(request, identity=identity)
+        research_session = create_non_fifo_temporal_session(
+            planner,
+            request,
+            identity=identity,
+        )
+    except NonFifoTemporalAdapterError:
+        raise
     except PlanningCancelled as error:
         return _failure(
             NonFifoSearchStatus.CANCELLED,
@@ -152,95 +414,7 @@ def run_non_fifo_temporal_search(
             error=error,
         )
 
-    session_id = session.session_id
-    try:
-        candidate = planner.advance_session(session)
-    except TemporalSearchLimitExceeded as error:
-        diagnostics = session.context.diagnostics.freeze()
-        return _failure(
-            NonFifoSearchStatus.RESOURCE_LIMIT,
-            session_id,
-            diagnostics,
-            reason="search_limit_exceeded",
-            error=error,
-        )
-    except PlanningCancelled as error:
-        diagnostics = session.context.diagnostics.freeze()
-        return _failure(
-            NonFifoSearchStatus.CANCELLED,
-            session_id,
-            diagnostics,
-            reason="cancelled",
-            error=error,
-        )
-    except PlanningHorizonExceeded as error:
-        diagnostics = session.context.diagnostics.freeze()
-        return _failure(
-            NonFifoSearchStatus.EXHAUSTED,
-            session_id,
-            diagnostics,
-            reason="horizon_exceeded",
-            error=error,
-        )
-    except NoRouteError as error:
-        diagnostics = session.context.diagnostics.freeze()
-        return _failure(
-            NonFifoSearchStatus.EXHAUSTED,
-            session_id,
-            diagnostics,
-            reason="no_route",
-            error=error,
-        )
-    except Exception as error:  # pragma: no cover - exercised by evaluator fixture
-        diagnostics = session.context.diagnostics.freeze()
-        return _failure(
-            NonFifoSearchStatus.EVALUATOR_FAILURE,
-            session_id,
-            diagnostics,
-            reason="evaluator_failure",
-            error=error,
-        )
-
-    if candidate is None:
-        # A full adapter run does not supply an expansion slice, so this is an
-        # invariant violation rather than a partial success.
-        diagnostics = session.context.diagnostics.freeze()
-        return _failure(
-            NonFifoSearchStatus.EVALUATOR_FAILURE,
-            session_id,
-            diagnostics,
-            reason="session_not_terminal",
-            error=RuntimeError("unbounded session returned no terminal result"),
-        )
-
-    diagnostics = candidate.diagnostics
-    if (
-        diagnostics.dominance_policy != "none"
-        or diagnostics.dominance_scope_match
-        or diagnostics.dominance_checks
-        or diagnostics.dominance_pruned
-        or diagnostics.state_bound_checks
-        or diagnostics.state_bound_pruned
-    ):
-        violation = NonFifoTemporalSafetyViolation(
-            "non-FIFO adapter observed forbidden dominance/state-bound pruning"
-        )
-        return _failure(
-            NonFifoSearchStatus.EVALUATOR_FAILURE,
-            session_id,
-            diagnostics,
-            reason="unexpected_pruning",
-            error=violation,
-        )
-
-    route_digest = _route_semantic_digest(candidate.planning_result)
-    return NonFifoTemporalResearchResult(
-        status=NonFifoSearchStatus.GOAL_FOUND,
-        candidate=candidate,
-        session_id=session_id,
-        semantic_digest=route_digest,
-        diagnostics=diagnostics,
-    )
+    return research_session.run()
 
 
 def _validate_research_mode(
@@ -303,8 +477,12 @@ def _route_semantic_digest(result: PlanningResult) -> str:
         "minimum_confidence": result.minimum_confidence,
         "source_risk_ids": result.source_risk_ids,
     }
+    return _digest(payload)
+
+
+def _digest(value: Any) -> str:
     encoded = json.dumps(
-        _jsonable(payload),
+        _jsonable(value),
         ensure_ascii=False,
         allow_nan=False,
         sort_keys=True,
@@ -347,8 +525,12 @@ def _jsonable(value: Any) -> Any:
 
 __all__ = [
     "NonFifoTemporalAdapterError",
+    "NonFifoTemporalResearchCheckpoint",
     "NonFifoTemporalResearchResult",
+    "NonFifoTemporalResearchSession",
     "NonFifoTemporalSafetyViolation",
     "NonFifoTemporalStepEvidence",
+    "create_non_fifo_temporal_session",
+    "restore_non_fifo_temporal_session",
     "run_non_fifo_temporal_search",
 ]
