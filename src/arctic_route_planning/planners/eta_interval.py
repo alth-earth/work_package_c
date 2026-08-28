@@ -9,9 +9,10 @@ enclosure/contraction bound has been independently audited.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
+from itertools import pairwise
 from math import isfinite
 from typing import Any
 
@@ -28,6 +29,33 @@ class EtaIntervalStatus(StrEnum):
     UNCERTAIN_COVERAGE = "UNCERTAIN_COVERAGE"
     UNCERTAIN_EVALUATOR_FAILURE = "UNCERTAIN_EVALUATOR_FAILURE"
     UNCERTAIN_DISCONTINUITY = "UNCERTAIN_DISCONTINUITY"
+
+
+@dataclass(frozen=True, slots=True, order=True)
+class SignedInterval:
+    """Closed finite interval used for the residual ``g(t) = F(t) - t``.
+
+    ETA travel-time intervals are strictly positive, but a fixed-point
+    residual is allowed to cross zero.  Keeping that distinction explicit
+    prevents callers from accidentally treating a sampled sign change as an
+    interval proof.
+    """
+
+    lower: float
+    upper: float
+
+    def __post_init__(self) -> None:
+        if not isfinite(self.lower) or not isfinite(self.upper):
+            raise ValueError("signed interval bounds must be finite")
+        if self.lower > self.upper:
+            raise ValueError("signed interval lower bound must not exceed upper bound")
+
+    @property
+    def contains_zero(self) -> bool:
+        return self.lower <= 0.0 <= self.upper
+
+    def disjoint_zero(self) -> bool:
+        return self.upper < 0.0 or self.lower > 0.0
 
 
 @dataclass(frozen=True, slots=True, order=True)
@@ -114,6 +142,24 @@ class EtaIntervalCertificate:
     @property
     def certificate_digest(self) -> str:
         return self.digest
+
+    @property
+    def residual_interval(self) -> SignedInterval | None:
+        """Conservative residual enclosure for ``g(t)=F(t)-t``.
+
+        The interval arithmetic uses the whole domain, not a midpoint or
+        endpoint sample: ``F(domain) - domain`` is enclosed by
+        ``[F_lo-domain_hi, F_hi-domain_lo]``.  A missing image means that the
+        evaluator did not produce evidence and therefore has no residual
+        interval to inspect.
+        """
+
+        if self.image is None:
+            return None
+        return SignedInterval(
+            self.image.lower_hours - self.domain.upper_hours,
+            self.image.upper_hours - self.domain.lower_hours,
+        )
 
     @property
     def proves_fixed_point(self) -> bool:
@@ -286,9 +332,209 @@ def qualify_eta_interval(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class EtaIntervalQualification:
+    """Aggregate proof envelope for a domain partition.
+
+    Risk-frame boundaries, hard-mask changes, and evaluator-domain changes
+    must be represented as explicit segment boundaries.  The aggregate is
+    usable only when every segment is independently certified *and* the
+    boundaries themselves have a continuity proof.  This makes a finite
+    point scan, a hidden coverage gap, or a hard-mask discontinuity unable to
+    authorize a global fixed-point claim.
+    """
+
+    status: EtaIntervalStatus
+    domain: EtaInterval
+    segments: tuple[EtaInterval, ...]
+    certificates: tuple[EtaIntervalCertificate, ...]
+    scope: TemporalScope
+    boundary_digest: str
+    boundary_continuity_certified: bool = False
+    reason: str | None = None
+    schema_version: str = "c.temporal-eta-qualification.v1"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "status", EtaIntervalStatus(self.status))
+        object.__setattr__(self, "scope", TemporalScope.from_mapping(self.scope))
+        object.__setattr__(self, "segments", tuple(self.segments))
+        object.__setattr__(self, "certificates", tuple(self.certificates))
+        if self.schema_version != "c.temporal-eta-qualification.v1":
+            raise ValueError("unsupported ETA interval qualification schema")
+        if len(self.segments) != len(self.certificates) or not self.segments:
+            raise ValueError("ETA qualification must have one certificate per segment")
+        if not isinstance(self.boundary_continuity_certified, bool):
+            raise ValueError("boundary continuity flag must be boolean")
+        previous = self.domain.lower_hours
+        for index, segment in enumerate(self.segments):
+            if segment.lower_hours != previous:
+                raise ValueError("ETA qualification segments must cover the domain contiguously")
+            if segment.upper_hours > self.domain.upper_hours:
+                raise ValueError("ETA qualification segment exceeds the domain")
+            if index and segment.lower_hours == segment.upper_hours:
+                raise ValueError("ETA qualification contains a zero-width interior segment")
+            previous = segment.upper_hours
+        if previous != self.domain.upper_hours:
+            raise ValueError("ETA qualification segments do not cover the complete domain")
+        if not isinstance(self.boundary_digest, str) or not self.boundary_digest:
+            raise ValueError("boundary digest must be non-empty")
+
+    @property
+    def digest(self) -> str:
+        return canonical_digest(
+            {
+                "schema_version": self.schema_version,
+                "status": self.status,
+                "domain": self.domain,
+                "segments": self.segments,
+                "certificates": tuple(certificate.digest for certificate in self.certificates),
+                "scope": self.scope.digest,
+                "boundary_digest": self.boundary_digest,
+                "boundary_continuity_certified": self.boundary_continuity_certified,
+                "reason": self.reason,
+            }
+        )
+
+    @property
+    def usable(self) -> bool:
+        return (
+            self.status
+            in {EtaIntervalStatus.ROOT_EXISTS_UNIQUE, EtaIntervalStatus.ROOT_EXISTS_NONUNIQUE}
+            and self.boundary_continuity_certified
+            and self.reason is None
+            and self.scope.evaluator_identity_known
+            and all(certificate.usable for certificate in self.certificates)
+            and all(certificate.scope.matches(self.scope) for certificate in self.certificates)
+        )
+
+    def permits(self, expected_scope: Mapping[str, Any] | TemporalScope) -> bool:
+        return self.usable and self.scope.matches(expected_scope)
+
+
+def partition_eta_domain(
+    domain: EtaInterval,
+    boundaries: Iterable[float] = (),
+) -> tuple[EtaInterval, ...]:
+    """Split an ETA domain at explicit RiskFrame/mask/evaluator boundaries."""
+
+    points = {domain.lower_hours, domain.upper_hours}
+    for boundary in boundaries:
+        if not isfinite(boundary):
+            raise ValueError("ETA partition boundaries must be finite")
+        if domain.lower_hours < boundary < domain.upper_hours:
+            points.add(float(boundary))
+        elif boundary not in {domain.lower_hours, domain.upper_hours}:
+            raise ValueError("ETA partition boundary lies outside the domain")
+    ordered = sorted(points)
+    return tuple(EtaInterval(start, end) for start, end in pairwise(ordered))
+
+
+def qualify_eta_partition(
+    domain: EtaInterval,
+    boundaries: Iterable[float],
+    evaluate_interval: Callable[[EtaInterval], EtaInterval],
+    *,
+    scope: Mapping[str, Any] | TemporalScope | None = None,
+    tolerance_seconds: float = 1.0,
+    coverage_complete: bool = False,
+    evaluator_certified: bool = False,
+    contraction_bound: float | None = None,
+    continuity_certified: bool = False,
+    boundary_continuity_certified: bool = False,
+    endpoint_residuals: Mapping[int, tuple[float, float]] | None = None,
+    boundary_reasons: Iterable[str] = (),
+) -> EtaIntervalQualification:
+    """Qualify every segment and aggregate only independently proven claims.
+
+    ``boundary_reasons`` is intentionally diagnostic.  Supplying a reason
+    (for example ``hard_mask_discontinuity``) forces the aggregate to remain
+    uncertain even when individual segment callbacks happen to contract.
+    ``endpoint_residuals`` is keyed by segment index so a continuous endpoint
+    sign change can be audited without confusing it with a midpoint sample.
+    """
+
+    active_scope = TemporalScope.from_mapping(scope or {"scope": "unbound"})
+    boundary_values = tuple(boundaries)
+    segments = partition_eta_domain(domain, boundary_values)
+    reasons = tuple(str(reason) for reason in boundary_reasons)
+    certificates = tuple(
+        qualify_eta_interval(
+            segment,
+            evaluate_interval,
+            scope=active_scope,
+            tolerance_seconds=tolerance_seconds,
+            coverage_complete=coverage_complete,
+            evaluator_certified=evaluator_certified,
+            contraction_bound=contraction_bound,
+            continuity_certified=continuity_certified,
+            endpoint_residuals=(endpoint_residuals or {}).get(index),
+        )
+        for index, segment in enumerate(segments)
+    )
+    status: EtaIntervalStatus
+    if reasons:
+        status = EtaIntervalStatus.UNCERTAIN_DISCONTINUITY
+    elif any(
+        certificate.status is EtaIntervalStatus.UNCERTAIN_EVALUATOR_FAILURE
+        for certificate in certificates
+    ):
+        status = EtaIntervalStatus.UNCERTAIN_EVALUATOR_FAILURE
+    elif any(
+        certificate.status is EtaIntervalStatus.UNCERTAIN_COVERAGE
+        for certificate in certificates
+    ):
+        status = EtaIntervalStatus.UNCERTAIN_COVERAGE
+    elif any(
+        certificate.status is EtaIntervalStatus.UNCERTAIN_DISCONTINUITY
+        for certificate in certificates
+    ):
+        status = EtaIntervalStatus.UNCERTAIN_DISCONTINUITY
+    elif any(
+        certificate.status is EtaIntervalStatus.UNCERTAIN_NO_INTERVAL_PROOF
+        for certificate in certificates
+    ):
+        status = EtaIntervalStatus.UNCERTAIN_NO_INTERVAL_PROOF
+    elif all(
+        certificate.status is EtaIntervalStatus.ROOT_EXCLUDED
+        for certificate in certificates
+    ):
+        status = EtaIntervalStatus.ROOT_EXCLUDED
+    elif any(
+        certificate.status is EtaIntervalStatus.ROOT_EXISTS_NONUNIQUE
+        for certificate in certificates
+    ):
+        status = EtaIntervalStatus.ROOT_EXISTS_NONUNIQUE
+    else:
+        status = EtaIntervalStatus.ROOT_EXISTS_UNIQUE
+    reason = reasons[0] if reasons else None
+    if reason is None and not boundary_continuity_certified and len(segments) > 1:
+        reason = "partition_boundary_continuity_unproven"
+        if status in {
+            EtaIntervalStatus.ROOT_EXISTS_UNIQUE,
+            EtaIntervalStatus.ROOT_EXISTS_NONUNIQUE,
+        }:
+            status = EtaIntervalStatus.UNCERTAIN_DISCONTINUITY
+    return EtaIntervalQualification(
+        status=status,
+        domain=domain,
+        segments=segments,
+        certificates=certificates,
+        scope=active_scope,
+        boundary_digest=canonical_digest(
+            {"domain": domain, "boundaries": boundary_values, "reasons": reasons}
+        ),
+        boundary_continuity_certified=boundary_continuity_certified,
+        reason=reason,
+    )
+
+
 __all__ = [
     "EtaInterval",
     "EtaIntervalCertificate",
+    "EtaIntervalQualification",
     "EtaIntervalStatus",
+    "SignedInterval",
+    "partition_eta_domain",
     "qualify_eta_interval",
+    "qualify_eta_partition",
 ]
