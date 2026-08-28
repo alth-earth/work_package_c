@@ -2122,3 +2122,45 @@ affinity、RSS、无 swap、4 GiB cgroup 和 OOM 事件证据完整（`resource_
 `READY_FOR_P0.2-CERTIFIED-HEURISTIC-REAL-REVIEW`，仅可作为另立 24h 资源审计或 bounded
 state/corridor 计划的证据；candidate、Winter、P2.1、P3、ARA* 和 dominance 继续默认关闭。
 完成验证后移除本轮辅助 worktree，保留研究分支和实验构件，不 push。
+
+### 【2026-08-29 | PLANNED】P0.2-M9：certified heuristic long-horizon resource audit
+
+M8 在完整 holdout `executable_0_6h` 上证明了证书化反向图 objective lower bound 可以只改变
+exact-arrival label 的出队顺序，同时保持路线、ETA 和业务语义；但 M4 的 `rolling_0_24h`
+仍在冻结 queue/label/expansion 预算下超时。本轮只把已通过 M8 synthetic/6h 门的适配器延伸到
+真实 24h 资源前沿，验证启发式是否足以降低长时队列压力；不新增未经证明的剪枝规则。
+
+**治理与输入。** 从正式 M8 clean tip `99c4b28` 建立隔离分支
+`research/p02-m9-heuristic-24h-20260829` 和 worktree，先提交本段计划。复用现有完整 145 帧
+holdout/development RiskFrame、冻结 route-plan-set 和配置，不下载或重建数据；实验 identity
+绑定 implementation、`uv.lock`、配置树、RiskFrame/route-plan-set digest、segment、scope、
+ETA policy、搜索限制和 evaluator。主工作树、B/C 与 C/D 合同、ingress/service、formal latest、
+replanning baseline、frozen artifact、candidate/Winter/P2.1/P3/ARA* 均不得修改或启用。
+
+**算法边界。** 复用 M8 `TemporalHeuristicCertificate` 与显式
+`run_non_fifo_temporal_certified_heuristic_search(...)`；baseline 使用 zero-heuristic
+exact-arrival，candidate 只使用 scope 完全匹配的反向图 objective lower bound。继续冻结
+`50k expansions / 100k labels / 50k queue / 400k edge evaluations`，不使用 FIFO 支配、
+state-bound/arrival pruning、beam/近似剪枝或 reference route 注入；所有 dominance/state-bound
+剪枝计数必须为零。真实输入已知 `REAL_INPUT_FIFO_VIOLATED`，本轮不重新判定 FIFO、不授权
+dominance，Dijkstra 只作正确性 oracle。
+
+**执行顺序。** 新增独立 `c.p0.2-temporal-certified-heuristic-real-24h.v1` runner，支持
+`rolling_0_24h`、`--resume`、固定 CPU 和 4 GiB `MemoryMax`/0 swap cgroup，逐 case fsync
+保存 manifest/cases/resource-frontier/summary/heartbeat/终态标记。先以 holdout fastest 单目标
+短探针确认 24h worker 能启动并持续产出证据；短探针通过后按交替顺序运行 holdout 三目标，随后
+仅在资源和身份均正常时运行 development 三目标。任何单目标 timeout/RESOURCE_LIMIT 只停止
+该 case，继续其他 case；身份漂移、语义与 oracle 不一致、fail-open pruning 或资源污染立即
+停止全局实验。绝不启动 full-voyage 或 Winter 复测。
+
+**通过与失败。** 每个完成 case 必须同时满足 baseline/candidate/reference 语义一致、
+deterministic、heuristic scope match、rejection=0、dominance/state-bound pruning=0，且
+CPU/RSS/swap/OOM/timeout 证据完整。所有目标均完成则状态为
+`READY_FOR_P0.2-CERTIFIED-HEURISTIC-24H-REVIEW`；若 case 完整但资源/语义门失败为
+`NO_PERFORMANCE_PROOF/FAIL`；超时或构件不完整为 `REAL_INPUT_24H_RESOURCE_FAIL` 或
+`INVALID/PENDING`，不得将短探针或择优 case 写成性能通过。无论结果如何，candidate 仍默认关闭，
+24h 结果不覆盖 M4 的历史失败事实。
+
+**收口。** 只在独立实验完成后追加本段的 COMPLETED/INVALID 证据，保留 M0–M8 历史和原始
+构件；运行聚焦测试、正式 `UV_OFFLINE=1 make check`、Ruff、lock/sync、CLI smoke 和
+`git diff --check`，本地 fast-forward 集成后移除辅助 worktree，保留研究分支和实验目录，不 push。
