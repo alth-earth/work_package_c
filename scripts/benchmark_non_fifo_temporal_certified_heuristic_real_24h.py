@@ -195,14 +195,16 @@ def _worker_phase(args: argparse.Namespace) -> dict[str, Any]:
     except Exception as error:  # pragma: no cover - isolated evaluator boundary
         errors[args.phase] = f"{type(error).__name__}: {error}"
     after = point._resource_snapshot()
-    result = baseline or candidate
+    result = baseline if baseline is not None else candidate
     if args.phase == "reference":
         phase_status = "PASS" if reference is not None else "ERROR"
     elif result is None:
         phase_status = "ERROR"
     else:
         phase_status = result.status.value
-    semantic = None if result is None else point._route_semantic(result)
+    semantic = (
+        None if result is None or result.planning_result is None else point._route_semantic(result)
+    )
     diagnostics = None if result is None else _jsonable(result.diagnostics)
     resource_clean = point._resource_clean(before, after)
     resource_evidence_complete = point._resource_evidence_complete(
