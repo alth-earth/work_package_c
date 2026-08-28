@@ -1323,3 +1323,75 @@ development 的 low-risk/recommended 预计 reduction 均达到 20%、scope/proo
 uncertain、resource bound insufficient 或 separate-plan-ready 之一；所有 uncertain、
 identity 漂移、fail-open 和语义不一致均不得作算法结论。实验构件只写 `.runtime/experiments/`，
 最终正式分支 clean、无辅助 worktree、无 push。
+
+### 【2026-08-29 | COMPLETED】P0.1-M1.12/M1.13：分区 ETA 资格与 Corridor 研究收口
+
+本轮在隔离 worktree `/root/my_project/.runtime/worktrees/c-p01-m112-partition-proof` 的
+clean implementation tip 上完成；最终代码提交为 `3e35982`（随后仅追加本段 SSOT）。本轮
+没有修改 B/C、C/D 合同、ingress/service、公共 planner、formal latest、replanning baseline
+或 frozen artifact，也没有 push。`TemporalDominancePolicy.disabled()`、正式 `plan()` 和
+candidate/Winter/P2.1/P3/ARA* 状态保持不变。所有实验均绑定 implementation、config、lock、
+RiskFrame/route-plan-set、scope 与 fixture digest；实验产物仅存于 `.runtime/experiments/`。
+
+**M1.12 synthetic 分区证明。** 当前代码下 runner
+`c.p0.1-temporal-evaluator-partition-proof.v1-5183bafc6b3524d6`
+（目录 `c-p01-m112-partition-proof-20260829-r4`）在 small/medium/stress × 三 objective
+完成 `216/216`，`deterministic=true`、`fail_closed=true`、`all_expected=true`，其中
+`partition_certified=54`、`partition_rejected=162`、负边界场景 `27`。由于固定 departure
+分区不能证明整个 departure domain 的 FIFO，`permits_dominance=false`，授权数为 `0`；这
+是预期的 fail-closed 结果，不是 production dominance 资格。
+
+**M1.12 真实 145 帧资格审计。** 使用完整 holdout/development、`executable_0_6h`、25 个
+departure probes、三 objective、`dominance_policy=disabled` 串行完成。两输入均发现可审计的
+interval 级负 travel-operator jump，因此固定为 `REAL_INPUT_FIFO_VIOLATED`，不启动新的
+24h qualification，也不允许 certified dominance：
+
+| 输入 | experiment id | directed edges × objectives | interval evaluations | FIFO violated | certified probes | uncertain/coverage | 首个反例 |
+|---|---|---:|---:|---:|---:|---|---|
+| holdout | `c.p0.1-temporal-evaluator-partition-real.v1-e0ff8c805db67d0b` | `1388 × 3` | `104100` | `43500`（每目标 `14500`） | `101958` | `686`/objective | edge `[(0,0),(0,1)]`，`2026-02-22T00:00Z`，2h boundary；左 image `2.8943256398h`，右 image `2.7839194360h` |
+| development | `c.p0.1-temporal-evaluator-partition-real.v1-adfa392fc050c67c` | `1540 × 3` | `115500` | `40776`（每目标 `13592`） | `113685` | `605`/objective | edge `[(0,0),(0,1)]`，`2026-03-22T00:00Z`，2h boundary；左 image `2.9088543441h`，右 image `2.9063708135h` |
+
+两输入三目标均 `deterministic=true`、`dominance_pruned=0`，并记录了
+`interval_domain_coverage_incomplete` 与 `partition_root_or_fifo_proof_incomplete`；负跳变
+优先于“多数分区 certified”，不能降级成 `FIFO_UNCERTAIN` 或 `READY_FOR_SEPARATE_REAL_DOMINANCE_PLAN`。
+该结论只说明当前真实 evaluator 存在非 FIFO 行为，不等同于所有连续海洋模型的全局结论；下一步
+应另立非 FIFO label-correcting/Pareto 计划。
+
+**M1.13 synthetic Corridor 与真实 projection。** 当前代码下
+`c.p0.1-temporal-corridor-proof.v1-ab58f9524ff8ec8f`
+（`c-p01-m113-corridor-proof-20260829-r4`）完成 `36/36`，
+`semantic_match=true`、`deterministic=true`、`fail_closed=true`，9 个 certified case 共
+观察 `1008` 次安全排除，27 个 rejected case 的 pruning 为 `0`。真实 projection 使用完整
+`341` 节点有限网格、最大有效船速、scope/proof digest；仅作为 projection，不运行 planner：
+
+| 输入 | experiment id | allowed / excluded | projected label reduction | projected queue peak | observed pruning |
+|---|---|---:|---:|---:|---:|
+| holdout | `c.p0.1-temporal-corridor-real.v1-7432d52efd8ffea9` | `12 / 329` | `96.4809%` | `12` | `0` |
+| development | `c.p0.1-temporal-corridor-real.v1-feed429585a3dde8` | `11 / 330` | `96.7742%` | `11` | `0` |
+
+两者均为 `REAL_CORRIDOR_PROJECTION_READY_FOR_TEST_ONLY_PRUNING`，但不构成真实性能或正确性
+通过。随后执行独立 test-only replay（仍 `dominance_policy=disabled`）：
+
+- holdout：`c.p0.1-temporal-corridor-pruning-real.v1-c5dfab95907004fb`
+  （`c-p01-m113-corridor-pruning-real-holdout-6h-20260829-r3`）三目标均 `PASS`，与 baseline
+  及 zero-heuristic reference 的路线、ETA、速度、风险、成本、confidence、source IDs 和
+  semantic digest 一致，deterministic/resource clean，实际新 label pruning 为
+  `fastest=3`、`low_risk=7`、`recommended=3`，合计 `13`。
+- development：`c.p0.1-temporal-corridor-pruning-real.v1-214ade9429cd1e8b`
+  （`c-p01-m113-corridor-pruning-real-development-6h-20260829-r1`）三目标语义、确定性和
+  资源均 clean，但实际 pruning 为 `fastest=0`、`low_risk=3`、`recommended=0`，未满足“每个
+  objective 至少一次真实 pruning”的严格门，因此总体为 `NO_PERFORMANCE_PROOF/FAIL`，不作
+  性能晋级结论。两次 replay 均未观察 swap/OOM/timeout，candidate 仍未启用。
+
+**无效中间构件。** 初次 holdout replay 因 runner 错用不存在的 `_nodes` helper，随后因
+`canonical_digest` 导出名错误各生成一次 fail-closed `ERROR` 构件；两者均未执行有效 planner，
+保留在 `.runtime/experiments/` 供审计。修复分别提交为 `b32d820` 与 `3e35982`，最终结果只
+采用修复后新 experiment identity。更早的 partition `r1` 全局 timeout 构件同样被后续按
+objective timeout 的 `r2` supersede，不纳入结论。
+
+**最终状态与后续分支。** 本轮最终固定为：真实 holdout/development
+`REAL_INPUT_FIFO_VIOLATED`；synthetic partition 与 Corridor proof 通过但仅研究授权；holdout
+Corridor test-only 通过，development 因未覆盖每目标 pruning 保持
+`NO_PERFORMANCE_PROOF/FAIL`。不启动 24h、full-voyage、Winter、P2.1、P3、ARA* 或 production
+candidate。后续只能从 clean local commit 另立：(a) P0.2 非 FIFO label-correcting/Pareto
+实现计划；(b) 证明型真实 corridor/envelope 扩展；或 (c) evaluator interval/连续性证明增强。
