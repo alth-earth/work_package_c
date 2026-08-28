@@ -1424,6 +1424,41 @@ failure、arrival-before-departure、取消、horizon 和各资源上限；每�
 `.runtime/experiments/`，本地提交后移除辅助 worktree，不 push，不自动进入真实 runner、
 Winter 或 candidate。
 
+### 【2026-08-29 | COMPLETED】P0.2-M1：bounded 非 FIFO 业务语义与资源边界
+
+本轮从 P0.2-M0 clean tip `4fa935a` 建立隔离分支
+`research/p02-m1-nonfifo-bounded-20260829`，先提交计划 `f3e299f`，实现与测试提交
+为 `aaab8f5`。所有改动仍仅在 C 内部 test-only sidecar；没有修改 B/C、C/D 合同、
+ingress/service、公共 planner、正式 `TemporalLabelAStar.plan()`、默认
+`TemporalDominancePolicy.disabled()`、真实 runner、Winter/P2.1/P3/ARA* 或 production
+candidate，也没有写 formal latest、replanning baseline 或 frozen artifact。
+
+**业务载荷。** 新增 `NonFifoBusinessEvidence`，可在研究 transition 中保留
+speed/risk/maximum-risk/confidence/source IDs/hard-mask 等边级业务证据；label 的
+semantic digest 和 `business_evidence` 均保留这些字段。非有限/非法字段和 hard-mask
+transition 不会被当成可航边，统一返回 `EVALUATOR_FAILURE`，避免只比较节点与成本而
+丢失业务语义。
+
+**资源和终止边界。** scalar 与 Pareto 两条 bounded 搜索路径均新增
+`max_edge_evaluations`（默认 `400000`）和 `edge_evaluations` 计数；expansion、label、
+queue、edge-evaluation 任一越界均为 `RESOURCE_LIMIT`，不返回成功 route。取消、horizon、
+严格到达约束、evaluator failure 和周期状态继续 fail-closed；Pareto 默认仍关闭，显式
+开启时只丢弃同 exact state 上新生成且严格逐分量被支配的标签，相同成本不同路径仍保留。
+
+**验证。** `tests/unit/test_non_fifo_feasibility.py` 专门矩阵为 `20 passed`，新增业务
+字段保留/digest、hard-mask fail-closed、scalar/Pareto edge-evaluation 上限等覆盖；与
+reference temporal oracle、temporal label/qualification/corridor 合计聚焦测试为
+`98 passed`。隔离 worktree 全量 pytest 为 `437 passed, 3 skipped`，跳过仅为退休 M2J
+诊断脚本缺失；变更文件 Ruff/format、`ruff check src tests`、lock check、CLI smoke 和
+`git diff --check` 通过。隔离 worktree 的 `make check` 仍受本地没有 `.mamba-env/bin/uv`
+的环境前置阻塞；该环境未被修改，集成正式工作树后重新执行完整 Make 门。
+
+本轮只把 P0.2 状态更新为 `READY_FOR_P0.2_IMPLEMENTATION_PLAN` 的 strengthened
+research evidence，不等于真实输入可用、性能证明或生产资格。真实
+`REAL_INPUT_FIFO_VIOLATED`、24h queue 上限、dominance 默认关闭及所有 Winter/P2.1/P3/
+ARA* 冻结不变；下一步仍需另立带实际业务字段映射、取消协议和资源预算的 bounded
+implementation 计划，不能自动接入 production。
+
 ### 【2026-08-29 | COMPLETED】P0.2-M0：非 FIFO label-correcting/Pareto 可行性扩展
 
 本轮从正式 clean `1ec20c7` 建立隔离分支
