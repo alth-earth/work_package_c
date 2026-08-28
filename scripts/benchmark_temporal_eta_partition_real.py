@@ -494,35 +494,36 @@ def _run(args: argparse.Namespace) -> int:
     objectives = OBJECTIVES if args.objective == "all" else (args.objective,)
     signal_old = signal.getsignal(signal.SIGALRM)
     signal.signal(signal.SIGALRM, _timeout_handler)
-    signal.setitimer(signal.ITIMER_REAL, args.worker_timeout_seconds)
     summaries: list[dict[str, Any]] = []
-    try:
-        for objective in objectives:
+    for objective in objectives:
+        signal.setitimer(signal.ITIMER_REAL, args.worker_timeout_seconds)
+        try:
             summary, _ = _scan_objective(loader, fixture, objective, output, existing, heartbeat)
-            summaries.append(summary)
-    except _WorkerTimeout as error:
-        final = {
-            "schema_version": SCHEMA_VERSION,
-            "status": "STOPPED_HARD",
-            "reason": str(error),
-            "completed_objectives": len(summaries),
-        }
-        _atomic_json(output / "comparison-summary.json", final)
-        _atomic_json(
-            output / "manifest.json",
-            {
+        except _WorkerTimeout as error:
+            # The objective is isolated: retain all fsynced edge records and
+            # allow the next objective to proceed.  A timeout can never be
+            # interpreted as a FIFO or dominance result.
+            summary = {
                 "schema_version": SCHEMA_VERSION,
                 "status": "STOPPED_HARD",
-                "identity": identity,
-                "summary": final,
-            },
-        )
-        _atomic_json(heartbeat, {"status": "STOPPED_HARD", "updated_at": datetime.now(UTC)})
-        (output / "STOPPED_HARD").write_text(str(error) + "\n", encoding="utf-8")
-        return 2
-    finally:
-        signal.setitimer(signal.ITIMER_REAL, 0)
-        signal.signal(signal.SIGALRM, signal_old)
+                "reason": str(error),
+                "input": fixture.input_name,
+                "segment": fixture.segment,
+                "objective": objective,
+                "completed_edges": sum(
+                    1
+                    for record in _read_jsonl(output / "cases.jsonl")
+                    if record.get("objective") == objective
+                ),
+                "edge_count": len(loader._edge_ids(fixture)),
+                "dominance_policy": "disabled",
+                "dominance_pruned": 0,
+                "deterministic": False,
+            }
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+        summaries.append(summary)
+    signal.signal(signal.SIGALRM, signal_old)
     if any(item["status"] == "REAL_INPUT_FIFO_VIOLATED" for item in summaries):
         status = "REAL_INPUT_FIFO_VIOLATED"
     elif summaries and all(
