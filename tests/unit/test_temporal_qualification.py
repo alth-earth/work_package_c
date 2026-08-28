@@ -8,6 +8,8 @@ import pytest
 
 from arctic_route_planning.planners.temporal_bounds import (
     TemporalStateBoundCertificate,
+    TemporalStateBoundStatus,
+    qualify_state_bound,
 )
 from arctic_route_planning.planners.temporal_qualification import (
     DominanceMode,
@@ -508,3 +510,90 @@ def test_checkpoint_restore_rejects_state_bound_policy_change() -> None:
 
     with pytest.raises(TemporalSessionIdentityMismatch, match="identity fence"):
         planner.restore_session(checkpoint, request=request)
+
+
+def test_state_bound_qualification_derives_excluded_nodes_and_proof_scope() -> None:
+    planner = _planner()
+    request = PlanningRequest(start=(1, 0), goal=(1, 3), departure_time=T0)
+    scope = planner.temporal_scope(request)
+    universe = tuple(
+        (row, column)
+        for row in range(planner.grid.shape[0])
+        for column in range(planner.grid.shape[1])
+    )
+    certificate = qualify_state_bound(
+        scope,
+        ((1, 0), (1, 1), (1, 2), (1, 3)),
+        universe_nodes=universe,
+        exclusion_proof=True,
+        proof_digest="corridor-proof-v2",
+        coverage_complete=True,
+        evaluator_certified=True,
+    )
+
+    assert certificate.status is TemporalStateBoundStatus.CERTIFIED
+    assert certificate.usable
+    assert certificate.excluded_nodes
+    assert set(certificate.allowed_nodes).isdisjoint(certificate.excluded_nodes)
+    assert certificate.permits(scope)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "reason"),
+    (
+        ({"exclusion_proof": False, "coverage_complete": True, "evaluator_certified": True}, "missing_exclusion_proof"),
+        ({"exclusion_proof": True, "coverage_complete": False, "evaluator_certified": True}, "coverage_incomplete"),
+        ({"exclusion_proof": True, "coverage_complete": True, "evaluator_certified": False}, "unknown_evaluator"),
+        ({"exclusion_proof": True, "coverage_complete": True, "evaluator_certified": True}, "missing_proof_digest"),
+    ),
+)
+def test_state_bound_qualification_rejects_incomplete_proof(kwargs, reason: str) -> None:
+    planner = _planner()
+    request = PlanningRequest(start=(1, 0), goal=(1, 3), departure_time=T0)
+    universe = tuple(
+        (row, column)
+        for row in range(planner.grid.shape[0])
+        for column in range(planner.grid.shape[1])
+    )
+    certificate = qualify_state_bound(
+        planner.temporal_scope(request),
+        ((1, 0), (1, 1)),
+        universe_nodes=universe,
+        proof_digest=None if reason == "missing_proof_digest" else "proof",
+        **kwargs,
+    )
+
+    assert certificate.status is TemporalStateBoundStatus.REJECTED
+    assert not certificate.usable
+    assert certificate.reason == reason
+
+
+def test_state_bound_identity_digest_changes_when_proof_changes() -> None:
+    planner = _planner()
+    request = PlanningRequest(start=(1, 0), goal=(1, 3), departure_time=T0)
+    scope = planner.temporal_scope(request)
+    universe = tuple(
+        (row, column)
+        for row in range(planner.grid.shape[0])
+        for column in range(planner.grid.shape[1])
+    )
+    first = qualify_state_bound(
+        scope,
+        ((1, 0), (1, 1)),
+        universe_nodes=universe,
+        exclusion_proof=True,
+        proof_digest="proof-a",
+        coverage_complete=True,
+        evaluator_certified=True,
+    )
+    second = qualify_state_bound(
+        scope,
+        ((1, 0), (1, 1)),
+        universe_nodes=universe,
+        exclusion_proof=True,
+        proof_digest="proof-b",
+        coverage_complete=True,
+        evaluator_certified=True,
+    )
+
+    assert first.digest != second.digest

@@ -719,6 +719,10 @@ class TemporalLabelAStar(TimeDependentAStar):
             return "missing_exclusion_proof"
         if not certificate.proof_digest:
             return "missing_proof_digest"
+        if not certificate.coverage_complete:
+            return "coverage_incomplete"
+        if not certificate.evaluator_certified:
+            return "unknown_evaluator"
         if (
             not certificate.scope.evaluator_identity_known
             or not expected_scope.evaluator_identity_known
