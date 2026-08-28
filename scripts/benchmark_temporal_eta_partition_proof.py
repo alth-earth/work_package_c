@@ -150,7 +150,7 @@ def _frame(
     return RiskFrame(
         schema_version="bc.risk-frame.v2",
         risk_id=risk_id,
-        run_id="partition-proof-run",
+        run_id="run-00000000-0000-4000-8000-000000000001",
         scenario_id="partition-proof",
         corridor_id="partition-proof",
         vessel_profile_id="partition-proof-vessel",
