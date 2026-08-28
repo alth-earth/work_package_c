@@ -119,6 +119,26 @@ def _append_jsonl(path: Path, value: Any) -> None:
         os.fsync(handle.fileno())
 
 
+def _write_jsonl(path: Path, values: list[Any]) -> None:
+    """Atomically replace a small summary JSONL file.
+
+    Per-edge evidence uses :func:`_append_jsonl` so every completed edge is
+    durable.  The end-of-run point-scan file contains one aggregate record;
+    replacing it on resume avoids duplicate summaries while retaining the
+    append-only per-edge evidence.
+    """
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}")
+    with temporary.open("w", encoding="utf-8") as handle:
+        for value in values:
+            handle.write(json.dumps(_jsonable(value), ensure_ascii=False, sort_keys=True))
+            handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, path)
+
+
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
@@ -133,6 +153,61 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
         if isinstance(value, dict):
             values.append(value)
     return values
+
+
+def _resume_edge_records(
+    output: Path,
+    *,
+    expected_input: str,
+    expected_segment: str,
+    expected_scope_digest: str,
+    expected_probe_count: int,
+    expected_edge_count: int,
+) -> tuple[dict[int, dict[str, Any]], Counter[str], Counter[str]]:
+    """Load only complete, identity-matching edge records for a safe resume.
+
+    A worker is never reconstructed from an in-progress record.  Each edge is
+    considered resumable only when its JSON object contains the full probe
+    list, matching scope/input/segment identity, and the fixed disabled
+    dominance marker.  Duplicate complete records are rejected rather than
+    silently selecting one of them.
+    """
+
+    records_by_edge: dict[int, dict[str, Any]] = {}
+    status_counts: Counter[str] = Counter()
+    failure_classes: Counter[str] = Counter()
+    for record in _read_jsonl(output / "eta-interval.jsonl"):
+        edge_index = record.get("edge_index")
+        probe_records = record.get("probe_records")
+        if not isinstance(edge_index, int) or not isinstance(probe_records, list):
+            continue
+        if (
+            record.get("schema_version") != SCHEMA_VERSION
+            or record.get("input") != expected_input
+            or record.get("segment") != expected_segment
+            or record.get("scope_digest") != expected_scope_digest
+            or record.get("dominance_policy") != "disabled"
+            or record.get("dominance_pruned") != 0
+            or record.get("probe_count") != expected_probe_count
+            or len(probe_records) != expected_probe_count
+            or edge_index < 0
+            or edge_index >= expected_edge_count
+        ):
+            raise RuntimeError("resume evidence contains an identity-mismatched edge record")
+        if edge_index in records_by_edge:
+            raise RuntimeError("resume evidence contains duplicate complete edge records")
+        records_by_edge[edge_index] = record
+        for probe_record in probe_records:
+            evidence = probe_record.get("evidence")
+            if not isinstance(evidence, dict):
+                raise RuntimeError("resume evidence contains an incomplete probe record")
+            status = evidence.get("status")
+            if isinstance(status, str):
+                status_counts[status] += 1
+            reason = evidence.get("reason")
+            if isinstance(reason, str) and reason:
+                failure_classes[reason.split(":", 1)[0]] += 1
+    return records_by_edge, status_counts, failure_classes
 
 
 def _git_identity(root: Path) -> dict[str, Any]:
@@ -275,10 +350,31 @@ def _run_scan(args: argparse.Namespace, output: Path) -> dict[str, Any]:
             "edge_evaluator_digest": "explicit:real-eta-interval-v1",
         }
     )
-    errors: Counter[str] = Counter()
-    status_counts: Counter[str] = Counter()
+    existing_edges, existing_status_counts, existing_errors = _resume_edge_records(
+        output,
+        expected_input=fixture.input_name,
+        expected_segment=fixture.segment,
+        expected_scope_digest=scope.digest,
+        expected_probe_count=len(probes),
+        expected_edge_count=len(edges),
+    )
+    errors: Counter[str] = Counter(existing_errors)
+    status_counts: Counter[str] = Counter(existing_status_counts)
     started = time.perf_counter()
     for edge_index, edge in enumerate(edges):
+        if edge_index in existing_edges:
+            _atomic_json(
+                output / "heartbeat.json",
+                {
+                    "status": "RUNNING",
+                    "updated_at": datetime.now(UTC),
+                    "completed_edges": len(existing_edges),
+                    "expected_edges": len(edges),
+                    "elapsed_seconds": time.perf_counter() - started,
+                    "resumed": True,
+                },
+            )
+            continue
         points = planner._edge_geometry(
             edge[0], edge[1], minimum_samples=request.edge_sample_count
         )[2]
@@ -339,12 +435,13 @@ def _run_scan(args: argparse.Namespace, output: Path) -> dict[str, Any]:
                 ),
             },
         )
+        existing_edges[edge_index] = record
         _atomic_json(
             output / "heartbeat.json",
             {
                 "status": "RUNNING",
                 "updated_at": datetime.now(UTC),
-                "completed_edges": edge_index + 1,
+                "completed_edges": len(existing_edges),
                 "expected_edges": len(edges),
                 "elapsed_seconds": time.perf_counter() - started,
             },
@@ -449,7 +546,7 @@ def _run(args: argparse.Namespace) -> int:
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, old_alarm)
     _atomic_json(output / "comparison-summary.json", summary)
-    _append_jsonl(output / "fifo-scan.jsonl", summary["point_scan"])
+    _write_jsonl(output / "fifo-scan.jsonl", [summary["point_scan"]])
     final_status = summary["status"]
     manifest.update({"status": final_status, "summary": summary, "completed_at": datetime.now(UTC)})
     _atomic_json(manifest_path, manifest)
