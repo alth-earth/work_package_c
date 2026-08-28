@@ -1159,3 +1159,35 @@ active/archive import boundary 和 `git diff --check` 通过。`UV_OFFLINE=1 mak
 - candidate、Winter M1/M2、P2.1、P3 SMO-A*、ARA* 和正式 ETA 默认策略全部不变；
 - 下一步只能另立保守 ETA interval proof/evaluator 研究，或在真实反例出现时另立 P0.2
   label-correcting 计划；不得由本轮 uncertain 结果自动启用 dominance。
+
+### 【2026-08-28 | PLANNED】P0.1-M1.10/M1.11 解析 ETA/FIFO 证明与证明型资源 Corridor
+
+本轮在 M1.9 的 `REAL_INPUT_FIFO_UNCERTAIN_REQUIRES_INTERVAL_PROOF` 和 M1.6 的
+`REAL_INPUT_6H_FEASIBLE_24H_RESOURCE_FAIL` 基础上推进。M1.9 已集成到正式
+`research-validation-system` 的本地 clean tip `62333b6`；本轮从独立分支
+`research/p01-m110-analytic-eta-proof-20260828` 开始，candidate、Winter、P2.1、P3
+和 ARA* 均保持关闭或原状态。
+
+**主线一：解析 ETA 与 FIFO 资格。** M1.9 的 interval sampler 将扩展为带时间斜率、
+切换点和可航三态的保守证据。ETA 唯一根使用机械推导的 contraction certificate；FIFO
+则独立使用 fixed-point implicit sensitivity/广义斜率证书。唯一根不自动等于 FIFO，
+离散采样、non-unique root、boundary/hard-mask discontinuity、coverage/evaluator
+缺口和 scope mismatch 一律 fail-closed。正式 `sample()`、`plan()`、默认
+`TemporalDominancePolicy.disabled()` 与公共合同不变。
+
+**主线二：证明型时空资源限界。** 先以最大可航速度、时间窗、静态可航域和可证明的
+objective lower bound 生成 corridor certificate，进行无剪枝 label replay。只有 synthetic
+oracle 零错误且 holdout/development 的 low-risk/recommended 均达到至少 20% projected
+label reduction 时，才进入 test-only pruning 验证；继续冻结 `50k expansions / 100k
+labels / 50k queue / 400k edge evaluations`，不使用 beam、近似剪枝或 oracle route 注入。
+
+**真实输入与收口门。** synthetic analytic proof 全部通过后扫描 145 帧 holdout/development
+的 6h；两输入相关 partition 的证明覆盖率达到 90% 且无硬错误才条件运行 24h。真实
+dominance readiness 仍要求 100% traversable partition 具备完整 unique-root/FIFO 证书或
+独立阻塞排除证据，且 pruning 为零。24h reference 若触及冻结 queue 上限，不形成正确性
+或性能通过。实验构件只写 `.runtime/experiments/`；SSOT 仅追加本轮结果，不写 formal
+latest、replanning baseline 或 frozen artifact，不 push。
+
+**P0.2 维护。** 扩展 test-only label-correcting/Pareto oracle 的周期 ETA、重复精确到达、
+取消、资源上限和 evaluator failure fixture；没有真实 FIFO 反例时不接入真实 runner 或生产
+planner，仅记录可执行性设计状态。
