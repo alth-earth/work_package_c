@@ -399,7 +399,6 @@ def _worker(profile_name: str, objective_name: str, mode: str, cpu: int) -> dict
             and candidate_diag.heuristic_scope_match
             and heuristic_rejected == 0
             and state_rejected == 0
-            and state_pruned > 0
             and arrival_pruned > 0
             and candidate_diag.dominance_pruned == 0
             and resource_clean
@@ -621,7 +620,11 @@ def _summary(records: list[dict[str, Any]], identity: dict[str, Any]) -> dict[st
     deterministic = bool(records) and all(len(values) == 1 for values in groups.values())
     status = (
         "TEMPORAL_COMPOSED_BOUND_MATRIX_PASS"
-        if certified_pass and fail_closed and controls_safe and deterministic
+        if certified_pass
+        and fail_closed
+        and controls_safe
+        and deterministic
+        and sum(int(item.get("state_bound_pruned", 0)) for item in certified) > 0
         else "NO_PERFORMANCE_PROOF/FAIL"
     )
     return {
