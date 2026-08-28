@@ -199,6 +199,7 @@ def _run_case(module: Any, profile: str, objective: str, certificate_kind: str) 
         "certificate_usable": certificate.usable,
         "certificate_digest": certificate.digest,
         "scope_digest": scope.digest,
+        "authorized": int(candidate.diagnostics.state_bound_rejected) == 0,
         "semantic_match": semantic_match,
         "baseline_semantic_digest": _digest(baseline_route),
         "candidate_semantic_digest": _digest(candidate_route),
@@ -295,7 +296,7 @@ def _run(args: argparse.Namespace) -> int:
         and all(item["semantic_match"] for item in cases)
         and all(item["pruning_expectation_met"] for item in cases)
         and all(item["certificate_usable"] for item in certified)
-        and all(not item["certificate_usable"] for item in rejected)
+        and all(not item["authorized"] for item in rejected)
         and all(item["state_bound_pruned"] == 0 for item in rejected)
     )
     summary = {
