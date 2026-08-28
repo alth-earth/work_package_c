@@ -1622,3 +1622,27 @@ dominance/state-bound 关闭的条件下承载 C 真实边业务语义，并不�
 `REAL_INPUT_FIFO_VIOLATED`，24h queue 上限和 candidate/Winter/P2.1/P3/ARA* 冻结不变。
 后续必须另立带输入 identity、取消协议、资源预算和 oracle/语义审计的 real-input 计划，
 不得自动启动 production 或 candidate。
+
+### 【2026-08-29 | PLANNED】P0.2-M3：非 FIFO actual session 的可恢复执行围栏
+
+P0.2-M2 已把 active `TemporalSession` 的 exact-arrival 边评估接入显式 research adapter，
+但一次性执行无法为后续真实输入研究提供长任务的暂停、恢复和取消证据。本轮仅在该
+adapter 内增加 session wrapper 与 checkpoint carrier：按 expansion slice 推进 active
+session，保存其完整 checkpoint，并在恢复时重新执行 adapter mode、TemporalSession
+identity、dominance/state-bound 和 request fence。正式 `TemporalLabelAStar.plan()`、
+`TimeDependentAStar`、ingress/service、合同、真实 runner、Winter/P2.1/P3/ARA* 和
+production candidate 均不变。
+
+**安全约束。** wrapper 只接受 `use_heuristic=False`、
+`TemporalDominancePolicy.disabled()` 和无 state-bound certificate 的 planner；不改变
+底层 exact-arrival label 语义，不删除已扩展 label，不把暂停当作成功。checkpoint 必须
+绑定 adapter schema/mode digest、底层 `TemporalSessionCheckpoint` state digest、完整
+request 与 policy/ETA/search/evaluator identity；任一漂移、篡改、过期状态或恢复输入不符
+均 fail-closed。分片未终止时只返回 paused/None，终止后才映射既有五类研究状态。
+
+**验收。** 用 actual `_EdgeTraversal` 非 FIFO fixture 验证 full-run 与 slice→checkpoint→
+restore 的路线、精确 ETA、业务字段、semantic digest、资源计数和失败语义一致；覆盖
+取消、resource limit、horizon、evaluator failure、checkpoint digest/mode/identity
+漂移，以及 active/archive 导入边界。结果仅为
+`READY_FOR_P0.2-ADAPTER_LONG-RUN_PLAN` 的研究证据，不代表真实输入资格、连续非 FIFO
+全局最优或 candidate 晋级。
