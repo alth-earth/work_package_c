@@ -13,6 +13,7 @@ import json
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from itertools import pairwise
 from math import nextafter
 from typing import TYPE_CHECKING, Any
 
@@ -95,6 +96,10 @@ class RiskIntervalSample:
     risk_slope_upper: float | None = None
     environment_speed_factor_slope_lower: float | None = None
     environment_speed_factor_slope_upper: float | None = None
+    effective_confidence_lower: float | None = None
+    effective_confidence_upper: float | None = None
+    effective_environment_speed_factor_lower: float | None = None
+    effective_environment_speed_factor_upper: float | None = None
     navigability_status: str = "TRANSITION_OR_UNKNOWN"
 
     def __post_init__(self) -> None:
@@ -164,6 +169,20 @@ class RiskIntervalSample:
                 > self.environment_speed_factor_slope_upper
             ):
                 raise ValueError("speed-factor slope lower bound must not exceed upper bound")
+            effective = (
+                self.effective_confidence_lower,
+                self.effective_confidence_upper,
+                self.effective_environment_speed_factor_lower,
+                self.effective_environment_speed_factor_upper,
+            )
+            if any(value is None or not np.isfinite(value) for value in effective):
+                raise ValueError("complete interval samples require effective bounds")
+            if (
+                self.effective_confidence_lower > self.effective_confidence_upper
+                or self.effective_environment_speed_factor_lower
+                > self.effective_environment_speed_factor_upper
+            ):
+                raise ValueError("effective interval lower bound must not exceed upper bound")
 
     @property
     def reason(self) -> str | None:
@@ -238,9 +257,7 @@ class RiskSampler:
             )
         self._validate_window()
         self._valid_times = [frame.valid_time for frame in self._frames]
-        self._latitudes = np.asarray(
-            self._frames[0].payload.coords["latitude"].values, dtype=float
-        )
+        self._latitudes = np.asarray(self._frames[0].payload.coords["latitude"].values, dtype=float)
         self._longitudes = np.asarray(
             self._frames[0].payload.coords["longitude"].values, dtype=float
         )
@@ -399,8 +416,7 @@ class RiskSampler:
                             f"interval crosses RiskFrame gap {gap}, exceeding {self._max_frame_gap}"
                         )
             values = tuple(
-                self._sample_frame_interval(index, longitude, latitude)
-                for index in frame_indices
+                self._sample_frame_interval(index, longitude, latitude) for index in frame_indices
             )
         except (RiskCoverageError, RiskOutOfBoundsError, RiskSamplingError) as error:
             return self._failed_interval(
@@ -419,9 +435,51 @@ class RiskSampler:
                 reason=f"evaluator_failure:{type(error).__name__}",
             )
 
+        # The frame values are sufficient for the whole-window envelope, but
+        # a partitioned ETA proof may ask for a strict sub-interval inside a
+        # frame bracket.  Include the interpolated values at both requested
+        # endpoints so a threshold crossing can be isolated without carrying
+        # an unnecessarily wide frame-endpoint envelope.
         risk_values = tuple(value.risk_score for value in values)
-        confidence_values = tuple(value.confidence for value in values)
-        speed_values = tuple(value.environment_speed_factor for value in values)
+        try:
+            endpoint_risks = (
+                self._interpolated_risk(interval_start, longitude, latitude),
+                self._interpolated_risk(interval_end, longitude, latitude),
+            )
+        except (RiskCoverageError, RiskOutOfBoundsError, RiskSamplingError) as error:
+            return self._failed_interval(
+                start=interval_start,
+                end=interval_end,
+                longitude=float(longitude),
+                latitude=float(latitude),
+                reason=f"{type(error).__name__}:{error}",
+            )
+        except Exception as error:
+            return self._failed_interval(
+                start=interval_start,
+                end=interval_end,
+                longitude=float(longitude),
+                latitude=float(latitude),
+                reason=f"evaluator_failure:{type(error).__name__}",
+            )
+        risk_values += endpoint_risks
+        # ``sample`` takes the minimum confidence and speed factor of the two
+        # frames in each bracket.  Keep the historical raw extrema above for
+        # compatibility, and carry tighter effective bracket extrema for the
+        # partitioned proof sidecar.
+        if len(values) == 1:
+            effective_confidence = (values[0].confidence,)
+            effective_speed = (values[0].environment_speed_factor,)
+        else:
+            effective_confidence = tuple(
+                min(left.confidence, right.confidence) for left, right in pairwise(values)
+            )
+            effective_speed = tuple(
+                min(left.environment_speed_factor, right.environment_speed_factor)
+                for left, right in pairwise(values)
+            )
+        raw_confidence_values = tuple(value.confidence for value in values)
+        raw_speed_values = tuple(value.environment_speed_factor for value in values)
         risk_slope_lower, risk_slope_upper = self._interval_slope_bounds(
             values, frame_indices, variable="risk_score"
         )
@@ -433,9 +491,7 @@ class RiskSampler:
             values, frame_indices, variable="environment_speed_factor"
         )
         navigability_status = self._interval_navigability(values)
-        source_ids = tuple(
-            dict.fromkeys(self._frames[index].risk_id for index in frame_indices)
-        )
+        source_ids = tuple(dict.fromkeys(self._frames[index].risk_id for index in frame_indices))
         return RiskIntervalSample(
             start=interval_start,
             end=interval_end,
@@ -443,10 +499,10 @@ class RiskSampler:
             latitude=float(latitude),
             risk_lower=_outward_lower(min(risk_values), floor=0.0),
             risk_upper=_outward_upper(max(risk_values), ceiling=1.0),
-            confidence_lower=_outward_lower(min(confidence_values), floor=0.0),
-            confidence_upper=_outward_upper(max(confidence_values), ceiling=1.0),
-            environment_speed_factor_lower=_outward_lower(min(speed_values), floor=0.0),
-            environment_speed_factor_upper=_outward_upper(max(speed_values), ceiling=1.0),
+            confidence_lower=_outward_lower(min(raw_confidence_values), floor=0.0),
+            confidence_upper=_outward_upper(max(raw_confidence_values), ceiling=1.0),
+            environment_speed_factor_lower=_outward_lower(min(raw_speed_values), floor=0.0),
+            environment_speed_factor_upper=_outward_upper(max(raw_speed_values), ceiling=1.0),
             hard_mask_possible=any(value.hard_mask for value in values),
             source_risk_ids=source_ids,
             covered_frame_times=tuple(self._frames[index].valid_time for index in frame_indices),
@@ -454,10 +510,42 @@ class RiskSampler:
             evaluator_digest=self.interval_evaluator_digest,
             risk_slope_lower=risk_slope_lower,
             risk_slope_upper=risk_slope_upper,
+            effective_confidence_lower=_outward_lower(min(effective_confidence), floor=0.0),
+            effective_confidence_upper=_outward_upper(max(effective_confidence), ceiling=1.0),
+            effective_environment_speed_factor_lower=_outward_lower(
+                min(effective_speed), floor=0.0
+            ),
+            effective_environment_speed_factor_upper=_outward_upper(
+                max(effective_speed), ceiling=1.0
+            ),
             environment_speed_factor_slope_lower=speed_slope_lower,
             environment_speed_factor_slope_upper=speed_slope_upper,
             navigability_status=navigability_status,
         )
+
+    def _interpolated_risk(
+        self,
+        sampled_at: datetime,
+        longitude: float,
+        latitude: float,
+    ) -> float:
+        """Return strict linear risk at an interval endpoint.
+
+        This helper is used only by the private interval sidecar.  It mirrors
+        :meth:`sample`'s temporal rule while retaining the interval sampler's
+        fail-closed handling for non-finite risk values.
+        """
+
+        lower, upper = self._bracket(sampled_at)
+        lower_value = self._sample_frame_interval(lower, longitude, latitude)
+        if lower == upper:
+            return lower_value.risk_score
+        upper_value = self._sample_frame_interval(upper, longitude, latitude)
+        gap = self._frames[upper].valid_time - self._frames[lower].valid_time
+        fraction = (
+            sampled_at - self._frames[lower].valid_time
+        ).total_seconds() / gap.total_seconds()
+        return _lerp(lower_value.risk_score, upper_value.risk_score, fraction)
 
     def _interval_slope_bounds(
         self,
@@ -479,8 +567,7 @@ class RiskSampler:
         for left_position, left_index in enumerate(indices[:-1]):
             right_index = indices[left_position + 1]
             gap_hours = (
-                self._frames[right_index].valid_time
-                - self._frames[left_index].valid_time
+                self._frames[right_index].valid_time - self._frames[left_index].valid_time
             ).total_seconds() / 3600.0
             if gap_hours <= 0.0 or not np.isfinite(gap_hours):
                 raise RiskSamplingError("RiskFrame times must increase strictly")
@@ -672,9 +759,7 @@ class RiskSampler:
         }
         if "environment_speed_factor" in payload.data_vars:
             extracted["environment_speed_factor"] = np.asarray(
-                payload["environment_speed_factor"]
-                .transpose("latitude", "longitude")
-                .values,
+                payload["environment_speed_factor"].transpose("latitude", "longitude").values,
                 dtype=float,
             )
         for name, array in extracted.items():
@@ -813,9 +898,7 @@ def _speed_factor(
     data = arrays.get("environment_speed_factor")
     if data is None:
         return 1.0
-    values = _array_values(
-        data, contributors, variable="environment_speed_factor", finite=True
-    )
+    values = _array_values(data, contributors, variable="environment_speed_factor", finite=True)
     factor = min(value for value, _ in values)
     if not np.isfinite(factor) or factor <= 0.0 or factor > 1.0:
         raise RiskSamplingError("environment speed factors must be finite in (0, 1]")

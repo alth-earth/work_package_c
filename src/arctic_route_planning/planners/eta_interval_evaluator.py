@@ -148,6 +148,10 @@ class EtaOperatorIntervalEvidence:
                         "risk_slope_upper": sample.risk_slope_upper,
                         "speed_slope_lower": sample.environment_speed_factor_slope_lower,
                         "speed_slope_upper": sample.environment_speed_factor_slope_upper,
+                        "effective_confidence_lower": sample.effective_confidence_lower,
+                        "effective_confidence_upper": sample.effective_confidence_upper,
+                        "effective_speed_lower": sample.effective_environment_speed_factor_lower,
+                        "effective_speed_upper": sample.effective_environment_speed_factor_upper,
                         "hard_mask_possible": sample.hard_mask_possible,
                         "navigability_status": sample.navigability_status,
                         "source_risk_ids": sample.source_risk_ids,
@@ -280,9 +284,7 @@ class TemporalEtaIntervalEvaluator:
         policy_digest = canonical_digest(self.eta_policy)
         certified = self.evaluator_certified if evaluator_certified is None else evaluator_certified
         continuous = (
-            self.continuity_certified
-            if continuity_certified is None
-            else continuity_certified
+            self.continuity_certified if continuity_certified is None else continuity_certified
         )
         contraction = self.contraction_bound if contraction_bound is None else contraction_bound
 
@@ -401,9 +403,7 @@ class TemporalEtaIntervalEvaluator:
                 reason="hard_mask_discontinuity",
             )
 
-        minimum_confidence = float(
-            getattr(self.planner_config, "minimum_confidence", 0.0)
-        )
+        minimum_confidence = float(getattr(self.planner_config, "minimum_confidence", 0.0))
         if any(
             sample.confidence_lower is None or sample.confidence_lower < minimum_confidence
             for sample in samples
@@ -426,8 +426,7 @@ class TemporalEtaIntervalEvaluator:
             )
         maximum_risk = getattr(self.request, "maximum_risk", None)
         if maximum_risk is not None and any(
-            sample.risk_upper is None or sample.risk_upper > maximum_risk
-            for sample in samples
+            sample.risk_upper is None or sample.risk_upper > maximum_risk for sample in samples
         ):
             return self._evidence(
                 dep_lower,
@@ -559,6 +558,7 @@ class TemporalEtaIntervalEvaluator:
         scope: Mapping[str, Any] | TemporalScope | None = None,
         *,
         endpoint_residuals: tuple[float, float] | None = None,
+        evaluator_certificate: Any | None = None,
     ) -> EtaOperatorIntervalEvidence:
         """Derive ETA-root and FIFO evidence without caller proof flags.
 
@@ -592,24 +592,43 @@ class TemporalEtaIntervalEvaluator:
         else:
             navigation = NavigabilityStatus.TRANSITION_OR_UNKNOWN
 
-        evaluator_certified = bool(
-            complete
-            and active_scope.mapping.get("evaluator_certification")
-            == "certified:c.temporal-evaluator.v1"
-            and all(
-                sample.evaluator_digest == self.risk_sampler.interval_evaluator_digest
-                for sample in samples
+        if evaluator_certificate is not None:
+            evaluator_certified = bool(
+                complete
+                and evaluator_certificate.permits(active_scope)
+                and all(
+                    sample.evaluator_digest == self.risk_sampler.interval_evaluator_digest
+                    for sample in samples
+                )
             )
-        )
+        else:
+            evaluator_certified = bool(
+                complete
+                and active_scope.mapping.get("evaluator_certification")
+                == "certified:c.temporal-evaluator.v1"
+                and all(
+                    sample.evaluator_digest == self.risk_sampler.interval_evaluator_digest
+                    for sample in samples
+                )
+            )
         continuity_certified = bool(
             complete
             and navigation is NavigabilityStatus.ALWAYS_NAVIGABLE
             and all(
                 _collapsed_interval(
-                    sample.environment_speed_factor_lower,
-                    sample.environment_speed_factor_upper,
+                    (
+                        sample.effective_environment_speed_factor_lower
+                        if evaluator_certificate is not None
+                        and sample.effective_environment_speed_factor_lower is not None
+                        else sample.environment_speed_factor_lower
+                    ),
+                    (
+                        sample.effective_environment_speed_factor_upper
+                        if evaluator_certificate is not None
+                        and sample.effective_environment_speed_factor_upper is not None
+                        else sample.environment_speed_factor_upper
+                    ),
                 )
-                and _collapsed_interval(sample.confidence_lower, sample.confidence_upper)
                 and sample.risk_slope_lower is not None
                 and sample.risk_slope_upper is not None
                 and sample.environment_speed_factor_slope_lower is not None
@@ -622,12 +641,10 @@ class TemporalEtaIntervalEvaluator:
         phi_travel: SlopeInterval | None = None
         if complete and base.edge_distance_km is not None:
             slope_lower = min(
-                sample.environment_speed_factor_slope_lower or 0.0
-                for sample in samples
+                sample.environment_speed_factor_slope_lower or 0.0 for sample in samples
             )
             slope_upper = max(
-                sample.environment_speed_factor_slope_upper or 0.0
-                for sample in samples
+                sample.environment_speed_factor_slope_upper or 0.0 for sample in samples
             )
             try:
                 phi_departure, phi_travel, _ = derive_operator_sensitivity(
@@ -638,6 +655,30 @@ class TemporalEtaIntervalEvaluator:
             except ValueError:
                 phi_departure = None
                 phi_travel = None
+
+        analytic_image = base.image
+        if evaluator_certificate is not None and complete and base.edge_distance_km is not None:
+            effective_lower = min(
+                sample.effective_environment_speed_factor_lower
+                if sample.effective_environment_speed_factor_lower is not None
+                else sample.environment_speed_factor_lower
+                for sample in samples
+            )
+            effective_upper = min(
+                sample.effective_environment_speed_factor_upper
+                if sample.effective_environment_speed_factor_upper is not None
+                else sample.environment_speed_factor_upper
+                for sample in samples
+            )
+            try:
+                effective_speed_lower = self.vessel_model.effective_speed(effective_lower)
+                effective_speed_upper = self.vessel_model.effective_speed(effective_upper)
+                analytic_image = EtaInterval(
+                    _outward_lower(base.edge_distance_km / effective_speed_upper.speed_km_per_hour),
+                    _outward_upper(base.edge_distance_km / effective_speed_lower.speed_km_per_hour),
+                )
+            except (ValueError, ZeroDivisionError):
+                analytic_image = None
 
         partition_digest = canonical_digest(
             {
@@ -655,7 +696,7 @@ class TemporalEtaIntervalEvaluator:
         )
         certificate = qualify_analytic_eta(
             domain=travel_hour_domain,
-            image=base.image,
+            image=analytic_image,
             scope=active_scope,
             expected_scope=self.scope,
             policy_digest=policy_digest,
@@ -670,6 +711,7 @@ class TemporalEtaIntervalEvaluator:
         )
         return replace(
             base,
+            image=analytic_image,
             analytic_certificate=certificate,
             status=certificate.root_status,
             reason=certificate.reason,
@@ -677,6 +719,7 @@ class TemporalEtaIntervalEvaluator:
             continuity_certified=certificate.continuity_certified,
             contraction_bound=certificate.contraction_bound,
         )
+
     def _sample_point(
         self,
         point: GeoPoint,
