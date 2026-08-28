@@ -2123,6 +2123,57 @@ affinity、RSS、无 swap、4 GiB cgroup 和 OOM 事件证据完整（`resource_
 state/corridor 计划的证据；candidate、Winter、P2.1、P3、ARA* 和 dominance 继续默认关闭。
 完成验证后移除本轮辅助 worktree，保留研究分支和实验构件，不 push。
 
+### 【2026-08-29 | PLANNED】P0.2-M10：composed arrival envelope and heuristic ordering
+
+M9 的 phase-isolated 24h 诊断显示：证书化 heuristic 在部分真实目标中能够找到 route，但
+baseline/reference 仍在冻结 `queue=50,000` 处失败；仅改变出队顺序不足以形成可审计的完整
+24h 语义证据。本轮研究一个更窄的组合：将 M7 已验证的 graph-topological arrival envelope
+与 M8 已验证的 reverse-graph objective lower-bound heuristic 同时安装，用 arrival certificate
+安全拒绝不可能到达目标的新 label，用 heuristic 只排序剩余 label。两种证书独立验证，任一不完整
+均 fail-closed，不把组合效果归因于未经证明的规则。
+
+**治理与边界。** 从 M9 clean tip `b9d711c` 建立隔离分支
+`research/p02-m10-composed-bound-20260829` 和独立 worktree，先提交本段计划。复用现有完整
+145 帧 RiskFrame、冻结 route-plan-set、配置和 ETA/evaluator；identity 绑定 implementation、
+`uv.lock`、证书 digest、scope、segment、search limits 和资源边界。主工作树、B/C 与 C/D 合同、
+ingress/service、正式 planner 默认路径、formal latest、replanning baseline、frozen artifact、
+candidate/Winter/P2.1/P3/ARA* 均不修改或启用。
+
+**组合安全规则。** 新增 C 内部显式组合 session/adapter，要求：
+
+- `TemporalStateBoundCertificate.arrival_bound_complete` 和 `TemporalHeuristicCertificate.usable`
+  同时为真，两个 scope/evaluator/policy/checkpoint digest 完全匹配；
+- state bound 只检查新生成 label，边界相等保留，绝不删除已扩展 label；heuristic 只改变队列
+  顺序，不改变 label 集合；
+- baseline 使用 arrival-bound-only，candidate 使用 arrival-bound + certified heuristic，
+  reference 使用独立 zero-heuristic arrival-bound Dijkstra；不使用 FIFO 支配、beam、近似剪枝、
+  reference route 注入或任何提高 `50k/100k/50k/400k` 的办法；
+- 任一证书拒绝、scope mismatch、evaluator/coverage unknown、pruning counter inconsistency
+  或 checkpoint digest drift 均返回明确失败，pruning 不得静默发生。
+
+**Synthetic gate。** 在 small/medium/stress × 三 objective 上比较无界、arrival-bound-only、
+组合 candidate 和独立 bounded exact-arrival oracle；覆盖完整证书、arrival incomplete、heuristic
+incomplete、各自 scope mismatch、非 admissible/unknown evaluator、边界相等和取消/资源上限。
+要求路线、精确 ETA、速度、风险、成本、confidence、source IDs、失败语义和 semantic digest
+一致；组合 profile 至少有真实 state-bound pruning 与 heuristic 生效，所有拒绝 profile 的
+pruning=0，确定性和 checkpoint slice→restore 通过。只在 synthetic 全门通过且 clean identity
+不漂移时执行真实输入。
+
+**真实 24h 诊断。** 沿用 M9 phase-isolated runner，新增
+`c.p0.2-temporal-composed-bound-real-24h.v1`，对 holdout/development 的 `rolling_0_24h`
+逐 objective 运行 baseline/candidate/reference，各 phase 独立 deadline，CPU=2、4 GiB
+`MemoryMax`、0 swap；先跑一个目标探针，再按顺序完成其余目标。记录 route/semantic、证书和
+pruning counters、queue/label/expansion、RSS/swap/OOM/timeout；任一目标失败只标记该目标，
+不择优形成总通过。24h 仍失败时不重跑 Winter、不提高上限、不自动进入 production。
+
+**收口分支。** 全部目标 baseline/candidate/reference 语义与 bounded oracle 一致、确定、
+证书完整、资源合格且观察到组合安全 pruning 时，标记
+`READY_FOR_P0.2-COMPOSED-BOUND-REAL-REVIEW`；任一资源/语义/证书门失败为
+`REAL_INPUT_24H_RESOURCE_FAIL` 或 `NO_PERFORMANCE_PROOF/FAIL`；构件/identity 不完整为
+`INVALID/PENDING`。真实 FIFO `REAL_INPUT_FIFO_VIOLATED`、M4/M9 24h 资源边界和 candidate
+默认关闭状态保持不变。完成后追加 SSOT 证据、运行正式 checks、fast-forward 集成并移除辅助
+worktree，保留研究分支和实验构件，不 push。
+
 ### 【2026-08-29 | PLANNED】P0.2-M9：certified heuristic long-horizon resource audit
 
 M8 在完整 holdout `executable_0_6h` 上证明了证书化反向图 objective lower bound 可以只改变
