@@ -126,7 +126,10 @@ def _frame(
     risk_array = np.full(shape, risk, dtype=np.float32)
     variables: dict[str, tuple[tuple[str, str], np.ndarray]] = {
         "risk_score": (("latitude", "longitude"), risk_array),
-        "risk_level": (("latitude", "longitude"), np.minimum(5, np.floor(risk_array * 5) + 1)),
+        "risk_level": (
+            ("latitude", "longitude"),
+            np.minimum(5, np.floor(risk_array * 5) + 1).astype(np.uint8),
+        ),
         "hard_mask": (("latitude", "longitude"), np.full(shape, hard_mask, dtype=np.bool_)),
         "confidence": (("latitude", "longitude"), np.full(shape, 0.9, dtype=np.float32)),
         "environment_speed_factor": (
