@@ -240,3 +240,21 @@ def test_interval_sampling_fails_closed_for_gap_order_and_out_of_bounds() -> Non
     assert "exceeding" in (gap.failure_reason or "")
     assert reversed_interval.failure_reason == "invalid_interval_order"
     assert not outside.coverage_complete
+
+
+def test_interval_sampling_checks_every_frame_gap_when_crossing_multiple_frames() -> None:
+    frames = tuple(
+        make_frame(
+            T0 + timedelta(hours=index),
+            np.zeros((2, 2)),
+            risk_id=f"risk-{index}",
+            environment_speed_factor=np.ones((2, 2)),
+        )
+        for index in range(3)
+    )
+    sampler = RiskSampler(frames, max_frame_gap=timedelta(hours=2))
+
+    evidence = sampler._sample_interval(T0, T0 + timedelta(hours=2), 0.0, 0.0)
+
+    assert evidence.coverage_complete
+    assert evidence.covered_frame_times == tuple(frame.valid_time for frame in frames)

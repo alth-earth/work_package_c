@@ -357,11 +357,8 @@ class RiskSampler:
             if not frame_times:
                 raise RiskCoverageError("interval has no covered RiskFrame")
             if self._max_frame_gap is not None:
-                for left, right in zip(
-                    frame_indices,
-                    range(lower_index + 1, upper_index + 1),
-                    strict=True,
-                ):
+                for left in range(lower_index, upper_index):
+                    right = left + 1
                     gap = self._frames[right].valid_time - self._frames[left].valid_time
                     if gap > self._max_frame_gap:
                         raise RiskCoverageError(
