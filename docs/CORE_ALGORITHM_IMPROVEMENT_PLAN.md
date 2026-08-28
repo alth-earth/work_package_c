@@ -1285,3 +1285,41 @@ worktree 包路径不同。未修改环境、依赖或 `uv.lock`，等价的直�
 - 下一步只能另立真实 evaluator/interval proof、带 scope 的 corridor/envelope 或
   P0.2 label-correcting 计划；不得自动进入 Winter、P2.1、P3、ARA*、formal latest 或
   candidate 启用。
+
+### 【2026-08-28 | PLANNED】P0.1-M1.12/M1.13：分区 ETA 证明与真实 Corridor 资源审计
+
+本轮承接 M1.10/M1.11 的 synthetic 证明通过、真实输入
+`REAL_INPUT_FIFO_UNCERTAIN_REQUIRES_INTERVAL_PROOF` 和既有 24h queue 上限事实。正式
+分支先本地 fast-forward 集成 M1.10/M1.11，再从 clean identity 建立隔离实现分支；不改
+B/C、C/D 合同、ingress/service、公共 planner、formal latest、replanning baseline 或
+frozen artifact，不启用 candidate，不重开 Winter/P2.1/P3/ARA*。
+
+**M1.12 分区 evaluator certificate。** 在 C 内部新增由真实 `RiskSampler` 机械生成的
+分区 evidence/certificate，替换真实 runner 中仅由 scope 字符串表达的
+`evaluator_certified` 标志。证书绑定 sampler 规则与实现 digest、RiskFrame 内容/时间边界、
+空间贡献、edge fractions、阈值、bounded ETA policy、完整 `TemporalScope` 和 proof digest。
+按 departure/travel 域切分 RiskFrame、hard-mask、confidence、speed-factor 与阈值事件；
+每个稳定分区独立计算 interval image、contraction、arrival slope 和 navigability，并对
+边界执行左右包络检查。只有唯一 root、contraction `<1`、FIFO 单调和完整 scope 才授权；
+负跳变保存 `FIFO_VIOLATED` 反例，边界重叠、coverage/evaluator 缺口和切分耗尽均保持
+`UNCERTAIN_*`。阻塞分区只能形成排除证据，不能包装成 ETA 成功。
+
+**M1.12 证明与真实审计。** 新 synthetic schema 覆盖稳定/多分区唯一根、多根、正负边界
+跳变、hard-mask/阈值、coverage/evaluator failure、outward rounding 及 scope/policy/
+checkpoint/resume 漂移。证明通过后，对完整 145 帧 holdout/development 执行 6h 全域
+审计，真实搜索仍 `dominance_policy=disabled`。单输入 6h 的 certified-or-blocked 覆盖率
+达到 90% 且无硬错误时才可在时间预算内继续 24h 诊断；只有 100% 分区证明完整才可标记
+`READY_FOR_SEPARATE_REAL_DOMINANCE_PLAN`。
+
+**M1.13 证明型 Corridor。** 复用既有 `TemporalCorridorEvidence`，新增真实输入投影 runner，
+基于最大有效船速和有限网格的 forward/reverse admissible lower bounds 计算 projected
+label reduction、queue peak 和 rejection reason。任何 objective lower bound 必须绑定冻结
+cost model 与实际 incumbent，不得注入 reference route。仅当 synthetic 通过、holdout/
+development 的 low-risk/recommended 预计 reduction 均达到 20%、scope/proof 完整时，才做
+真实 6h test-only pruning；24h 只保留投影或独立诊断，不形成性能/正确性晋级。
+
+**时间与收口。** 截止 `2026-08-29 19:00 CST`，16:00 后不再启动新 worker，预留至少两小时
+完整测试、SSOT 证据和 Git 收口。最终状态固定为真实 FIFO violated、partition proof
+uncertain、resource bound insufficient 或 separate-plan-ready 之一；所有 uncertain、
+identity 漂移、fail-open 和语义不一致均不得作算法结论。实验构件只写 `.runtime/experiments/`，
+最终正式分支 clean、无辅助 worktree、无 push。
