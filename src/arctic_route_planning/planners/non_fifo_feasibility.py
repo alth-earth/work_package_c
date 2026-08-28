@@ -353,7 +353,7 @@ def search_non_fifo_pareto(
     neighbors: Callable[[Any], Iterable[Any]],
     evaluate_edge: Callable[[Any, Any, datetime], NonFifoTransition | NonFifoParetoTransition],
     objective_count: int = 1,
-    pareto_pruning: bool = True,
+    pareto_pruning: bool = False,
     max_expansions: int = 50_000,
     max_labels: int = 100_000,
     max_queue: int = 50_000,

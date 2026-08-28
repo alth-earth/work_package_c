@@ -229,6 +229,7 @@ def test_pareto_keeps_later_exact_arrival_with_better_non_fifo_suffix() -> None:
         neighbors=graph.__getitem__,
         evaluate_edge=evaluate,
         objective_count=2,
+        pareto_pruning=True,
     )
 
     assert result.status is NonFifoSearchStatus.GOAL_FOUND
@@ -246,6 +247,7 @@ def test_pareto_keeps_later_exact_arrival_with_better_non_fifo_suffix() -> None:
         neighbors=graph.__getitem__,
         evaluate_edge=evaluate,
         objective_count=2,
+        pareto_pruning=True,
     )
     assert repeat.semantic_digest == result.semantic_digest
     assert repeat.generated == result.generated
@@ -269,6 +271,7 @@ def test_pareto_prunes_only_new_dominated_label_at_same_exact_state() -> None:
         neighbors=graph.__getitem__,
         evaluate_edge=evaluate,
         objective_count=2,
+        pareto_pruning=True,
     )
 
     assert result.status is NonFifoSearchStatus.GOAL_FOUND
