@@ -255,6 +255,7 @@ def _worker(profile_name: str, objective_name: str, mode: str, cpu: int) -> dict
     bounded = None
     reference = None
     adapter_error = None
+    certificate_rejection_reason = None
     try:
         baseline = run_non_fifo_temporal_search(baseline_planner, request)
     except Exception as error:  # pragma: no cover - worker boundary
@@ -279,9 +280,16 @@ def _worker(profile_name: str, objective_name: str, mode: str, cpu: int) -> dict
                 adapter_error = f"{type(error).__name__}: {error}"
             bounded = run_non_fifo_temporal_bounded_search(candidate_planner, request, certificate)
         else:
-            bounded = run_non_fifo_temporal_arrival_bounded_search(
-                candidate_planner, request, certificate
-            )
+            try:
+                bounded = run_non_fifo_temporal_arrival_bounded_search(
+                    candidate_planner, request, certificate
+                )
+            except NonFifoTemporalAdapterError as error:
+                # A rejected certificate is expected for the topology-failure
+                # modes.  Preserve the explicit rejection without treating it
+                # as a worker crash or allowing any pruning.
+                adapter_error = f"{type(error).__name__}: {error}"
+                certificate_rejection_reason = certificate.reason or "certificate_rejected"
     except Exception as error:  # pragma: no cover - worker boundary
         errors["bounded"] = f"{type(error).__name__}: {error}"
     after = _resource_snapshot()
@@ -300,7 +308,11 @@ def _worker(profile_name: str, objective_name: str, mode: str, cpu: int) -> dict
     diagnostics = None if bounded is None else base._jsonable(bounded.diagnostics)
     pruned = 0 if bounded is None else int(bounded.diagnostics.state_bound_pruned)
     arrival_pruned = 0 if bounded is None else int(bounded.diagnostics.state_bound_arrival_pruned)
-    rejected = 0 if bounded is None else int(bounded.diagnostics.state_bound_rejected)
+    rejected = (
+        int(bounded.diagnostics.state_bound_rejected)
+        if bounded is not None
+        else (1 if certificate_rejection_reason is not None else 0)
+    )
     resource_clean = _resource_clean(before, after)
     if mode == "certified":
         passed = (
@@ -333,17 +345,22 @@ def _worker(profile_name: str, objective_name: str, mode: str, cpu: int) -> dict
         )
         status = "REJECTED_FAIL_CLOSED" if passed else "FAIL"
     else:
+        rejected_adapter = bounded is None and adapter_error is not None
+        rejected_result = (
+            bounded is not None
+            and bounded.status is NonFifoSearchStatus.EVALUATOR_FAILURE
+            and bounded.reason == "state_bound_rejected"
+            and bounded_route is None
+            and rejected > 0
+        )
         passed = (
             not errors
             and baseline is not None
             and baseline.status is NonFifoSearchStatus.GOAL_FOUND
-            and bounded is not None
-            and bounded.status is NonFifoSearchStatus.EVALUATOR_FAILURE
-            and bounded.reason == "state_bound_rejected"
+            and (rejected_adapter or rejected_result)
             and bounded_route is None
             and pruned == 0
             and arrival_pruned == 0
-            and rejected > 0
             and resource_clean
         )
         status = "REJECTED_FAIL_CLOSED" if passed else "FAIL"
@@ -357,6 +374,7 @@ def _worker(profile_name: str, objective_name: str, mode: str, cpu: int) -> dict
         "bounded_status": None if bounded is None else bounded.status.value,
         "bounded_reason": None if bounded is None else bounded.reason,
         "adapter_error": adapter_error,
+        "certificate_rejection_reason": certificate_rejection_reason,
         "semantic_match": baseline_match and bounded_match,
         "reference_match": baseline_match and bounded_match,
         "baseline_semantic_digest": None if baseline is None else baseline.semantic_digest,
