@@ -1428,7 +1428,8 @@ Winter 或 candidate。
 
 本轮从正式 clean `1ec20c7` 建立隔离分支
 `research/p02-m0-nonfifo-label-correcting-20260829`，先提交计划
-`5f1a966`，实现与测试提交为 `5589aaf`。改动只位于 C 内部
+`5f1a966`，实现与测试提交为 `5589aaf`，随后以 `d18a81f` 修正隔离环境下独立
+oracle 的测试导入并冻结默认边界。改动只位于 C 内部
 `planners/non_fifo_feasibility.py` 和对应 test-only fixture；没有修改 B/C、C/D 合同、
 ingress/service、公共 planner、正式 `TemporalLabelAStar.plan()`、默认
 `TemporalDominancePolicy.disabled()`、Winter/P2.1/P3/ARA* 或生产 candidate，没有写
@@ -1438,8 +1439,9 @@ formal latest、replanning baseline 或 frozen artifact，也没有 push。
 `NonFifoParetoTransition`、`NonFifoParetoLabel`、`NonFifoParetoSearchResult` 和显式
 `search_non_fifo_pareto(...)` 研究接口。标签状态包含节点和 exact UTC arrival；不同精确
 到达即使落在同一时间桶也不可互相支配。Pareto 过滤只在同一 exact state 对“新生成”且
-逐分量被支配的标签生效，旧标签（包括已扩展标签）不删除；`pareto_pruning=False`
-可用于完全保守的有限域枚举。搜索以 lexicographic objective vector 选取结果，但保留
+逐分量被支配的标签生效，旧标签（包括已扩展标签）不删除；
+`search_non_fifo_pareto(...)` 默认 `pareto_pruning=False`，仅在显式安全 fixture 中开启
+剪枝，完全保守的有限域枚举可保持所有标签。搜索以 lexicographic objective vector 选取结果，但保留
 完整 goal frontier，未引入 FIFO 假设或近似/beam 剪枝。
 
 **失败和终止语义。** `GOAL_FOUND`、`EXHAUSTED`、`RESOURCE_LIMIT`、`CANCELLED` 和
@@ -1459,12 +1461,12 @@ hard-mask 类异常均 fail-closed，失败结果不携带部分成功 route。s
 - 周期/重复状态的 label 上限、取消、horizon、arrival-before-departure、严格到达和
   evaluator failure。
 
-相关 temporal label/qualification/corridor/oracle 聚焦测试共 `93 passed`；全量 C 测试
-为 `432 passed, 3 skipped`，跳过仅因并行 orchestrator worktree 中退休的 M2J 诊断脚本
-不存在。变更文件 Ruff/format、全量 `ruff check src tests`、`uv lock --check --offline`、
-CLI smoke 和 `git diff --check` 通过。隔离 worktree 的 `UV_OFFLINE=1 make check` 因
-其本地没有 `.mamba-env/bin/uv` 在 Makefile lint 前置处退出；未修改环境或 lock，直接
-pytest/Ruff/lock 检查作为等价证据保留。
+相关 temporal label/qualification/corridor/oracle 聚焦测试共 `93 passed`；正式工作树上
+`UV_OFFLINE=1 make check` 最终为 `435 passed`，无跳过；变更文件 Ruff/format、全量
+`ruff check src tests`、`uv lock --check --offline`、offline sync、CLI smoke 和
+`git diff --check` 均通过。隔离 worktree 的第一次 Make 尝试曾因其本地没有
+`.mamba-env/bin/uv` 在 lint 前置处退出，未修改环境或 lock；集成后的正式工作树复跑已
+通过，故不构成代码或依赖阻塞。
 
 **最终状态和边界。** 本轮仅证明有限非 FIFO 状态域可以在 exact-arrival 标签下进行
 保守、可终止、可取消、可审计的研究搜索，仍不宣称连续海洋模型全局最优，也未把
