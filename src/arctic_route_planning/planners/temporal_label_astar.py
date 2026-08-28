@@ -172,6 +172,7 @@ class TemporalDiagnostics:
     queue_peak_by_elapsed_hour: tuple[tuple[int, int], ...] = ()
     state_bound_checks: int = 0
     state_bound_pruned: int = 0
+    state_bound_arrival_pruned: int = 0
     state_bound_rejected: int = 0
     state_bound_rejection_reasons: tuple[tuple[str, int], ...] = ()
 
@@ -236,6 +237,7 @@ class _MutableDiagnostics:
     queue_peak_by_elapsed_hour: dict[int, int] = field(default_factory=dict)
     state_bound_checks: int = 0
     state_bound_pruned: int = 0
+    state_bound_arrival_pruned: int = 0
     state_bound_rejected: int = 0
     state_bound_rejection_reasons: dict[str, int] = field(default_factory=dict)
 
@@ -300,6 +302,7 @@ class _MutableDiagnostics:
             ),
             state_bound_checks=self.state_bound_checks,
             state_bound_pruned=self.state_bound_pruned,
+            state_bound_arrival_pruned=self.state_bound_arrival_pruned,
             state_bound_rejected=self.state_bound_rejected,
             state_bound_rejection_reasons=tuple(
                 sorted(self.state_bound_rejection_reasons.items())
@@ -747,8 +750,14 @@ class TemporalLabelAStar(TimeDependentAStar):
             return False
         context.diagnostics.state_bound_checks += 1
         certificate = context.state_bound_certificate or self.state_bound_certificate
-        if certificate is not None and not certificate.allows(candidate_state[0]):
+        if certificate is not None and not certificate.allows_state(
+            candidate_state[0],
+            candidate_state[2],
+            request.departure_time,
+        ):
             context.diagnostics.state_bound_pruned += 1
+            if certificate.allows(candidate_state[0]):
+                context.diagnostics.state_bound_arrival_pruned += 1
             return True
         return False
 

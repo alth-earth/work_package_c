@@ -78,6 +78,7 @@ class TemporalCorridorEvidence:
     forward_bounds: tuple[tuple[Any, float], ...]
     reverse_bounds: tuple[tuple[Any, float], ...]
     objective: str
+    arrival_upper_bounds: tuple[tuple[Any, float], ...] = ()
     projected_label_reduction: float | None = None
     reason: str | None = None
     schema_version: str = "c.p0.1-temporal-corridor-evidence.v1"
@@ -100,6 +101,7 @@ class TemporalCorridorEvidence:
                 "excluded_count": self.excluded_count,
                 "forward_bounds": self.forward_bounds,
                 "reverse_bounds": self.reverse_bounds,
+                "arrival_upper_bounds": self.arrival_upper_bounds,
                 "objective": self.objective,
                 "projected_label_reduction": self.projected_label_reduction,
                 "reason": self.reason,
@@ -122,6 +124,7 @@ def _rejected(
     reason: str,
     forward_bounds: tuple[tuple[Any, float], ...] = (),
     reverse_bounds: tuple[tuple[Any, float], ...] = (),
+    arrival_upper_bounds: tuple[tuple[Any, float], ...] = (),
 ) -> TemporalCorridorEvidence:
     certificate = TemporalStateBoundCertificate(
         scope=scope,
@@ -142,6 +145,7 @@ def _rejected(
         excluded_count=0,
         forward_bounds=forward_bounds,
         reverse_bounds=reverse_bounds,
+        arrival_upper_bounds=arrival_upper_bounds,
         objective=objective,
         reason=reason,
     )
@@ -271,6 +275,30 @@ def derive_temporal_corridor(
             forward_bounds=tuple(forward),
             reverse_bounds=tuple(reverse),
         )
+
+    reverse_by_node = dict(reverse)
+    arrival_upper: list[tuple[Any, float]] = []
+    try:
+        for node in allowed:
+            reverse_value = reverse_by_node[node]
+            # The upper bound is deliberately rounded outward.  A label is
+            # only rejected when even this generous bound is exceeded.
+            upper_hours = nextafter(horizon_hours - reverse_value, float("inf"))
+            if not isfinite(upper_hours) or upper_hours < 0.0:
+                raise ValueError("invalid arrival upper bound")
+            arrival_upper.append((node, upper_hours))
+    except (KeyError, ValueError):
+        return _rejected(
+            scope=active_scope,
+            start=start,
+            goal=goal,
+            horizon_hours=horizon_hours,
+            universe_count=len(universe),
+            objective=objective,
+            reason="invalid_arrival_upper_bound",
+            forward_bounds=tuple(forward),
+            reverse_bounds=tuple(reverse),
+        )
     proof_digest = canonical_digest(
         {
             "schema_version": "c.p0.1-temporal-corridor-proof.v1",
@@ -281,6 +309,7 @@ def derive_temporal_corridor(
             "excluded": excluded,
             "forward": tuple(forward),
             "reverse": tuple(reverse),
+            "arrival_upper": tuple(arrival_upper),
             "horizon_hours": horizon_hours,
             "objective": objective,
             "incumbent_upper_bound": incumbent_upper_bound,
@@ -294,6 +323,7 @@ def derive_temporal_corridor(
         proof_digest=proof_digest,
         coverage_complete=True,
         evaluator_certified=True,
+        arrival_upper_hours=tuple(arrival_upper),
     )
     projected = None
     if generated_nodes is not None:
@@ -310,6 +340,7 @@ def derive_temporal_corridor(
         excluded_count=len(excluded),
         forward_bounds=tuple(forward),
         reverse_bounds=tuple(reverse),
+        arrival_upper_bounds=tuple(arrival_upper),
         objective=objective,
         projected_label_reduction=projected,
         reason=None if certificate.usable else certificate.reason,

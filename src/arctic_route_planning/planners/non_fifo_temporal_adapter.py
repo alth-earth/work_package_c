@@ -380,6 +380,24 @@ def create_non_fifo_temporal_bounded_session(
     )
 
 
+def create_non_fifo_temporal_arrival_bounded_session(
+    planner: TemporalLabelAStar,
+    request: PlanningRequest,
+    certificate: TemporalStateBoundCertificate,
+    *,
+    identity: TemporalSessionIdentity | None = None,
+) -> NonFifoTemporalResearchSession:
+    """Create a bounded session that requires a complete arrival envelope."""
+
+    _validate_arrival_bound_certificate(planner, certificate, request=request)
+    return create_non_fifo_temporal_bounded_session(
+        planner,
+        request,
+        certificate,
+        identity=identity,
+    )
+
+
 def restore_non_fifo_temporal_bounded_session(
     planner: TemporalLabelAStar,
     checkpoint: NonFifoTemporalResearchCheckpoint,
@@ -420,6 +438,26 @@ def restore_non_fifo_temporal_bounded_session(
         request,
         session,
         allow_state_bound=True,
+    )
+
+
+def restore_non_fifo_temporal_arrival_bounded_session(
+    planner: TemporalLabelAStar,
+    checkpoint: NonFifoTemporalResearchCheckpoint,
+    request: PlanningRequest,
+    certificate: TemporalStateBoundCertificate,
+    *,
+    identity: TemporalSessionIdentity | None = None,
+) -> NonFifoTemporalResearchSession:
+    """Restore an arrival-bounded session after checking envelope completeness."""
+
+    _validate_arrival_bound_certificate(planner, certificate, request=request)
+    return restore_non_fifo_temporal_bounded_session(
+        planner,
+        checkpoint,
+        request,
+        certificate,
+        identity=identity,
     )
 
 
@@ -592,6 +630,56 @@ def run_non_fifo_temporal_bounded_search(
     return research_session.run()
 
 
+def run_non_fifo_temporal_arrival_bounded_search(
+    planner: TemporalLabelAStar,
+    request: PlanningRequest,
+    certificate: TemporalStateBoundCertificate,
+    *,
+    identity: TemporalSessionIdentity | None = None,
+) -> NonFifoTemporalResearchResult:
+    """Run the explicit bounded adapter with a complete arrival envelope."""
+
+    try:
+        research_session = create_non_fifo_temporal_arrival_bounded_session(
+            planner,
+            request,
+            certificate,
+            identity=identity,
+        )
+    except NonFifoTemporalAdapterError:
+        raise
+    except PlanningCancelled as error:
+        return _failure(
+            NonFifoSearchStatus.CANCELLED,
+            None,
+            None,
+            reason="cancelled",
+            error=error,
+        )
+    except NoRouteError as error:
+        return _failure(
+            NonFifoSearchStatus.EXHAUSTED,
+            None,
+            None,
+            reason="no_route",
+            error=error,
+        )
+    except TemporalSessionIdentityMismatch as error:
+        raise NonFifoTemporalAdapterError(
+            f"temporal session identity fence rejected: {error}"
+        ) from error
+    except Exception as error:  # pragma: no cover - defensive creation fence
+        return _failure(
+            NonFifoSearchStatus.EVALUATOR_FAILURE,
+            None,
+            None,
+            reason="session_creation_failure",
+            error=error,
+        )
+
+    return research_session.run()
+
+
 def _validate_research_mode(
     planner: TemporalLabelAStar,
     request: PlanningRequest,
@@ -668,6 +756,21 @@ def _validate_bound_certificate(
     if request.start not in set(allowed) or request.goal not in set(allowed):
         raise NonFifoTemporalAdapterError(
             "bounded non-FIFO adapter certificate excludes request endpoints"
+        )
+
+
+def _validate_arrival_bound_certificate(
+    planner: TemporalLabelAStar,
+    certificate: TemporalStateBoundCertificate,
+    *,
+    request: PlanningRequest,
+) -> None:
+    """Require a complete per-node envelope before arrival-level pruning."""
+
+    _validate_bound_certificate(planner, certificate, request=request)
+    if not certificate.arrival_bound_complete:
+        raise NonFifoTemporalAdapterError(
+            "arrival-bounded adapter requires a complete arrival envelope"
         )
 
 
@@ -754,10 +857,13 @@ __all__ = [
     "NonFifoTemporalResearchSession",
     "NonFifoTemporalSafetyViolation",
     "NonFifoTemporalStepEvidence",
+    "create_non_fifo_temporal_arrival_bounded_session",
     "create_non_fifo_temporal_bounded_session",
     "create_non_fifo_temporal_session",
+    "restore_non_fifo_temporal_arrival_bounded_session",
     "restore_non_fifo_temporal_bounded_session",
     "restore_non_fifo_temporal_session",
+    "run_non_fifo_temporal_arrival_bounded_search",
     "run_non_fifo_temporal_bounded_search",
     "run_non_fifo_temporal_search",
 ]
