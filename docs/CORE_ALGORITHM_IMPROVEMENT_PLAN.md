@@ -1866,3 +1866,31 @@ experiment id 为 `c.p0.2-temporal-adapter-bound.v1-b0ee4e2eeb63ec7d`。该构�
 最终研究状态为 `READY_FOR_P0.2-ADAPTER_RESOURCE_BOUND_PLAN`；candidate、Winter、P2.1、
 P3、ARA* 和 dominance 默认关闭。后续若继续，只能另立带更严格资源/走廊审计的计划，不得
 自动接入生产。
+
+### 【2026-08-29 | PLANNED】P0.2-M6：proof-carrying arrival envelope
+
+M5 已证明节点级 proof-carrying corridor 在真实 6h non-FIFO adapter 中可以安全减少新生成
+label，但它只排除空间上不可能的节点；24h exact-arrival 的主要资源风险还包括同一节点上
+已经超过目标可达时间的晚到 label。本轮只研究一个更强但仍可审计的 label-level 必要条件：
+由保守的反向 travel-time lower bound 生成每节点的最晚允许 elapsed arrival，只有在
+`arrival_elapsed + reverse_lower_bound > maximum_elapsed` 被证明时才丢弃新生成 label。
+
+**边界与身份。** 从当前 clean M5 tip 建立隔离 worktree 和本地分支，先提交本段计划；新增
+C 内部 `arrival_upper_hours`/arrival-aware certificate 能力和独立 synthetic runner。证书必须
+绑定完整 `TemporalScope`、有限 grid universe、departure/horizon、逐节点 reverse lower bound、
+bound/evaluator/proof digest；时间和浮点运算使用保守 outward rounding。缺失节点、非有限值、
+scope/evaluator/policy/checkpoint 漂移或不完整证明均 fail-closed，arrival bound 不得剪枝。
+
+**安全规则。** `TemporalStateBoundCertificate` 的既有节点级语义保持兼容；
+`TemporalDominancePolicy.disabled()`、正式 `plan()`、普通 non-FIFO adapter、B/C 与 C/D 合同、
+ingress/service 和公共 planner 均不变。只在显式 bounded adapter 中启用；不删除已扩展 label，
+不使用 beam/近似剪枝，不注入 Dijkstra route。checkpoint/`TemporalSessionIdentity` 必须继续
+绑定完整证书 digest，并验证恢复前后一致。
+
+**验证门。** synthetic small/medium/stress × 三目标要求 arrival-bound 与无界 adapter 和
+独立 exact-arrival oracle 路线、ETA、业务字段、semantic digest 完全一致，至少出现一次真实
+arrival-level pruning；边界相等、缺失/不可信 bound、scope mismatch、非 FIFO、evaluator failure
+场景 pruning 必须为零。真实输入仅在 synthetic 全通过后做 dominance-disabled 6h 诊断；24h
+仍受 M4 的资源失败事实约束，不提高 `50k/100k/50k/400k` 上限，不自动重跑 Winter 或启用
+candidate。实验产物只写 `.runtime/experiments/`，最终状态只能是
+`READY_FOR_P0.2-ARRIVAL-BOUND_REVIEW`、`NO_PERFORMANCE_PROOF/FAIL` 或 `INVALID/PENDING`。
