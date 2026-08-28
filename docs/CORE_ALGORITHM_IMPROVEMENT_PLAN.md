@@ -1809,3 +1809,56 @@ heartbeat 和终态标记，实验产物只写 `.runtime/experiments/`。
 `REAL_INPUT_FIFO_VIOLATED`，24h 仍为 `REAL_INPUT_6H_FEASIBLE_24H_RESOURCE_FAIL`；不宣称
 连续非 FIFO 全局最优，不启用 candidate，不写 formal latest/replanning baseline/frozen
 artifact，不 push。完成验证后移除辅助 worktree，保留研究分支和实验构件。
+
+### 【2026-08-29 | COMPLETED】P0.2-M5：proof-carrying corridor 与 non-FIFO adapter 资源限界
+
+本轮从正式 clean `5f1e96c` 建立隔离分支
+`research/p02-m5-proof-bound-20260829`，先提交治理计划 `4274da1`；实现、real runner
+和证据门提交为 `b3ce8c4`、`0bf1997`、`39d0db7`、`efe4751`、`239c13c`。本轮只增加
+C 内部显式 research adapter 和 synthetic/real evidence runner；未修改 B/C、C/D 合同、
+ingress/service、公共 planner、正式 `plan()` 默认行为或 production path，未启用
+dominance/candidate/Winter/P2.1/P3/ARA*，未写 formal latest/replanning baseline/frozen
+artifact，也未 push。
+
+**显式 bound adapter。** 普通 `run_non_fifo_temporal_search(...)` 仍拒绝安装的 state-bound；
+只有显式 `run_non_fifo_temporal_bounded_search(...)` 接受 `TemporalStateBoundCertificate`。
+入口要求 planner 与证书 digest 一致、有限网格的 allowed/excluded 节点完备且 endpoints 在
+allowed 集合中；certificate、scope、evaluator、proof、policy 和 request 任一不匹配均
+fail-closed。实际 session 仍强制 `use_heuristic=False`、`TemporalDominancePolicy.disabled()`，
+只在新 label 生成前调用现有 state-bound 检查，不删除已扩展 label。adapter result 允许
+合法 `state_bound_checks/pruned`，但 rejected certificate、计数不一致或任何 dominance
+迹象都返回失败；checkpoint wrapper 额外绑定并复核 `state_bound_policy_digest`。
+
+**Synthetic gate。** `c.p0.2-temporal-adapter-bound.v1` runner 在
+small/medium/stress × fastest/low_risk/recommended × certified/scope-mismatch × 2 repeats
+完成 `36/36`。18 个 certified case 均与 independent zero-heuristic exact-arrival oracle
+和 unbounded adapter 的路线、精确 ETA、成本及 semantic digest 一致，并观察到共 `18` 次
+安全 pruning；18 个 scope-mismatch case 均为 `REJECTED_FAIL_CLOSED`，pruning 为 `0`。
+`deterministic=true`、`fail_closed=true`、`production_candidate_enabled=false`。构件目录为
+`/root/my_project/.runtime/experiments/c-p02-m5-bound-matrix-20260829-r1/`，experiment id
+为 `c.p0.2-temporal-adapter-bound.v1-ef7c2968ddace3eb`。
+
+**真实 holdout 6h。** 新 runner
+`scripts/benchmark_non_fifo_temporal_bound_real.py` 使用完整 145 帧、冻结
+`executable_0_6h` route-plan-set、最大有效船速 corridor proof 和 actual non-FIFO adapter；
+仍不启用 dominance，24h 不启动。首次 `r1` 因 child 漏传 parser 所需 `--output-dir` 而
+明确记录为 `INVALID/PENDING`；修复后的 `r2` 六个 case 实际均通过，但旧汇总器把唯一
+重复 digest 错判为 `deterministic=false`，因此不纳入结论。修正后以新 identity 的
+`r4` 构件作为权威：
+
+`/root/my_project/.runtime/experiments/c-p02-m5-bound-real-holdout-6h-20260829-r4/`
+（`c.p0.2-temporal-adapter-bound-real.v1-8089c90c469678e4`），三目标 × 两次重复共
+`6/6 PASS`；每个 case `GOAL_FOUND`、`state_bound_authorized=true`、
+`state_bound_checks=31`、`state_bound_pruned=7`、`state_bound_rejected=0`，路线、ETA、
+速度、风险、成本、confidence、source IDs 与 baseline/reference 一致，
+`semantic_match=true`、`reference_match=true`、`deterministic=true`，累计安全 pruning
+`42`。固定 CPU=0；两次资源快照的 CPU affinity、RSS、无 swap、cgroup 和 OOM 事件证据均
+完整，汇总 `resource_evidence_complete=true`、`resource_clean=true`。
+
+**边界与状态。** 本轮只证明 proof-carrying corridor 可以在有限真实 6h non-FIFO adapter
+中安全减少新生成 label；它不证明连续非 FIFO 全局最优、真实 FIFO 资格或 production 性能。
+真实 FIFO 既有状态 `REAL_INPUT_FIFO_VIOLATED` 不变，M4 的 24h
+`REAL_INPUT_6H_FEASIBLE_24H_RESOURCE_FAIL` 事实不被覆盖，也未因本轮 6h 结果启动 24h。
+最终研究状态为 `READY_FOR_P0.2-ADAPTER_RESOURCE_BOUND_PLAN`；candidate、Winter、P2.1、
+P3、ARA* 和 dominance 默认关闭。后续若继续，只能另立带更严格资源/走廊审计的计划，不得
+自动接入生产。
