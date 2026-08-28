@@ -100,7 +100,7 @@ RiskSourcePlanningIngress.execute
 |---|---|---|---|---|
 | C-ALG-01 | 边到达函数 `A_e(t)=t+τ_e(t)` 未验证 FIFO | 后出发时环境速度可能更高；当前 [`_evaluate_edge`](/root/my_project/work_package_c/src/arctic_route_planning/planners/time_dependent_astar.py:392) 没有单调性检查 | 不能直接使用依赖 FIFO 的 label-setting 或普通最优子结构结论 | 在合成冲击场上逐边验证 FIFO；不满足时切换到非 FIFO label-correcting/Pareto 语义或显式失败 |
 | C-ALG-02 | 同一 `(node, time_bucket, heading)` 只保留较低累计成本 | [`labels`](/root/my_project/work_package_c/src/arctic_route_planning/planners/time_dependent_astar.py:263) 与放松规则 [`time_bucket`](/root/my_project/work_package_c/src/arctic_route_planning/planners/time_dependent_astar.py:345) | 同桶但不同精确到达时间会采样不同未来风险；较低成本标签未必支配较早标签 | P0 必须保留精确到达时间或 Pareto 标签，并用独立 oracle 验证安全支配 |
-| C-ALG-03 | ETA/速度固定两轮，没有收敛残差或误差上界 | **[2026-08-28 部分解决]** [`time_dependent_astar.py`](/root/my_project/work_package_c/src/arctic_route_planning/planners/time_dependent_astar.py) 注入 `eta_refinement_policy` 时切换为 `eta_refinement.refine_eta`（`damped` 阻尼迭代：max_iterations/abs_tol/rel_tol/relaxation/周期检测/终值重采样/fail-closed）；默认 `None` 保持历史固定两轮以保证正式 route digest 不变。**C-ALG-03B** 新增 `method="bounded"`：区间收缩（bracket 符号翻转检测 + 二分）在振荡场上收敛（阻尼在真实场发散，诊断见 §13 ADR），无符号翻转时 fail-closed 抛 `no_fixed_point` | 默认路径仍固定两轮（无收敛保证）；真实 Winter 场的 ETA 固定点被观测到在阻尼迭代下发散，需待 P0.1-M1.5 真实资格审计数据统一决策 | 定义迭代映射、容差、最大迭代、周期检测；终值重新采样，不收敛则明确失败（已实现为可选策略；默认切换需真实输入收敛性证据） |
+| C-ALG-03 | ETA/速度固定两轮，没有收敛残差或误差上界 | **[2026-08-28 部分解决]** [`time_dependent_astar.py`](/root/my_project/work_package_c/src/arctic_route_planning/planners/time_dependent_astar.py) 注入 `eta_refinement_policy` 时切换为 `eta_refinement.refine_eta`（`damped` 阻尼迭代：max_iterations/abs_tol/rel_tol/relaxation/周期检测/终值重采样/fail-closed）；默认 `None` 保持历史固定两轮以保证正式 route digest 不变。**C-ALG-03B** 新增 `method="bounded"`：区间收缩（bracket 符号翻转检测 + 二分）在振荡场上收敛（阻尼在真实场发散，诊断见 §13 ADR）；有限区间无符号翻转时 fail-closed 抛 `no_bracket_found`，不声称区间外不存在根 | 默认路径仍固定两轮（无收敛保证）；真实输入继续需要区间单调性/覆盖证明，支配保持关闭 | 定义迭代映射、容差、最大迭代、周期检测；终值重新采样，不收敛则明确失败（已实现为可选策略；默认切换需真实输入收敛性证据） |
 | C-ALG-04 | 启发式下界只对当前近似图和状态成立 | **[2026-08-28 部分解决]** `CostModel.lower_bound` 已补 admissible 数学论证（实际速度 ≤ max_speed ⇒ `travel_hours ≥ D/v_max`，且各惩罚项非负 ⇒ `(w_travel+w_distance)·D/v_max ≤ 真实 cost`；直线距离 ≤ 路径距离 ⇒ 保守且一致）；`test_lower_bound_is_admissible_against_exact_oracle` 用 zero-heuristic Dijkstra 精确代价对照 | 论证覆盖 travel/dist 下界与惩罚项非负性；尚未覆盖非 Markov 标签/非 FIFO/近似边代价（这是启发式定义之外的正确性债） | 建立小规模显式时间展开 Dijkstra/reference oracle（已建）；报告离散模型边界 |
 | C-ALG-05 | 图完备性是离散的 | 当前为规则网格、8 邻接、有限边采样，且等待动作关闭 | 细网格/连续航迹与当前图的最优性不是同一命题 | 在报告中固定网格、邻接、采样和 hard-mask 规则；自适应网格另行审批 |
 
@@ -710,10 +710,10 @@ P0.1 M0 已收口为 `M0_PASS_READY_FOR_M1_PLAN`；该历史标记只表示当�
 
 **决策。**
 1. **渐进式接入（方案 A）**：`TimeDependentAStar.__init__` 新增 `eta_refinement_policy` 参数（默认 `None`），`_evaluate_edge_data` 仅注入策略时走 `refine_eta`；默认路径保持 `_EDGE_REFINEMENT_ROUNDS=2`，正式 route digest 不变。拒绝异常（`_RejectedEdge`/`RiskCoverageError`/`UnnavigableSpeedError`）在 `invalid_operator` 诊断中恢复传播，非拒绝错误 fail-closed 透传。
-2. **鲁棒数值方法（方案 B，C-ALG-03B）**：`EtaRefinementPolicy` 新增 `method="bounded"`——区间收缩法：从 initial 外扩 bracket 直到 `g` 符号翻转（`bracket_budget = max(1, max_iterations//3)`），再二分到容差（`bisection_budget = max(16, max_iterations*2)`，每轮单次 operator 调用）。振荡场收敛（实测 7-11 次迭代、residual <1s）；无符号翻转时 fail-closed 抛 `no_fixed_point`（不静默返回非不动点）。
+2. **鲁棒数值方法（方案 B，C-ALG-03B）**：`EtaRefinementPolicy` 新增 `method="bounded"`——区间收缩法：从 initial 外扩 bracket 直到 `g` 符号翻转（`bracket_budget = max(1, max_iterations//3)`），再二分到容差（`bisection_budget = max(16, max_iterations*2)`，每轮单次 operator 调用）。振荡场收敛（实测 7-11 次迭代、residual <1s）；有限区间无符号翻转时 fail-closed 抛 `no_bracket_found`，不静默返回非不动点，也不宣称全局无根。
 3. **默认不切换**：正式 control 保持固定两轮，因真实场固定点可能不存在且尚无真实输入的收敛性/区间单调性证据；是否切换默认策略待 P0.1-M1.5（codex 并行任务）真实资格审计数据统一决策。
 
-**验证。** `test_eta_refinement.py` 18 项（含 bounded 振荡收敛、`no_fixed_point` fail-closed、method 校验、拒绝恢复）；`test_time_dependent_astar.py` 13 项（含默认两轮保持、bounded 热路径、拒绝恢复、fail-closed 透传）；`make check` 336 项全绿。**回滚方式**：删除 `eta_refinement_policy` 注入与 `method="bounded"` 分支即恢复纯固定两轮（默认路径本就等价）。
+**验证。** `test_eta_refinement.py` 18 项（含 bounded 振荡收敛、`no_bracket_found` uncertainty、method 校验、拒绝恢复）；`test_time_dependent_astar.py` 13 项（含默认两轮保持、bounded 热路径、拒绝恢复、fail-closed 透传）；`make check` 336 项全绿。**回滚方式**：删除 `eta_refinement_policy` 注入与 `method="bounded"` 分支即恢复纯固定两轮（默认路径本就等价）。
 
 **Owner**：work_package_c / orchestrator。**提交**：见 research-validation-system 分支本日提交。
 
@@ -832,3 +832,7 @@ formal latest、replanning baseline 或 frozen artifact。P2.1 仍为
 `.runtime/experiments/`，不写 formal latest、replanning baseline 或 frozen artifact，
 不 push。完成后追加真实输入证据与分支结论；若 interval proof 仍不足或资源边界失败，
 分别进入 interval-proof 或 P0.2 非 FIFO 研究计划，不自动启用 candidate。
+
+**历史措辞更正。** 本文较早的 C-ALG-03/03B 记录曾把有限区间未发现符号翻转写作
+`no_fixed_point`；该名称保留用于有独立全局排除证明的调用。当前实现和后续证据统一使用
+`no_bracket_found` / `fixed_point_uncertain`，避免把有限扫描误报为全局无根结论。
