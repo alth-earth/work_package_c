@@ -1894,3 +1894,53 @@ arrival-level pruning；边界相等、缺失/不可信 bound、scope mismatch�
 仍受 M4 的资源失败事实约束，不提高 `50k/100k/50k/400k` 上限，不自动重跑 Winter 或启用
 candidate。实验产物只写 `.runtime/experiments/`，最终状态只能是
 `READY_FOR_P0.2-ARRIVAL-BOUND_REVIEW`、`NO_PERFORMANCE_PROOF/FAIL` 或 `INVALID/PENDING`。
+
+### 【2026-08-29 | COMPLETED】P0.2-M6：proof-carrying arrival envelope
+
+本轮从正式 M5 clean tip `798432c` 建立隔离分支
+`research/p02-m6-arrival-envelope-20260829` 和 worktree；先提交本段计划
+`3d260cc`。实现提交为 `71fcaee`、`540a8ab`，真实 runner 资源证据调用修复为
+`cb909f6`。所有改动均限定在 C 内部研究路径和测试/runner；未修改 B/C、C/D 合同、
+ingress/service、公共 planner 或正式默认行为，未启用 dominance/candidate/Winter/P2.1/P3/ARA*，
+未写 formal latest/replanning baseline/frozen artifact，也未 push。
+
+**Arrival-aware 证书。** `TemporalStateBoundCertificate` 新增可选的
+`arrival_upper_hours`，digest、scope 和 checkpoint 身份均绑定该包络；证书只在允许节点全集
+完整、每个节点有有限非负上界且 proof/evaluator/scope 一致时授权。`allows_state(...)` 使用保守的
+outward rounding，只在新生成 label 的 elapsed arrival 超过上界时拒绝；边界相等保留，已扩展
+label 不删除。缺失/不完整/非有限包络、scope/policy/evaluator/checkpoint 漂移均 fail-closed。
+`derive_temporal_corridor(..., include_arrival_upper_bounds=False)` 默认保持 M5 节点级语义，
+只有显式 arrival-bounded adapter 才打开包络；普通 adapter、`plan()` 和
+`TemporalDominancePolicy.disabled()` 路径不变。
+
+**Synthetic gate。** 独立 runner
+`c.p0.2-temporal-arrival-bound.v1` 在 small/medium/stress ×
+fastest/low_risk/recommended × certified/incomplete/scope-mismatch × 2 repeats 完成
+`54/54`。18 个 certified case 与无界 exact-arrival adapter 和独立 zero-heuristic Dijkstra
+的路线、精确 ETA、业务字段及 semantic digest 一致，并累计观察到 `162` 次
+arrival-level pruning；36 个 rejected case 均保留全部标签，`rejected_pruning_total=0`。
+汇总 `status=TEMPORAL_ARRIVAL_BOUND_MATRIX_PASS`、`semantic_match=true`、
+`deterministic=true`、`fail_closed=true`、`production_candidate_enabled=false`。
+权威构件为 `/root/my_project/.runtime/experiments/c-p02-m6-arrival-bound-matrix-20260829-r1/`，
+identity `c.p0.2-temporal-arrival-bound.v1-f4f6b436d9880dac`。
+
+**真实 holdout 6h。** 在 synthetic gate 通过且 clean identity 下，使用完整 145 帧 holdout、
+冻结 `executable_0_6h` route-plan-set、固定 CPU=2、4 GiB `MemoryMax`、`MemorySwapMax=0`
+执行三目标 × 两次重复；dominance 仍关闭，candidate 仍关闭。权威构件为
+`/root/my_project/.runtime/experiments/c-p02-m6-arrival-bound-real-holdout-6h-20260829-r1/`，
+identity `c.p0.2-temporal-arrival-bound-real.v1-b6e17e4eceb012e5`，`6/6 PASS`，汇总状态
+`READY_FOR_P0.2-ARRIVAL-BOUND-REAL-REVIEW`。每个 case 均 `GOAL_FOUND`，路线、精确 ETA、
+速度、风险、成本、confidence、source IDs 与 baseline/reference 一致；
+`semantic_match=true`、`reference_match=true`、`deterministic=true`，每 case
+`state_bound_pruned=17`、`state_bound_arrival_pruned=14`、`state_bound_rejected=0`，累计
+arrival pruning `84`。每个 worker 的 CPU affinity、RSS、无 swap、4 GiB cgroup 和 OOM 事件
+证据完整，`resource_evidence_complete=true`、`resource_clean=true`。
+
+**边界与结论。** 本轮证明了显式 arrival-aware 必要条件在有限真实 6h non-FIFO adapter 中
+可以安全减少新生成 label，但不证明连续非 FIFO 全局最优、FIFO 资格或 production 性能。既有
+真实 FIFO 状态 `REAL_INPUT_FIFO_VIOLATED` 不变；M4 的 24h
+`REAL_INPUT_6H_FEASIBLE_24H_RESOURCE_FAIL` 事实不覆盖、不重跑，也未提高
+`50k expansions / 100k labels / 50k queue / 400k edge evaluations` 上限。综合状态为
+`READY_FOR_P0.2-ARRIVAL-BOUND-REAL-REVIEW`，仅可作为另立更严格资源/走廊计划的证据；
+candidate、Winter、P2.1、P3、ARA* 和 dominance 默认关闭。完成验证后移除此辅助 worktree，
+保留研究分支和上述实验构件。
