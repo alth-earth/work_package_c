@@ -31,6 +31,7 @@ from arctic_route_planning.planners.eta_interval import (
     qualify_eta_interval,
     qualify_eta_partition,
 )
+from arctic_route_planning.planners.eta_refinement import EtaRefinementPolicy
 from arctic_route_planning.planners.temporal_qualification import TemporalScope
 
 SCHEMA_VERSION = "c.p0.1-temporal-eta-interval.v1"
@@ -40,8 +41,20 @@ PROFILES = {
     "stress": (13, 19, 19),
 }
 OBJECTIVES = ("fastest", "low_risk", "recommended")
+QUALIFICATION_POLICY = {
+    "control_eta_policy": asdict(EtaRefinementPolicy()),
+    "interval_eta_policy": asdict(EtaRefinementPolicy(method="bounded")),
+    "eta_policy_role": "interval-qualification-only",
+    "dominance_policy": "disabled",
+    "fifo_tolerance_seconds": 1.0,
+    "probe_interval_minutes": 15,
+    "near_boundary_seconds": 60.0,
+    "max_refinement_levels": 4,
+    "evaluator_identity": "frozen-edge-evaluator-v1",
+}
 IMPLEMENTATION_FILES = (
     "scripts/benchmark_temporal_eta_interval.py",
+    "scripts/benchmark_temporal_dominance_real.py",
     "src/arctic_route_planning/planners/eta_interval.py",
     "src/arctic_route_planning/planners/eta_refinement.py",
     "src/arctic_route_planning/planners/temporal_qualification.py",
@@ -347,6 +360,18 @@ def _identity(args: argparse.Namespace, root: Path) -> dict[str, Any]:
         "git": _git_identity(root),
         "worker_timeout_seconds": args.worker_timeout_seconds,
         "cpu": args.cpu,
+        "qualification_policy": QUALIFICATION_POLICY,
+        "search_limits": {
+            "max_expansions": 50_000,
+            "max_labels": 100_000,
+            "max_queue": 50_000,
+            "max_edge_evaluations": 400_000,
+        },
+        "uv_lock": {"path": str((root / "uv.lock").resolve()), "sha256": _sha256(root / "uv.lock")},
+        "config_root": {
+            "path": str((root / "configs").resolve()),
+            "sha256": _tree_digest(root / "configs"),
+        },
     }
     if args.mode == "real":
         for name in ("risk_window_commit", "route_plan_set"):

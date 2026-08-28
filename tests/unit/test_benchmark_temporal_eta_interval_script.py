@@ -18,6 +18,16 @@ sys.modules[_SPEC.name] = _SCRIPT
 _SPEC.loader.exec_module(_SCRIPT)
 
 
+def _load_script(name: str, filename: str):
+    script_path = Path(__file__).parents[2] / "scripts" / filename
+    spec = importlib.util.spec_from_file_location(name, script_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_synthetic_fixture_matrix_keeps_uncertain_cases_unusable() -> None:
     expected = {
         "contraction_unique": EtaIntervalStatus.ROOT_EXISTS_UNIQUE.value,
@@ -79,3 +89,25 @@ def test_config_tree_digest_is_content_addressed(tmp_path) -> None:
     (config / "planner.yaml").write_text("horizon: 24\n", encoding="utf-8")
 
     assert first != _SCRIPT._tree_digest(config)
+
+
+def test_eta_identity_binds_lock_config_and_policy() -> None:
+    args = SimpleNamespace(mode="synthetic", profile="small", all_profiles=False, segment=None,
+                           worker_timeout_seconds=600.0, cpu=2)
+    identity = _SCRIPT._identity(args, Path(__file__).parents[2])
+
+    assert identity["uv_lock"]["sha256"]
+    assert identity["config_root"]["sha256"]
+    assert identity["qualification_policy"]["interval_eta_policy"]["method"] == "bounded"
+    assert identity["search_limits"]["max_queue"] == 50_000
+
+
+def test_state_bound_identity_binds_lock_config_and_policy() -> None:
+    script = _load_script("c_benchmark_temporal_state_bounds", "benchmark_temporal_state_bounds.py")
+    args = SimpleNamespace(profile="small", all_profiles=False)
+    identity = script._identity(args, Path(__file__).parents[2])
+
+    assert identity["uv_lock"]["sha256"]
+    assert identity["config_root"]["sha256"]
+    assert identity["policy"]["eta_policy"]["method"] == "damped"
+    assert identity["fixture_digest"]

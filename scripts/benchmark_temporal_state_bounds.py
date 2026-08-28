@@ -21,6 +21,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from arctic_route_planning.planners.eta_refinement import EtaRefinementPolicy
 from arctic_route_planning.planners.temporal_bounds import qualify_state_bound
 from arctic_route_planning.planners.temporal_qualification import TemporalScope
 
@@ -66,6 +67,16 @@ def _sha256(path: Path) -> str:
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _tree_digest(root: Path) -> str:
+    digest = hashlib.sha256()
+    for path in sorted(item for item in root.rglob("*") if item.is_file()):
+        digest.update(str(path.relative_to(root)).encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
     return digest.hexdigest()
 
 
@@ -222,8 +233,7 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _run(args: argparse.Namespace) -> int:
-    root = Path(__file__).resolve().parents[1]
+def _identity(args: argparse.Namespace, root: Path) -> dict[str, Any]:
     profiles = tuple(PROFILES) if args.all_profiles else (args.profile,)
     identity = {
         "schema_version": SCHEMA_VERSION,
@@ -233,9 +243,33 @@ def _run(args: argparse.Namespace) -> int:
             relative: _sha256(root / relative) for relative in IMPLEMENTATION_FILES
         },
         "git": _git_identity(root),
+        "uv_lock": {"path": str((root / "uv.lock").resolve()), "sha256": _sha256(root / "uv.lock")},
+        "config_root": {
+            "path": str((root / "configs").resolve()),
+            "sha256": _tree_digest(root / "configs"),
+        },
+        "policy": {
+            "eta_policy": asdict(EtaRefinementPolicy()),
+            "dominance_policy": "disabled-baseline-and-certified-only-candidate",
+            "search_limits": {
+                "max_expansions": 50_000,
+                "max_labels": 100_000,
+                "max_queue": 50_000,
+                "max_edge_evaluations": 400_000,
+            },
+            "evaluator_identity": "synthetic-exact-arrival-v1",
+        },
+        "fixture_digest": _digest({"profiles": profiles, "objectives": OBJECTIVES}),
     }
     identity["implementation_sha256"] = _digest(identity["implementation"])
     identity["experiment_id"] = f"{SCHEMA_VERSION}-{_digest(identity)[:16]}"
+    return identity
+
+
+def _run(args: argparse.Namespace) -> int:
+    root = Path(__file__).resolve().parents[1]
+    profiles = tuple(PROFILES) if args.all_profiles else (args.profile,)
+    identity = _identity(args, root)
     if identity["git"]["git_dirty"]:
         raise RuntimeError("state-bound evidence requires a clean implementation worktree")
     output = args.output_dir.resolve()
