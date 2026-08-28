@@ -807,3 +807,28 @@ formal latest、replanning baseline 或 frozen artifact。P2.1 仍为
 另立 P0.2 label-correcting/Pareto 计划。代码回滚边界为保留 clean 提交
 `1716f58`（或其父提交 `626e6d3`），不 merge、不 push；当前 r4 实验产物和 r1--r3
 中止证据全部留在 `.runtime/experiments/`，不作为正式发布输入。
+
+### 【2026-08-28 | PLANNED】P0.1-M1.6 证书化边界与资源前沿收口
+
+本轮在 P0.1-M1.5 的 `REAL_INPUT_FIFO_UNCERTAIN_REQUIRES_INTERVAL_PROOF` 与
+`REAL_INPUT_6H_FEASIBLE_24H_RESOURCE_FAIL` 结论上继续推进，candidate 仍默认关闭，
+不重开 Winter、P2.1、P3 或 ARA*。执行范围固定保留上一轮选择的
+`2.1.1–4.2.2、6.1.1–6.2.1`：
+
+- bounded ETA 的有限区间无 bracket 只报告 uncertainty，不声称全局无根；错误分类保留
+  `fixed_point_uncertain` 与 evaluator/coverage 失败语义。
+- 新增 C 内部 ETA interval envelope/certificate 侧车；未经 continuity、coverage、
+  evaluator 和 scope 完整证明不得授权支配。
+- 继续保留 exact-arrival label 默认路径；incumbent + admissible lower-bound 只丢弃
+  新生成且不可能改善 incumbent 的 label；已扩展 label 不删除。
+- corridor/state bound 只接受带 scope、排除证明和 proof digest 的证书；默认关闭，
+  scope/status/evaluator 任一不匹配即 fail-closed 并记录拒绝原因；checkpoint identity
+  绑定 state-bound policy digest。
+- 资源 runner 追加 ETA failure class、queue-by-elapsed-hour、incumbent/state-bound
+  pruning 统计；real-input evidence 仍只使用 `TemporalDominancePolicy.disabled()`，
+  不把 Dijkstra 作为性能基线。
+
+代码与证据必须来自 clean 的 C 侧本地提交，实验产物继续留在
+`.runtime/experiments/`，不写 formal latest、replanning baseline 或 frozen artifact，
+不 push。完成后追加真实输入证据与分支结论；若 interval proof 仍不足或资源边界失败，
+分别进入 interval-proof 或 P0.2 非 FIFO 研究计划，不自动启用 candidate。
