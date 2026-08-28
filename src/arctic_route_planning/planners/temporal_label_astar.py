@@ -304,27 +304,19 @@ class _MutableDiagnostics:
             dominance_checks=self.dominance_checks,
             dominance_pruned=self.dominance_pruned,
             dominance_rejected=self.dominance_rejected,
-            dominance_rejection_reasons=tuple(
-                sorted(self.dominance_rejection_reasons.items())
-            ),
+            dominance_rejection_reasons=tuple(sorted(self.dominance_rejection_reasons.items())),
             heuristic_policy=self.heuristic_policy,
             heuristic_certificate_digest=self.heuristic_certificate_digest,
             heuristic_scope_match=self.heuristic_scope_match,
             heuristic_rejected=self.heuristic_rejected,
-            heuristic_rejection_reasons=tuple(
-                sorted(self.heuristic_rejection_reasons.items())
-            ),
+            heuristic_rejection_reasons=tuple(sorted(self.heuristic_rejection_reasons.items())),
             incumbent_pruned=self.incumbent_pruned,
-            queue_peak_by_elapsed_hour=tuple(
-                sorted(self.queue_peak_by_elapsed_hour.items())
-            ),
+            queue_peak_by_elapsed_hour=tuple(sorted(self.queue_peak_by_elapsed_hour.items())),
             state_bound_checks=self.state_bound_checks,
             state_bound_pruned=self.state_bound_pruned,
             state_bound_arrival_pruned=self.state_bound_arrival_pruned,
             state_bound_rejected=self.state_bound_rejected,
-            state_bound_rejection_reasons=tuple(
-                sorted(self.state_bound_rejection_reasons.items())
-            ),
+            state_bound_rejection_reasons=tuple(sorted(self.state_bound_rejection_reasons.items())),
         )
 
 
@@ -343,9 +335,7 @@ class _TemporalExecutionContext:
     edge_evaluator: EdgeEvaluator | None
     dominance_scope: TemporalScope | None = None
     dominance_frontier: dict[tuple[Node, HeadingCode], list[tuple[datetime, float]]] | None = None
-    dominance_envelopes: dict[
-        tuple[Node, HeadingCode], list[tuple[datetime, float]]
-    ] | None = None
+    dominance_envelopes: dict[tuple[Node, HeadingCode], list[tuple[datetime, float]]] | None = None
     dominance_authorized: bool | None = None
     dominance_tolerance_seconds: float = 0.0
     dominance_policy: TemporalDominancePolicy | None = None
@@ -635,9 +625,7 @@ class TemporalLabelAStar(TimeDependentAStar):
     ) -> None:
         if any(sample.hard_mask for sample in samples):
             raise _RejectedEdge("hard")
-        if any(
-            sample.confidence < self.planner_config.minimum_confidence for sample in samples
-        ):
+        if any(sample.confidence < self.planner_config.minimum_confidence for sample in samples):
             raise _RejectedEdge("risk")
         if request.maximum_risk is not None and any(
             sample.risk_score > request.maximum_risk for sample in samples
@@ -692,8 +680,7 @@ class TemporalLabelAStar(TimeDependentAStar):
                     context.heuristic_authorized = False
                     context.diagnostics.heuristic_rejected += 1
                     context.diagnostics.heuristic_rejection_reasons["missing_bound"] = (
-                        context.diagnostics.heuristic_rejection_reasons.get("missing_bound", 0)
-                        + 1
+                        context.diagnostics.heuristic_rejection_reasons.get("missing_bound", 0) + 1
                     )
                 return 0.0
             return float(lower_bound)
@@ -744,9 +731,7 @@ class TemporalLabelAStar(TimeDependentAStar):
             edge_evaluator=self._injected_edge_evaluator,
         )
         context.diagnostics.dominance_policy = self.dominance_policy.mode.value
-        context.diagnostics.dominance_certificate_digest = (
-            self.dominance_policy.certificate_digest
-        )
+        context.diagnostics.dominance_certificate_digest = self.dominance_policy.certificate_digest
         certificate = self.dominance_policy.certificate
         if certificate is not None:
             context.diagnostics.fifo_status = certificate.fifo_certificate.status.value
@@ -869,12 +854,11 @@ class TemporalLabelAStar(TimeDependentAStar):
             context.dominance_frontier = {}
             for state, existing_cost in labels.items():
                 existing_node, existing_heading, existing_arrival = state
-                context.dominance_frontier.setdefault(
-                    (existing_node, existing_heading), []
-                ).append((existing_arrival, existing_cost))
+                context.dominance_frontier.setdefault((existing_node, existing_heading), []).append(
+                    (existing_arrival, existing_cost)
+                )
             context.dominance_envelopes = {
-                key: _cost_envelope(values)
-                for key, values in context.dominance_frontier.items()
+                key: _cost_envelope(values) for key, values in context.dominance_frontier.items()
             }
         node, heading, arrival = candidate_state
         envelope = (context.dominance_envelopes or {}).get((node, heading), ())
@@ -921,9 +905,7 @@ class TemporalLabelAStar(TimeDependentAStar):
                     input_revision=input_revision,
                     **scope_kwargs,
                 )
-            context.dominance_authorized = policy.permits(
-                context.dominance_scope
-            )
+            context.dominance_authorized = policy.permits(context.dominance_scope)
             if context.dominance_authorized:
                 context.diagnostics.dominance_scope_match = True
                 certificate = policy.certificate

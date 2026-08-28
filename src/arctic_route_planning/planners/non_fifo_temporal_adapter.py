@@ -397,9 +397,7 @@ def restore_non_fifo_temporal_certified_heuristic_session(
     """Restore the certified-heuristic session after all identity fences."""
 
     if not isinstance(checkpoint, NonFifoTemporalResearchCheckpoint):
-        raise NonFifoTemporalAdapterError(
-            "checkpoint must be a NonFifoTemporalResearchCheckpoint"
-        )
+        raise NonFifoTemporalAdapterError("checkpoint must be a NonFifoTemporalResearchCheckpoint")
     _validate_heuristic_certificate(planner, certificate, request=request)
     try:
         checkpoint.assert_valid()
@@ -408,9 +406,7 @@ def restore_non_fifo_temporal_certified_heuristic_session(
             f"non-FIFO temporal checkpoint fence rejected: {error}"
         ) from error
     if checkpoint.heuristic_policy_digest != certificate.digest:
-        raise NonFifoTemporalAdapterError(
-            "non-FIFO temporal checkpoint heuristic digest mismatch"
-        )
+        raise NonFifoTemporalAdapterError("non-FIFO temporal checkpoint heuristic digest mismatch")
     _validate_research_mode(planner, request, identity, allow_heuristic=True)
     try:
         session = restore_session(
@@ -850,7 +846,9 @@ def _validate_research_mode(
     if request.use_heuristic and not allow_heuristic:
         raise NonFifoTemporalAdapterError("non-FIFO adapter requires request.use_heuristic=False")
     if allow_heuristic and not request.use_heuristic:
-        raise NonFifoTemporalAdapterError("certified heuristic adapter requires request.use_heuristic=True")
+        raise NonFifoTemporalAdapterError(
+            "certified heuristic adapter requires request.use_heuristic=True"
+        )
     if planner.dominance_policy.enabled:
         raise NonFifoTemporalAdapterError(
             "non-FIFO adapter requires TemporalDominancePolicy.disabled()"
@@ -961,13 +959,9 @@ def _validate_heuristic_certificate(
         )
     expected_scope = planner.temporal_scope(request)
     if not certificate.permits(expected_scope):
-        raise NonFifoTemporalAdapterError(
-            "certified heuristic adapter certificate scope mismatch"
-        )
+        raise NonFifoTemporalAdapterError("certified heuristic adapter certificate scope mismatch")
     if certificate.objective != request.objective.value:
-        raise NonFifoTemporalAdapterError(
-            "certified heuristic adapter objective mismatch"
-        )
+        raise NonFifoTemporalAdapterError("certified heuristic adapter objective mismatch")
     universe = {
         (row, column)
         for row in range(planner.grid.shape[0])

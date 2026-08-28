@@ -224,10 +224,9 @@ class TemporalHeuristicCertificate:
                     )
                     for node, hours in reverse
                 )
-                complete = (
-                    set(universe) == set(node for node, _ in reverse)
-                    and set(universe) == set(node for node, _ in objective_bounds)
-                )
+                complete = set(universe) == set(node for node, _ in reverse) and set(
+                    universe
+                ) == set(node for node, _ in objective_bounds)
                 if not complete:
                     reason = "coverage_incomplete"
                 else:

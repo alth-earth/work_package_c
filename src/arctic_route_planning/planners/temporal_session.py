@@ -384,9 +384,7 @@ class TemporalSessionIdentity:
                 or self.risk_window_commit_id
                 != f"risk-window-sha256-{self.risk_window_content_digest}"
             ):
-                raise TemporalSessionIdentityMismatch(
-                    "committed window identity is inconsistent"
-                )
+                raise TemporalSessionIdentityMismatch("committed window identity is inconsistent")
         else:
             raise TemporalSessionIdentityMismatch("session window digest kind is invalid")
 
@@ -671,10 +669,7 @@ class TemporalSession:
                         tentative_cost,
                         context=self.context,
                     )
-                    if (
-                        self.incumbent_state is not None
-                        and priority >= self.incumbent_cost - 1e-12
-                    ):
+                    if self.incumbent_state is not None and priority >= self.incumbent_cost - 1e-12:
                         # The planner's lower bound is admissible, so this
                         # newly generated label cannot improve the incumbent.
                         # Existing/expanded labels remain untouched.
@@ -890,13 +885,9 @@ def restore_session(
     checkpoint.assert_valid()
     checkpoint.identity.assert_complete()
     if checkpoint.state not in (TemporalSessionState.READY, TemporalSessionState.PAUSED):
-        raise TemporalSessionRestoreError(
-            "only READY or PAUSED sessions can be restored"
-        )
+        raise TemporalSessionRestoreError("only READY or PAUSED sessions can be restored")
     if request is None:
-        raise TemporalSessionRestoreError(
-            "restore requires the current PlanningRequest explicitly"
-        )
+        raise TemporalSessionRestoreError("restore requires the current PlanningRequest explicitly")
     restored_request = request
     if identity is not None and identity != checkpoint.identity:
         raise TemporalSessionIdentityMismatch("checkpoint identity fence mismatch")
