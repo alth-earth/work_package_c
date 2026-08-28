@@ -85,10 +85,7 @@ def _jsonable(value: Any) -> Any:
     if hasattr(value, "value") and isinstance(value.value, str):
         return value.value
     if hasattr(value, "__dataclass_fields__"):
-        return {
-            name: _jsonable(getattr(value, name))
-            for name in value.__dataclass_fields__
-        }
+        return {name: _jsonable(getattr(value, name)) for name in value.__dataclass_fields__}
     return value
 
 
@@ -168,19 +165,15 @@ def _resource_snapshot() -> dict[str, Any]:
     with contextlib.suppress(OSError, ValueError):
         values["host_swap_pages"] = {
             key: int(raw)
-            for key, raw in (
-                line.split()
-                for line in Path("/proc/vmstat").read_text().splitlines()
-            )
+            for key, raw in (line.split() for line in Path("/proc/vmstat").read_text().splitlines())
             if key in {"pswpin", "pswpout"}
         }
-    
+
     try:
         relative = next(
             candidate.lstrip("/")
             for hierarchy, controllers, candidate in (
-                line.split(":", 2)
-                for line in Path("/proc/self/cgroup").read_text().splitlines()
+                line.split(":", 2) for line in Path("/proc/self/cgroup").read_text().splitlines()
             )
             if hierarchy == "0" and controllers == ""
         )
@@ -264,8 +257,7 @@ def _resource_evidence_complete(record: dict[str, Any], cpu: int) -> bool:
             return False
         events = cgroup.get("memory_events")
         if not isinstance(events, dict) or not all(
-            isinstance(events.get(key), int)
-            for key in ("oom", "oom_kill", "oom_group_kill")
+            isinstance(events.get(key), int) for key in ("oom", "oom_kill", "oom_group_kill")
         ):
             return False
     return True
@@ -298,12 +290,8 @@ def _certificate(point: Any, fixture: Any, objective: ObjectiveMode) -> tuple[An
     nodes = _nodes(fixture)
     scope = planner.temporal_scope(request)
     max_speed = planner.vessel_model.maximum_speed_knots * KNOT_TO_KM_PER_HOUR
-    forward = {
-        node: fixture.grid.distance_km(fixture.start, node) / max_speed for node in nodes
-    }
-    reverse = {
-        node: fixture.grid.distance_km(node, fixture.goal) / max_speed for node in nodes
-    }
+    forward = {node: fixture.grid.distance_km(fixture.start, node) / max_speed for node in nodes}
+    reverse = {node: fixture.grid.distance_km(node, fixture.goal) / max_speed for node in nodes}
     horizon = request.maximum_elapsed.total_seconds() / 3600.0
     evidence = AdmissibleBoundEvidence(
         scope=scope,
@@ -403,29 +391,41 @@ def _worker(args: argparse.Namespace) -> dict[str, Any]:
         and point._reference_matches(bounded_semantic, reference)
     )
     diagnostics = None if bounded is None else _jsonable(bounded.diagnostics)
-    pruned = 0 if bounded is None or bounded.diagnostics is None else int(
-        bounded.diagnostics.state_bound_pruned
+    pruned = (
+        0
+        if bounded is None or bounded.diagnostics is None
+        else int(bounded.diagnostics.state_bound_pruned)
     )
-    rejected = 0 if bounded is None or bounded.diagnostics is None else int(
-        bounded.diagnostics.state_bound_rejected
+    rejected = (
+        0
+        if bounded is None or bounded.diagnostics is None
+        else int(bounded.diagnostics.state_bound_rejected)
     )
-    semantic_match = baseline_match and bounded_match and (
-        baseline.semantic_digest == bounded.semantic_digest
-        if baseline is not None and bounded is not None
-        else False
+    semantic_match = (
+        baseline_match
+        and bounded_match
+        and (
+            baseline.semantic_digest == bounded.semantic_digest
+            if baseline is not None and bounded is not None
+            else False
+        )
     )
     resource_clean = _resource_clean(before, after)
-    status = "PASS" if (
-        not errors
-        and baseline is not None
-        and bounded is not None
-        and baseline.status is NonFifoSearchStatus.GOAL_FOUND
-        and bounded.status is NonFifoSearchStatus.GOAL_FOUND
-        and semantic_match
-        and pruned > 0
-        and rejected == 0
-        and resource_clean
-    ) else "FAIL"
+    status = (
+        "PASS"
+        if (
+            not errors
+            and baseline is not None
+            and bounded is not None
+            and baseline.status is NonFifoSearchStatus.GOAL_FOUND
+            and bounded.status is NonFifoSearchStatus.GOAL_FOUND
+            and semantic_match
+            and pruned > 0
+            and rejected == 0
+            and resource_clean
+        )
+        else "FAIL"
+    )
     return {
         "schema_version": SCHEMA_VERSION,
         "status": status,
@@ -445,12 +445,8 @@ def _worker(args: argparse.Namespace) -> dict[str, Any]:
         "projected_label_reduction": corridor.projected_label_reduction,
         "semantic_match": semantic_match,
         "reference_match": baseline_match and bounded_match,
-        "baseline_semantic_digest": None
-        if baseline is None
-        else baseline.semantic_digest,
-        "bounded_semantic_digest": None
-        if bounded is None
-        else bounded.semantic_digest,
+        "baseline_semantic_digest": None if baseline is None else baseline.semantic_digest,
+        "bounded_semantic_digest": None if bounded is None else bounded.semantic_digest,
         "baseline_status": None if baseline is None else baseline.status.value,
         "bounded_status": None if bounded is None else bounded.status.value,
         "baseline_semantic": baseline_semantic,
@@ -458,9 +454,10 @@ def _worker(args: argparse.Namespace) -> dict[str, Any]:
         "reference": reference,
         "diagnostics": diagnostics,
         "errors": errors,
-        "reason": None if status == "PASS" else "; ".join(
-            f"{key}={value}" for key, value in sorted(errors.items())
-        ) or "semantic/resource/certified-pruning gate failed",
+        "reason": None
+        if status == "PASS"
+        else "; ".join(f"{key}={value}" for key, value in sorted(errors.items()))
+        or "semantic/resource/certified-pruning gate failed",
         "session_identity": identity.digest,
         "compute_ms": None
         if bounded is None or bounded.planning_result is None
@@ -614,12 +611,10 @@ class _RunnerLock:
 def _summary(cases: list[dict[str, Any]], identity: dict[str, Any]) -> dict[str, Any]:
     expected = len(OBJECTIVES) * int(identity["repetitions"])
     complete = len(cases) == expected and all(
-        case.get("status") in {"PASS", "FAIL", "TIMEOUT", "INVALID/PENDING"}
-        for case in cases
+        case.get("status") in {"PASS", "FAIL", "TIMEOUT", "INVALID/PENDING"} for case in cases
     )
     semantic = bool(cases) and all(
-        case.get("status") == "PASS" and case.get("semantic_match") is True
-        for case in cases
+        case.get("status") == "PASS" and case.get("semantic_match") is True for case in cases
     )
     resource = bool(cases) and all(case.get("resource_clean") is True for case in cases)
     resource_evidence = bool(cases) and all(
@@ -640,13 +635,7 @@ def _summary(cases: list[dict[str, Any]], identity: dict[str, Any]) -> dict[str,
             deterministic = False
     if not complete:
         status = "INVALID/PENDING"
-    elif (
-        not semantic
-        or not resource
-        or not resource_evidence
-        or not deterministic
-        or pruning == 0
-    ):
+    elif not semantic or not resource or not resource_evidence or not deterministic or pruning == 0:
         status = "NO_PERFORMANCE_PROOF/FAIL"
     else:
         status = "READY_FOR_P0.2-ADAPTER_RESOURCE_BOUND_PLAN"
@@ -797,9 +786,7 @@ def _run(args: argparse.Namespace) -> int:
         _atomic_json(output / "eta-interval.jsonl", {"status": "NOT_RUN_BY_DESIGN"})
         marker = output / "ALL_DONE"
         marker.write_text(summary["status"] + "\n", encoding="utf-8")
-        compact_summary = {
-            key: value for key, value in summary.items() if key != "cases"
-        }
+        compact_summary = {key: value for key, value in summary.items() if key != "cases"}
         print(
             json.dumps(
                 compact_summary,

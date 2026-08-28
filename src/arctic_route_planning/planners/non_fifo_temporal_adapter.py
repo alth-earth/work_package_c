@@ -134,9 +134,7 @@ class NonFifoTemporalResearchCheckpoint:
             raise NonFifoTemporalAdapterError("non-FIFO adapter mode digest mismatch")
         state_bound_digest = getattr(self, "state_bound_policy_digest", None)
         if state_bound_digest != self.session_checkpoint.identity.state_bound_policy_digest:
-            raise NonFifoTemporalAdapterError(
-                "non-FIFO adapter state-bound policy digest mismatch"
-            )
+            raise NonFifoTemporalAdapterError("non-FIFO adapter state-bound policy digest mismatch")
         if self.session_checkpoint.state not in (
             TemporalSessionState.READY,
             TemporalSessionState.PAUSED,
@@ -154,9 +152,7 @@ class NonFifoTemporalResearchCheckpoint:
             {
                 "schema_version": self.schema_version,
                 "mode_digest": self.mode_digest,
-                "state_bound_policy_digest": getattr(
-                    self, "state_bound_policy_digest", None
-                ),
+                "state_bound_policy_digest": getattr(self, "state_bound_policy_digest", None),
                 "session_checkpoint": self.session_checkpoint.state_digest,
             }
         )
@@ -170,9 +166,7 @@ class NonFifoTemporalResearchCheckpoint:
             raise NonFifoTemporalAdapterError("non-FIFO adapter mode digest mismatch")
         state_bound_digest = getattr(self, "state_bound_policy_digest", None)
         if state_bound_digest != self.session_checkpoint.identity.state_bound_policy_digest:
-            raise NonFifoTemporalAdapterError(
-                "non-FIFO adapter state-bound policy digest mismatch"
-            )
+            raise NonFifoTemporalAdapterError("non-FIFO adapter state-bound policy digest mismatch")
         if self.state_digest != self._calculated_state_digest():
             raise TemporalSessionRestoreError("non-FIFO adapter checkpoint digest mismatch")
         self.session_checkpoint.assert_valid()
@@ -332,9 +326,7 @@ def restore_non_fifo_temporal_session(
     """Restore a wrapper after checking adapter and active-session fences."""
 
     if not isinstance(checkpoint, NonFifoTemporalResearchCheckpoint):
-        raise NonFifoTemporalAdapterError(
-            "checkpoint must be a NonFifoTemporalResearchCheckpoint"
-        )
+        raise NonFifoTemporalAdapterError("checkpoint must be a NonFifoTemporalResearchCheckpoint")
     try:
         checkpoint.assert_valid()
     except (NonFifoTemporalAdapterError, TemporalSessionRestoreError) as error:
@@ -399,9 +391,7 @@ def restore_non_fifo_temporal_bounded_session(
     """Restore a bounded session after checking its certificate identity."""
 
     if not isinstance(checkpoint, NonFifoTemporalResearchCheckpoint):
-        raise NonFifoTemporalAdapterError(
-            "checkpoint must be a NonFifoTemporalResearchCheckpoint"
-        )
+        raise NonFifoTemporalAdapterError("checkpoint must be a NonFifoTemporalResearchCheckpoint")
     _validate_bound_certificate(planner, certificate, request=request)
     try:
         checkpoint.assert_valid()
@@ -614,9 +604,7 @@ def _validate_research_mode(
             "actual temporal adapter requires a TemporalLabelAStar instance"
         )
     if request.use_heuristic:
-        raise NonFifoTemporalAdapterError(
-            "non-FIFO adapter requires request.use_heuristic=False"
-        )
+        raise NonFifoTemporalAdapterError("non-FIFO adapter requires request.use_heuristic=False")
     if planner.dominance_policy.enabled:
         raise NonFifoTemporalAdapterError(
             "non-FIFO adapter requires TemporalDominancePolicy.disabled()"
@@ -653,9 +641,7 @@ def _validate_bound_certificate(
             "bounded non-FIFO adapter requires the certificate on the planner"
         )
     if installed.digest != certificate.digest:
-        raise NonFifoTemporalAdapterError(
-            "bounded non-FIFO adapter certificate digest mismatch"
-        )
+        raise NonFifoTemporalAdapterError("bounded non-FIFO adapter certificate digest mismatch")
     if not certificate.usable:
         raise NonFifoTemporalAdapterError(
             "bounded non-FIFO adapter requires a usable certified bound"
@@ -742,10 +728,7 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, StrEnum):
         return value.value
     if is_dataclass(value):
-        return {
-            field.name: _jsonable(getattr(value, field.name))
-            for field in fields(value)
-        }
+        return {field.name: _jsonable(getattr(value, field.name)) for field in fields(value)}
     if isinstance(value, Mapping):
         return {
             str(key): _jsonable(item)

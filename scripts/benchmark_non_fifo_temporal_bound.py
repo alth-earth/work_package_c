@@ -67,10 +67,7 @@ def _load_script(filename: str, module_name: str) -> Any:
 
 def _jsonable(value: Any) -> Any:
     if is_dataclass(value):
-        return {
-            field: _jsonable(item)
-            for field, item in asdict(value).items()
-        }
+        return {field: _jsonable(item) for field, item in asdict(value).items()}
     if isinstance(value, datetime):
         return value.astimezone(UTC).isoformat(timespec="microseconds")
     if isinstance(value, dict):
@@ -186,11 +183,7 @@ def _nodes(planner: Any) -> tuple[tuple[int, int], ...]:
 
 def _corridor_nodes(planner: Any) -> tuple[tuple[int, int], ...]:
     _, columns = planner.grid.shape
-    return tuple(
-        node
-        for node in _nodes(planner)
-        if node[0] == 0 or node[1] == columns - 1
-    )
+    return tuple(node for node in _nodes(planner) if node[0] == 0 or node[1] == columns - 1)
 
 
 def _certificate(
@@ -203,9 +196,7 @@ def _certificate(
 ) -> TemporalStateBoundCertificate:
     scope = planner.temporal_scope(request)
     if scope_mismatch:
-        scope = TemporalScope.from_mapping(
-            {**scope.mapping, "bound_scope_revision": "mismatch"}
-        )
+        scope = TemporalScope.from_mapping({**scope.mapping, "bound_scope_revision": "mismatch"})
     nodes = _nodes(planner)
     allowed = _corridor_nodes(planner)
     excluded = tuple(node for node in nodes if node not in set(allowed))
@@ -234,14 +225,14 @@ def _semantic_matches(route: dict[str, Any] | None, reference: dict[str, Any]) -
         return False
     return (
         route.get("nodes") == reference.get("nodes")
-        and [step.get("eta") for step in route.get("steps", [])]
-        == reference.get("arrival_times")
+        and [step.get("eta") for step in route.get("steps", [])] == reference.get("arrival_times")
         and [step.get("incoming_heading_degrees") for step in route.get("steps", [])]
         == reference.get("headings")
         and abs(
             float(route.get("total_cost_hours", float("nan")))
             - float(reference.get("total_cost_hours", float("nan")))
-        ) <= 1e-9
+        )
+        <= 1e-9
     )
 
 
@@ -299,18 +290,18 @@ def _worker(profile: str, objective_name: str, mode: str, cpu: int) -> dict[str,
     after = _resource_snapshot()
     baseline_route = _route_payload(baseline, base)
     bounded_route = _route_payload(bounded, base)
-    baseline_match = (
-        reference is not None and _semantic_matches(baseline_route, reference)
-    )
-    bounded_match = (
-        reference is not None and _semantic_matches(bounded_route, reference)
-    )
+    baseline_match = reference is not None and _semantic_matches(baseline_route, reference)
+    bounded_match = reference is not None and _semantic_matches(bounded_route, reference)
     diagnostics = None if bounded is None else _jsonable(bounded.diagnostics)
-    pruned = 0 if bounded is None or bounded.diagnostics is None else int(
-        bounded.diagnostics.state_bound_pruned
+    pruned = (
+        0
+        if bounded is None or bounded.diagnostics is None
+        else int(bounded.diagnostics.state_bound_pruned)
     )
-    rejected = 0 if bounded is None or bounded.diagnostics is None else int(
-        bounded.diagnostics.state_bound_rejected
+    rejected = (
+        0
+        if bounded is None or bounded.diagnostics is None
+        else int(bounded.diagnostics.state_bound_rejected)
     )
     resource_clean = (after.get("vmswap_kib") or 0) == 0
     if mode == "certified":
@@ -505,9 +496,12 @@ def _summary(records: list[dict[str, Any]], identity: dict[str, Any]) -> dict[st
         digest_groups.setdefault(key, set()).add(
             (item.get("baseline_semantic_digest"), item.get("bounded_semantic_digest"))
         )
-    deterministic = bool(records) and all(
-        item.get("deterministic_probe") is True for item in records
-    ) and bool(digest_groups) and all(len(values) == 1 for values in digest_groups.values())
+    deterministic = (
+        bool(records)
+        and all(item.get("deterministic_probe") is True for item in records)
+        and bool(digest_groups)
+        and all(len(values) == 1 for values in digest_groups.values())
+    )
     fail_closed = bool(rejected) and all(
         int(item.get("state_bound_pruned", 0)) == 0 for item in rejected
     )
@@ -534,9 +528,7 @@ def _summary(records: list[dict[str, Any]], identity: dict[str, Any]) -> dict[st
         "observed_certified_pruning": sum(
             int(item.get("state_bound_pruned", 0)) for item in certified
         ),
-        "rejected_pruning_total": sum(
-            int(item.get("state_bound_pruned", 0)) for item in rejected
-        ),
+        "rejected_pruning_total": sum(int(item.get("state_bound_pruned", 0)) for item in rejected),
         "records": records,
         "production_candidate_enabled": False,
         "next_action": "keep default disabled; plan separate resource-bound review",
@@ -658,15 +650,18 @@ def _run(args: argparse.Namespace) -> int:
                     )
     summary = _summary(records, identity)
     _atomic_json(output / "comparison-summary.json", summary)
-    _atomic_json(output / "manifest.json", {
-        "schema_version": SCHEMA_VERSION,
-        "status": summary["status"],
-        "identity": identity,
-        "experiment_id": identity["experiment_id"],
-        "summary": summary,
-        "dominance_policy": "disabled",
-        "state_bound_mode": "explicit-certified-only",
-    })
+    _atomic_json(
+        output / "manifest.json",
+        {
+            "schema_version": SCHEMA_VERSION,
+            "status": summary["status"],
+            "identity": identity,
+            "experiment_id": identity["experiment_id"],
+            "summary": summary,
+            "dominance_policy": "disabled",
+            "state_bound_mode": "explicit-certified-only",
+        },
+    )
     _atomic_json(heartbeat, {"status": summary["status"], "updated_at": datetime.now(UTC)})
     _write_jsonl(output / "resource-frontier.jsonl", records)
     _write_jsonl(output / "fifo-scan.jsonl", [{"status": "NOT_RUN_BY_DESIGN"}])
