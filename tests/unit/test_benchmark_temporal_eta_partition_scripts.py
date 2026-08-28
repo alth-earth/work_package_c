@@ -80,9 +80,12 @@ def test_real_corridor_runner_is_projection_only_and_keeps_frozen_limits() -> No
         "max_queue": 50_000,
         "max_edge_evaluations": 400_000,
     }
-    assert module._projected_queue_profile(
-        {(0, 0): 0.0, (0, 1): 1.0, (0, 2): 5.0}, ((0, 0), (0, 1)), 6.0
-    )["1"] == 2
+    assert (
+        module._projected_queue_profile(
+            {(0, 0): 0.0, (0, 1): 1.0, (0, 2): 5.0}, ((0, 0), (0, 1)), 6.0
+        )["1"]
+        == 2
+    )
 
 
 def test_real_corridor_summary_does_not_promote_missing_objectives() -> None:
