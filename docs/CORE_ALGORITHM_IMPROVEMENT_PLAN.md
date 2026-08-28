@@ -1078,3 +1078,84 @@ probe、1 秒 tolerance、最多四级边界细分，真实搜索始终 dominanc
 smoke 和 diff check。只追加本轮结果，保留 M0/M1/M1.5/M1.6/M1.7/M1.8、M2J/M2K、P3、
 ARA* 历史；实验产物写入新的 `.runtime/experiments/` 目录，不写 formal latest、
 replanning baseline 或 frozen artifact。
+
+### 【2026-08-28 | COMPLETED】P0.1-M1.9：ETA 区间包络与真实 FIFO 资格审计
+
+本轮在不改变正式 planner、合同或生产入口的前提下完成。以 `067a28e` 为基线建立
+`research/p01-m19-eta-interval-20260828`，通过 cherry-pick 审计并保留上一轮
+`7988e62^..424b4af` 的 M1.7/M1.8/P0.2 历史；辅助 worktree 为
+`/root/my_project/.runtime/worktrees/c-p01-m19-eta-interval`。实现证据使用 clean
+commit `9ff131feabbf11c98a1040a4a6c5c2dd2b5f8e2f`，未修改正式
+`research-validation-system` worktree，不 push。完成收口后移除本轮辅助 worktree，保留
+本地分支和实验构件。
+
+**区间采样与 ETA 证书。** C 内部新增 `RiskSampler._sample_interval` 和
+`RiskIntervalSample`：按 RiskFrame 边界枚举覆盖帧，复用既有双线性空间贡献，时间端点
+采用 outward rounding，hard-mask 使用保守 OR，confidence 和 speed factor 使用保守
+上下界；窗口/gap、缺失、非有限值和 evaluator 异常均返回不完整证据而非安全替代值。
+新增 `TemporalEtaIntervalEvaluator` 和 `EtaOperatorIntervalEvidence`，显式绑定 bounded
+ETA policy、完整 `TemporalScope`、partition/boundary evidence 和 evaluator digest。
+只有完整覆盖、认证 evaluator、scope 完全匹配、无 discontinuity 且有独立 contraction
+`<1` 时的 `ROOT_EXISTS_UNIQUE` 才可授权；non-unique、finite no-bracket、无 contraction、
+coverage/evaluator failure 和边界不连续均不得授权。`sample()`、正式 `plan()`、默认
+`TemporalDominancePolicy.disabled()` 和公共合同保持不变。
+
+real runner 的 resume 只消费完整且 identity/scope/input/segment/probe 数匹配的已完成
+edge 记录，重复或错身份构件 fail-closed；每条 evidence 继续 `fsync`，点扫描汇总在恢复
+时原子替换，避免重复记录。该修复不改变算法结果，只补齐可恢复审计边界。
+
+**Synthetic proof gate。** 独立 runner schema 为
+`c.p0.1-temporal-eta-proof.v1`，最终实现身份实验为
+`/root/my_project/.runtime/experiments/c-p01-m19-eta-interval-20260828-proof-r3/`，
+experiment id 为 `c.p0.1-temporal-eta-proof.v1-991d5b72297a32a1`。small/medium/stress
+× 三 objective × 13 场景共 `117/117`，其中 `9` 个 unique、`9` 个 non-unique、`9` 个
+root exclusion、`90` 个 uncertain；`authorization_count=9`、`fail_closed=true`。
+所有 endpoint/interior 样本均落在 interval 包络内，只有 contraction-backed unique root
+授权；non-unique、discontinuity、coverage/evaluator failure、cycle、max-iterations、
+terminal mismatch、scope/policy/checkpoint digest mismatch 均未授权。proof runner 已生成
+manifest/cases/eta-interval/comparison-summary/heartbeat 和 `ALL_DONE`。
+
+**真实 6h 资格审计。** 使用完整 145 帧冻结 RiskWindow、既定 route-plan-set、15 分钟
+probe、1 秒 tolerance，真实搜索始终 `dominance_policy=disabled` 且
+`dominance_pruned=0`。holdout/development 两段均从同一 clean implementation identity
+`9ff131f...` 启动，未写 formal/latest/frozen 路径：
+
+| 输入 / segment | 有向边 | probe | interval evaluations | interval status counts | point counterexample | authorization |
+|---|---:|---:|---:|---|---|---:|
+| holdout / `executable_0_6h` | 1388 | 25 | 34700 | `UNCERTAIN_DISCONTINUITY=34050`; `UNCERTAIN_EVALUATOR_FAILURE=650` | 无 | 0 |
+| development / `executable_0_6h` | 1540 | 25 | 38500 | `UNCERTAIN_DISCONTINUITY=38000`; `UNCERTAIN_EVALUATOR_FAILURE=500` | 无 | 0 |
+
+两段 summary 均为 `REAL_INPUT_FIFO_UNCERTAIN_REQUIRES_INTERVAL_PROOF`，原因是未观察到
+反例但连续性/contraction/evaluator 证明不完整；`coverage_complete=false`、
+`evaluator_certified=false`。point scan 的 evaluation errors 分别为 `748` 和 `821`，
+自适应插点为 `0`。采样失败均显式记录为 `RiskSamplingError`，没有从图中静默删除边，也
+没有生成可用 certificate digest。holdout 构件为
+`c.p0.1-temporal-eta-proof-real.v1-2798d477afc7c5d2`，development 构件为
+`c.p0.1-temporal-eta-proof-real.v1-a1bf0c3afd101c1b`，均绑定 145 帧、route-plan-set、
+`uv.lock`、scope、bounded policy 和 evaluator/config digest，manifest 中
+`git_dirty=false`。
+
+24h `rolling_0_24h` 未启动：两输入的 6h 都未通过 interval proof 资格门，按本轮“仅在
+对应 6h 通过后执行 24h”的条件停止；这不是新的 24h 资源通过/失败结论。既有 M1.6 的
+真实 24h `queue=50000` 资源失败事实保持不变，未提高任何 queue/label/expansion/edge
+evaluation 上限，也未择优重跑。
+
+**验证与收口。** 聚焦 ETA/RiskSampler/runner/resume 测试通过；全量 pytest 为
+`395 passed, 3 skipped`，跳过项仍仅是并行 orchestrator worktree 缺少已退休的 M2J
+诊断脚本。本轮变更涉及的 Ruff 目标通过；全量 Ruff 被既有、非本轮的
+`scripts/benchmark_bc_coupling.py:721` E501 阻塞。`uv lock --check`、CLI smoke、
+active/archive import boundary 和 `git diff --check` 通过。`UV_OFFLINE=1 make check` 仍因辅助 worktree 没有
+`.mamba-env/bin/uv` 在 Makefile lint 目标处退出；用已有等价 Python/Ruff/UV 环境完成
+可执行检查。离线 sync 因 numpy wheel 不在本地缓存而阻塞，未修改 `uv.lock`、依赖或源码。
+实验构件全部留在 `.runtime/experiments/`，没有写 formal latest、replanning baseline
+或 frozen artifact。
+
+本轮最终状态固定为：
+
+- `REAL_INPUT_FIFO_UNCERTAIN_REQUIRES_INTERVAL_PROOF`；不设置
+  `READY_FOR_SEPARATE_REAL_DOMINANCE_PLAN`；
+- state-bound 的既有 synthetic `27/27 PASS` 和 P0.2 test-only 设计历史保留，本轮未对
+  真实 24h 启用 state-bound，也未扩展非 FIFO 到真实 runner；
+- candidate、Winter M1/M2、P2.1、P3 SMO-A*、ARA* 和正式 ETA 默认策略全部不变；
+- 下一步只能另立保守 ETA interval proof/evaluator 研究，或在真实反例出现时另立 P0.2
+  label-correcting 计划；不得由本轮 uncertain 结果自动启用 dominance。
