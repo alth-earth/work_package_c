@@ -1544,3 +1544,37 @@ hard-mask/evaluator failure、业务载荷和 semantic digest determinism。所�
 输入可用或生产资格。任一误剪枝、语义/计数不一致、identity 漂移或公共路径变化均为
 `NO_PERFORMANCE_PROOF/FAIL` 或 `INVALID/PENDING`。实验构件如需生成只写
 `.runtime/experiments/`，完成 clean 验证后删除辅助 worktree，保留本地分支，不 push。
+
+### 【2026-08-29 | PLANNED】P0.2-M2：actual temporal edge adapter 与 bounded 非 FIFO 语义桥
+
+P0.2-M0/M1 已在独立 finite transition sidecar 中证明 exact-arrival
+label-correcting 的终止、业务载荷、资源上限和 fail-closed 规则，但尚未验证这些规则
+能否在 C 当前的 `TemporalLabelAStar` edge evaluator 与 `PlanningResult` 业务字段上保持
+一致。本轮只建立 C 内部、显式调用的 research adapter：使用实际 temporal session、
+`_EdgeTraversal` 和 ETA/risk/cost 评估，默认要求 `use_heuristic=False`、
+`TemporalDominancePolicy.disabled()` 且不携带 state-bound，以免把 FIFO/启发式或未审计
+的支配假设带入非 FIFO 研究。正式 `TemporalLabelAStar.plan()`、
+`TimeDependentAStar`、ingress/service、B/C 与 C/D 合同、公共 planner、真实 runner、
+Winter/P2.1/P3/ARA* 和 production candidate 均不变。
+
+**接口与状态。** 新增私有 `non_fifo_temporal_adapter` 模块，提供显式的 bounded
+`run_non_fifo_temporal_search(...)` 入口和不可变结果载体。adapter 只负责创建/推进实际
+`TemporalSession`，将 `GOAL_FOUND`、`EXHAUSTED`、`RESOURCE_LIMIT`、`CANCELLED`、
+`EVALUATOR_FAILURE` 映射为研究状态，保留 `TemporalCandidateResult`、完整
+`PlanningResult`（route steps、ETA、速度、风险、成本、confidence、source IDs）和
+语义 digest。任何候选 dominance/state-bound 被启用、request 使用 heuristic、identity
+不完整或 session 产生误剪枝均拒绝执行，不静默降级为“成功”。
+
+**验收矩阵。** 在受控 non-FIFO edge evaluator 上覆盖后到达更优 suffix、同桶不同精确
+ETA、重复 exact-state replacement、hard-mask/ETA/evaluator failure、取消、horizon、
+expansion/label/queue/edge-evaluation 上限和 checkpoint/identity fence。adapter 结果与
+独立 zero-heuristic exact-arrival oracle 对照路线、精确 ETA、速度、风险、成本、
+confidence、source IDs 和失败语义；重复运行 semantic digest 与资源计数确定一致。
+测试验证 adapter 不调用 dominance/state-bound pruning，已扩展 label 不被删除，并且
+正式 planner 默认行为与 active/archive import boundary 保持不变。
+
+**收口边界。** 全部矩阵通过时只记为 `READY_FOR_P0.2-ADAPTER_REAL-INPUT_PLAN`，不
+代表真实输入可用、连续非 FIFO 全局最优或 candidate 资格；失败时记为
+`NO_PERFORMANCE_PROOF/FAIL` 或 `INVALID/PENDING`。实验产物如有需要只写
+`.runtime/experiments/`，本地提交后移除辅助 worktree，不 push。下一步仍需另立真实
+输入预算/取消协议和生产候选审查计划。
