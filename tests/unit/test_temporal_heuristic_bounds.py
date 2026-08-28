@@ -9,10 +9,14 @@ import pytest
 from arctic_route_planning.planners.non_fifo_temporal_adapter import (
     NonFifoTemporalAdapterError,
     create_non_fifo_temporal_certified_heuristic_session,
+    create_non_fifo_temporal_composed_bound_heuristic_session,
     restore_non_fifo_temporal_certified_heuristic_session,
+    restore_non_fifo_temporal_composed_bound_heuristic_session,
     run_non_fifo_temporal_certified_heuristic_search,
+    run_non_fifo_temporal_composed_bound_heuristic_search,
     run_non_fifo_temporal_search,
 )
+from arctic_route_planning.planners.temporal_bounds import TemporalStateBoundCertificate
 from arctic_route_planning.planners.temporal_heuristic_bounds import (
     qualify_temporal_heuristic,
 )
@@ -47,6 +51,18 @@ def _heuristic(planner, request):
         expected_scope=scope,
     )
     return certificate
+
+
+def _arrival_certificate(planner, request):
+    scope = planner.temporal_scope(request)
+    allowed = ((0, 0), (0, 1), (0, 2), (1, 1), (1, 2))
+    return TemporalStateBoundCertificate.certified(
+        scope,
+        allowed_nodes=allowed,
+        excluded_nodes=((1, 0),),
+        proof_digest="proof-composed-bound-test-v1",
+        arrival_upper_hours={node: 6.0 for node in allowed},
+    )
 
 
 def test_topological_objective_lower_bound_is_admissible_and_complete() -> None:
@@ -130,4 +146,109 @@ def test_certified_heuristic_checkpoint_binds_policy_digest() -> None:
             checkpoint,
             request,
             other,
+        )
+
+
+def test_composed_bound_and_heuristic_preserve_semantics_and_prune() -> None:
+    request = replace(_request(), use_heuristic=True)
+    baseline = run_non_fifo_temporal_search(_planner(), replace(request, use_heuristic=False))
+    planner = _planner()
+    state_bound = _arrival_certificate(planner, request)
+    heuristic = _heuristic(planner, request)
+    planner.state_bound_certificate = state_bound
+    planner.heuristic_certificate = heuristic
+
+    candidate = run_non_fifo_temporal_composed_bound_heuristic_search(
+        planner,
+        request,
+        state_bound,
+        heuristic,
+    )
+
+    assert baseline.planning_result is not None
+    assert candidate.planning_result is not None
+    assert candidate.status.value == "GOAL_FOUND"
+    assert candidate.semantic_digest == baseline.semantic_digest
+    assert candidate.planning_result.nodes == baseline.planning_result.nodes
+    assert candidate.diagnostics.dominance_pruned == 0
+    assert candidate.diagnostics.state_bound_rejected == 0
+    assert candidate.diagnostics.state_bound_checks > 0
+    assert candidate.diagnostics.state_bound_pruned > 0
+    assert candidate.diagnostics.heuristic_policy == "certified"
+    assert candidate.diagnostics.heuristic_scope_match
+    assert candidate.diagnostics.heuristic_rejected == 0
+
+
+def test_composed_checkpoint_binds_both_certificate_digests() -> None:
+    request = replace(_request(), use_heuristic=True)
+    planner = _planner()
+    state_bound = _arrival_certificate(planner, request)
+    heuristic = _heuristic(planner, request)
+    planner.state_bound_certificate = state_bound
+    planner.heuristic_certificate = heuristic
+    session = create_non_fifo_temporal_composed_bound_heuristic_session(
+        planner,
+        request,
+        state_bound,
+        heuristic,
+    )
+    assert session.advance(expansion_slice=1) is None
+    checkpoint = session.checkpoint()
+    assert checkpoint.state_bound_policy_digest == state_bound.digest
+    assert checkpoint.heuristic_policy_digest == heuristic.digest
+
+    restored = restore_non_fifo_temporal_composed_bound_heuristic_session(
+        planner,
+        checkpoint,
+        request,
+        state_bound,
+        heuristic,
+    )
+    while True:
+        resumed = restored.advance(expansion_slice=1)
+        if resumed is not None:
+            break
+    assert resumed.status.value == "GOAL_FOUND"
+    assert resumed.semantic_digest == session.run().semantic_digest
+
+    drifted = replace(heuristic, proof_digest="composed-drift")
+    planner.heuristic_certificate = drifted
+    with pytest.raises(NonFifoTemporalAdapterError, match="heuristic digest mismatch"):
+        restore_non_fifo_temporal_composed_bound_heuristic_session(
+            planner,
+            checkpoint,
+            request,
+            state_bound,
+            drifted,
+        )
+
+
+def test_composed_adapter_rejects_incomplete_or_mismatched_proofs() -> None:
+    request = replace(_request(), use_heuristic=True)
+    planner = _planner()
+    state_bound = _arrival_certificate(planner, request)
+    heuristic = _heuristic(planner, request)
+
+    incomplete = replace(state_bound, arrival_upper_hours=state_bound.arrival_upper_hours[:-1])
+    planner.state_bound_certificate = incomplete
+    planner.heuristic_certificate = heuristic
+    with pytest.raises(NonFifoTemporalAdapterError, match="complete arrival envelope"):
+        run_non_fifo_temporal_composed_bound_heuristic_search(
+            planner,
+            request,
+            incomplete,
+            heuristic,
+        )
+
+    mismatch_scope = type(state_bound.scope).from_mapping(
+        {**state_bound.scope.mapping, "composed_revision": "mismatch"}
+    )
+    mismatched = replace(state_bound, scope=mismatch_scope)
+    planner.state_bound_certificate = mismatched
+    with pytest.raises(NonFifoTemporalAdapterError, match="scope mismatch"):
+        run_non_fifo_temporal_composed_bound_heuristic_search(
+            planner,
+            request,
+            mismatched,
+            heuristic,
         )

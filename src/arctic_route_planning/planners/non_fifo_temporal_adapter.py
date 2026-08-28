@@ -7,11 +7,12 @@ boundary: the active exact-arrival session can be exercised with the real
 rules.  It is a research adapter, not a planner API.  Importing this module is
 therefore always explicit and it is not re-exported from ``planners``.
 
-The adapter requires zero-heuristic search, disabled temporal dominance and
-no state-bound certificate.  Those requirements make the research claim
-auditable: no FIFO assumption, heuristic lower-bound proof, or unreviewed
-state exclusion can affect the result.  The production planner and its
-default path remain unchanged.
+The ordinary adapter requires zero-heuristic search, disabled temporal
+dominance and no state-bound certificate.  Separate explicit entry points
+permit a reviewed arrival envelope and/or certified heuristic ordering.  The
+composition path keeps those proofs independent: the envelope may reject only
+new labels and the heuristic may only order labels.  The production planner
+and its default path remain unchanged.
 """
 
 from __future__ import annotations
@@ -540,6 +541,114 @@ def restore_non_fifo_temporal_arrival_bounded_session(
     )
 
 
+def create_non_fifo_temporal_composed_bound_heuristic_session(
+    planner: TemporalLabelAStar,
+    request: PlanningRequest,
+    state_bound_certificate: TemporalStateBoundCertificate,
+    heuristic_certificate: TemporalHeuristicCertificate,
+    *,
+    identity: TemporalSessionIdentity | None = None,
+) -> NonFifoTemporalResearchSession:
+    """Create the explicit arrival-bound plus heuristic research session.
+
+    This is intentionally a separate adapter from the individual proof paths.
+    Both certificates must be complete, installed on the same planner, and
+    describe exactly the same temporal scope.  The active session still keeps
+    the non-FIFO/dominance fence and records each proof digest in its identity.
+    """
+
+    _validate_composed_certificates(
+        planner,
+        request,
+        state_bound_certificate,
+        heuristic_certificate,
+        identity=identity,
+    )
+    _validate_research_mode(
+        planner,
+        request,
+        identity,
+        allow_state_bound=True,
+        allow_heuristic=True,
+    )
+    try:
+        session = planner.create_session(request, identity=identity)
+    except TemporalSessionIdentityMismatch as error:
+        raise NonFifoTemporalAdapterError(
+            f"temporal session identity fence rejected: {error}"
+        ) from error
+    return NonFifoTemporalResearchSession(
+        planner,
+        request,
+        session,
+        allow_state_bound=True,
+        allow_heuristic=True,
+    )
+
+
+def restore_non_fifo_temporal_composed_bound_heuristic_session(
+    planner: TemporalLabelAStar,
+    checkpoint: NonFifoTemporalResearchCheckpoint,
+    request: PlanningRequest,
+    state_bound_certificate: TemporalStateBoundCertificate,
+    heuristic_certificate: TemporalHeuristicCertificate,
+    *,
+    identity: TemporalSessionIdentity | None = None,
+) -> NonFifoTemporalResearchSession:
+    """Restore a composed session after both proof and identity fences."""
+
+    if not isinstance(checkpoint, NonFifoTemporalResearchCheckpoint):
+        raise NonFifoTemporalAdapterError(
+            "checkpoint must be a NonFifoTemporalResearchCheckpoint"
+        )
+    _validate_composed_certificates(
+        planner,
+        request,
+        state_bound_certificate,
+        heuristic_certificate,
+        identity=identity,
+    )
+    try:
+        checkpoint.assert_valid()
+    except (NonFifoTemporalAdapterError, TemporalSessionRestoreError) as error:
+        raise NonFifoTemporalAdapterError(
+            f"non-FIFO composed checkpoint fence rejected: {error}"
+        ) from error
+    if checkpoint.state_bound_policy_digest != state_bound_certificate.digest:
+        raise NonFifoTemporalAdapterError(
+            "non-FIFO composed checkpoint state-bound digest mismatch"
+        )
+    if checkpoint.heuristic_policy_digest != heuristic_certificate.digest:
+        raise NonFifoTemporalAdapterError(
+            "non-FIFO composed checkpoint heuristic digest mismatch"
+        )
+    _validate_research_mode(
+        planner,
+        request,
+        identity,
+        allow_state_bound=True,
+        allow_heuristic=True,
+    )
+    try:
+        session = restore_session(
+            planner,
+            checkpoint.session_checkpoint,
+            request=request,
+            identity=identity,
+        )
+    except (TemporalSessionIdentityMismatch, TemporalSessionRestoreError) as error:
+        raise NonFifoTemporalAdapterError(
+            f"non-FIFO composed checkpoint fence rejected: {error}"
+        ) from error
+    return NonFifoTemporalResearchSession(
+        planner,
+        request,
+        session,
+        allow_state_bound=True,
+        allow_heuristic=True,
+    )
+
+
 def _candidate_result(
     session_id: str,
     candidate: TemporalCandidateResult,
@@ -831,6 +940,65 @@ def run_non_fifo_temporal_arrival_bounded_search(
     return research_session.run()
 
 
+def run_non_fifo_temporal_composed_bound_heuristic_search(
+    planner: TemporalLabelAStar,
+    request: PlanningRequest,
+    state_bound_certificate: TemporalStateBoundCertificate,
+    heuristic_certificate: TemporalHeuristicCertificate,
+    *,
+    identity: TemporalSessionIdentity | None = None,
+) -> NonFifoTemporalResearchResult:
+    """Run exact-arrival search with both reviewed proof mechanisms.
+
+    State-bound pruning is limited to newly generated labels.  The certified
+    heuristic is passed through the normal priority calculation and therefore
+    changes ordering only.  Any authorization, scope, or counter mismatch is
+    surfaced as an explicit research failure or adapter error; it never falls
+    back to a silently weakened proof.
+    """
+
+    try:
+        research_session = create_non_fifo_temporal_composed_bound_heuristic_session(
+            planner,
+            request,
+            state_bound_certificate,
+            heuristic_certificate,
+            identity=identity,
+        )
+    except NonFifoTemporalAdapterError:
+        raise
+    except PlanningCancelled as error:
+        return _failure(
+            NonFifoSearchStatus.CANCELLED,
+            None,
+            None,
+            reason="cancelled",
+            error=error,
+        )
+    except NoRouteError as error:
+        return _failure(
+            NonFifoSearchStatus.EXHAUSTED,
+            None,
+            None,
+            reason="no_route",
+            error=error,
+        )
+    except TemporalSessionIdentityMismatch as error:
+        raise NonFifoTemporalAdapterError(
+            f"temporal session identity fence rejected: {error}"
+        ) from error
+    except Exception as error:  # pragma: no cover - defensive creation fence
+        return _failure(
+            NonFifoSearchStatus.EVALUATOR_FAILURE,
+            None,
+            None,
+            reason="session_creation_failure",
+            error=error,
+        )
+
+    return research_session.run()
+
+
 def _validate_research_mode(
     planner: TemporalLabelAStar,
     request: PlanningRequest,
@@ -975,6 +1143,50 @@ def _validate_heuristic_certificate(
         raise NonFifoTemporalAdapterError("certified heuristic request endpoints are invalid")
 
 
+def _validate_composed_certificates(
+    planner: TemporalLabelAStar,
+    request: PlanningRequest,
+    state_bound_certificate: TemporalStateBoundCertificate,
+    heuristic_certificate: TemporalHeuristicCertificate,
+    *,
+    identity: TemporalSessionIdentity | None,
+) -> None:
+    """Require two independently valid certificates for one exact scope."""
+
+    _validate_arrival_bound_certificate(
+        planner,
+        state_bound_certificate,
+        request=request,
+    )
+    _validate_heuristic_certificate(
+        planner,
+        heuristic_certificate,
+        request=request,
+    )
+    if not state_bound_certificate.scope.matches(heuristic_certificate.scope):
+        raise NonFifoTemporalAdapterError(
+            "composed adapter certificate scope mismatch"
+        )
+    expected_scope = planner.temporal_scope(request)
+    if not state_bound_certificate.scope.matches(expected_scope):
+        raise NonFifoTemporalAdapterError(
+            "composed adapter state-bound scope mismatch"
+        )
+    if not heuristic_certificate.scope.matches(expected_scope):
+        raise NonFifoTemporalAdapterError(
+            "composed adapter heuristic scope mismatch"
+        )
+    if identity is not None:
+        if identity.state_bound_policy_digest != state_bound_certificate.digest:
+            raise NonFifoTemporalAdapterError(
+                "composed adapter state-bound policy digest mismatch"
+            )
+        if identity.heuristic_policy_digest != heuristic_certificate.digest:
+            raise NonFifoTemporalAdapterError(
+                "composed adapter heuristic policy digest mismatch"
+            )
+
+
 def _failure(
     status: NonFifoSearchStatus,
     session_id: str | None,
@@ -1061,13 +1273,16 @@ __all__ = [
     "create_non_fifo_temporal_arrival_bounded_session",
     "create_non_fifo_temporal_bounded_session",
     "create_non_fifo_temporal_certified_heuristic_session",
+    "create_non_fifo_temporal_composed_bound_heuristic_session",
     "create_non_fifo_temporal_session",
     "restore_non_fifo_temporal_arrival_bounded_session",
     "restore_non_fifo_temporal_bounded_session",
     "restore_non_fifo_temporal_certified_heuristic_session",
+    "restore_non_fifo_temporal_composed_bound_heuristic_session",
     "restore_non_fifo_temporal_session",
     "run_non_fifo_temporal_arrival_bounded_search",
     "run_non_fifo_temporal_bounded_search",
     "run_non_fifo_temporal_certified_heuristic_search",
+    "run_non_fifo_temporal_composed_bound_heuristic_search",
     "run_non_fifo_temporal_search",
 ]
