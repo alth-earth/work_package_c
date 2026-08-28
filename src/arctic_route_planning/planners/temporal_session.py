@@ -235,6 +235,7 @@ class TemporalSessionIdentity:
     edge_evaluator_digest: str = ""
     dominance_policy_digest: str = ""
     state_bound_policy_digest: str = ""
+    heuristic_policy_digest: str = ""
     algorithm_version: str = _ALGORITHM_VERSION
 
     @classmethod
@@ -317,6 +318,11 @@ class TemporalSessionIdentity:
                 "state_bound_policy_digest",
                 "temporal-state-bound-disabled",
             ),
+            heuristic_policy_digest=getattr(
+                planner,
+                "heuristic_policy_digest",
+                "temporal-heuristic-default",
+            ),
         )
 
     @property
@@ -346,6 +352,7 @@ class TemporalSessionIdentity:
             self.edge_evaluator_digest,
             self.dominance_policy_digest,
             self.state_bound_policy_digest,
+            self.heuristic_policy_digest,
         )
         if (
             self.objective is None
@@ -939,6 +946,7 @@ def restore_session(
                     "rejection_reasons",
                     "eta_failure_reasons",
                     "dominance_rejection_reasons",
+                    "heuristic_rejection_reasons",
                     "queue_peak_by_elapsed_hour",
                     "state_bound_rejection_reasons",
                 }

@@ -30,6 +30,7 @@ from arctic_route_planning.errors import NoRouteError, PlanningCancelled
 from .errors import PlanningHorizonExceeded
 from .non_fifo_feasibility import NonFifoSearchStatus
 from .temporal_bounds import TemporalStateBoundCertificate
+from .temporal_heuristic_bounds import TemporalHeuristicCertificate
 from .temporal_label_astar import (
     TemporalCandidateResult,
     TemporalLabelAStar,
@@ -123,6 +124,7 @@ class NonFifoTemporalResearchCheckpoint:
     mode_digest: str = _ADAPTER_MODE_DIGEST
     schema_version: str = _ADAPTER_SCHEMA_VERSION
     state_bound_policy_digest: str = "temporal-state-bound-disabled"
+    heuristic_policy_digest: str = "temporal-heuristic-default"
     state_digest: str = ""
 
     def __post_init__(self) -> None:
@@ -135,6 +137,9 @@ class NonFifoTemporalResearchCheckpoint:
         state_bound_digest = getattr(self, "state_bound_policy_digest", None)
         if state_bound_digest != self.session_checkpoint.identity.state_bound_policy_digest:
             raise NonFifoTemporalAdapterError("non-FIFO adapter state-bound policy digest mismatch")
+        heuristic_digest = getattr(self, "heuristic_policy_digest", None)
+        if heuristic_digest != self.session_checkpoint.identity.heuristic_policy_digest:
+            raise NonFifoTemporalAdapterError("non-FIFO adapter heuristic policy digest mismatch")
         if self.session_checkpoint.state not in (
             TemporalSessionState.READY,
             TemporalSessionState.PAUSED,
@@ -153,6 +158,7 @@ class NonFifoTemporalResearchCheckpoint:
                 "schema_version": self.schema_version,
                 "mode_digest": self.mode_digest,
                 "state_bound_policy_digest": getattr(self, "state_bound_policy_digest", None),
+                "heuristic_policy_digest": getattr(self, "heuristic_policy_digest", None),
                 "session_checkpoint": self.session_checkpoint.state_digest,
             }
         )
@@ -167,6 +173,9 @@ class NonFifoTemporalResearchCheckpoint:
         state_bound_digest = getattr(self, "state_bound_policy_digest", None)
         if state_bound_digest != self.session_checkpoint.identity.state_bound_policy_digest:
             raise NonFifoTemporalAdapterError("non-FIFO adapter state-bound policy digest mismatch")
+        heuristic_digest = getattr(self, "heuristic_policy_digest", None)
+        if heuristic_digest != self.session_checkpoint.identity.heuristic_policy_digest:
+            raise NonFifoTemporalAdapterError("non-FIFO adapter heuristic policy digest mismatch")
         if self.state_digest != self._calculated_state_digest():
             raise TemporalSessionRestoreError("non-FIFO adapter checkpoint digest mismatch")
         self.session_checkpoint.assert_valid()
@@ -179,7 +188,7 @@ class NonFifoTemporalResearchCheckpoint:
 class NonFifoTemporalResearchSession:
     """Resumable wrapper around one actual exact-arrival temporal session."""
 
-    __slots__ = ("allow_state_bound", "planner", "request", "session")
+    __slots__ = ("allow_heuristic", "allow_state_bound", "planner", "request", "session")
 
     def __init__(
         self,
@@ -188,11 +197,13 @@ class NonFifoTemporalResearchSession:
         session: Any,
         *,
         allow_state_bound: bool = False,
+        allow_heuristic: bool = False,
     ) -> None:
         self.planner = planner
         self.request = request
         self.session = session
         self.allow_state_bound = allow_state_bound
+        self.allow_heuristic = allow_heuristic
 
     @property
     def state(self) -> TemporalSessionState:
@@ -269,6 +280,7 @@ class NonFifoTemporalResearchSession:
             self.session_id,
             candidate,
             allow_state_bound=self.allow_state_bound,
+            allow_heuristic=self.allow_heuristic,
         )
 
     def run(self) -> NonFifoTemporalResearchResult:
@@ -295,6 +307,7 @@ class NonFifoTemporalResearchSession:
         return NonFifoTemporalResearchCheckpoint(
             checkpoint_session(self.session),
             state_bound_policy_digest=self.identity.state_bound_policy_digest,
+            heuristic_policy_digest=self.identity.heuristic_policy_digest,
         )
 
 
@@ -346,6 +359,76 @@ def restore_non_fifo_temporal_session(
             f"non-FIFO temporal checkpoint fence rejected: {error}"
         ) from error
     return NonFifoTemporalResearchSession(planner, request, session)
+
+
+def create_non_fifo_temporal_certified_heuristic_session(
+    planner: TemporalLabelAStar,
+    request: PlanningRequest,
+    certificate: TemporalHeuristicCertificate,
+    *,
+    identity: TemporalSessionIdentity | None = None,
+) -> NonFifoTemporalResearchSession:
+    """Create the explicit non-FIFO session that may use a certified heuristic."""
+
+    _validate_heuristic_certificate(planner, certificate, request=request)
+    _validate_research_mode(planner, request, identity, allow_heuristic=True)
+    try:
+        session = planner.create_session(request, identity=identity)
+    except TemporalSessionIdentityMismatch as error:
+        raise NonFifoTemporalAdapterError(
+            f"temporal session identity fence rejected: {error}"
+        ) from error
+    return NonFifoTemporalResearchSession(
+        planner,
+        request,
+        session,
+        allow_heuristic=True,
+    )
+
+
+def restore_non_fifo_temporal_certified_heuristic_session(
+    planner: TemporalLabelAStar,
+    checkpoint: NonFifoTemporalResearchCheckpoint,
+    request: PlanningRequest,
+    certificate: TemporalHeuristicCertificate,
+    *,
+    identity: TemporalSessionIdentity | None = None,
+) -> NonFifoTemporalResearchSession:
+    """Restore the certified-heuristic session after all identity fences."""
+
+    if not isinstance(checkpoint, NonFifoTemporalResearchCheckpoint):
+        raise NonFifoTemporalAdapterError(
+            "checkpoint must be a NonFifoTemporalResearchCheckpoint"
+        )
+    _validate_heuristic_certificate(planner, certificate, request=request)
+    try:
+        checkpoint.assert_valid()
+    except (NonFifoTemporalAdapterError, TemporalSessionRestoreError) as error:
+        raise NonFifoTemporalAdapterError(
+            f"non-FIFO temporal checkpoint fence rejected: {error}"
+        ) from error
+    if checkpoint.heuristic_policy_digest != certificate.digest:
+        raise NonFifoTemporalAdapterError(
+            "non-FIFO temporal checkpoint heuristic digest mismatch"
+        )
+    _validate_research_mode(planner, request, identity, allow_heuristic=True)
+    try:
+        session = restore_session(
+            planner,
+            checkpoint.session_checkpoint,
+            request=request,
+            identity=identity,
+        )
+    except (TemporalSessionIdentityMismatch, TemporalSessionRestoreError) as error:
+        raise NonFifoTemporalAdapterError(
+            f"non-FIFO temporal checkpoint fence rejected: {error}"
+        ) from error
+    return NonFifoTemporalResearchSession(
+        planner,
+        request,
+        session,
+        allow_heuristic=True,
+    )
 
 
 def create_non_fifo_temporal_bounded_session(
@@ -466,6 +549,7 @@ def _candidate_result(
     candidate: TemporalCandidateResult,
     *,
     allow_state_bound: bool = False,
+    allow_heuristic: bool = False,
 ) -> NonFifoTemporalResearchResult:
     diagnostics = candidate.diagnostics
     if (
@@ -508,6 +592,21 @@ def _candidate_result(
             reason="state_bound_counter_inconsistent",
             error=violation,
         )
+    if allow_heuristic and (
+        diagnostics.heuristic_policy != "certified"
+        or not diagnostics.heuristic_scope_match
+        or diagnostics.heuristic_rejected
+    ):
+        violation = NonFifoTemporalSafetyViolation(
+            "certified heuristic adapter observed an unauthorized or rejected heuristic"
+        )
+        return _failure(
+            NonFifoSearchStatus.EVALUATOR_FAILURE,
+            session_id,
+            diagnostics,
+            reason="heuristic_rejected",
+            error=violation,
+        )
     return NonFifoTemporalResearchResult(
         status=NonFifoSearchStatus.GOAL_FOUND,
         candidate=candidate,
@@ -538,6 +637,62 @@ def run_non_fifo_temporal_search(
         research_session = create_non_fifo_temporal_session(
             planner,
             request,
+            identity=identity,
+        )
+    except NonFifoTemporalAdapterError:
+        raise
+    except PlanningCancelled as error:
+        return _failure(
+            NonFifoSearchStatus.CANCELLED,
+            None,
+            None,
+            reason="cancelled",
+            error=error,
+        )
+    except NoRouteError as error:
+        return _failure(
+            NonFifoSearchStatus.EXHAUSTED,
+            None,
+            None,
+            reason="no_route",
+            error=error,
+        )
+    except TemporalSessionIdentityMismatch as error:
+        raise NonFifoTemporalAdapterError(
+            f"temporal session identity fence rejected: {error}"
+        ) from error
+    except Exception as error:  # pragma: no cover - defensive creation fence
+        return _failure(
+            NonFifoSearchStatus.EVALUATOR_FAILURE,
+            None,
+            None,
+            reason="session_creation_failure",
+            error=error,
+        )
+
+    return research_session.run()
+
+
+def run_non_fifo_temporal_certified_heuristic_search(
+    planner: TemporalLabelAStar,
+    request: PlanningRequest,
+    certificate: TemporalHeuristicCertificate,
+    *,
+    identity: TemporalSessionIdentity | None = None,
+) -> NonFifoTemporalResearchResult:
+    """Run exact-arrival non-FIFO search with certified ordering only.
+
+    Unlike the ordinary adapter this path permits ``use_heuristic=True`` only
+    when the planner carries a complete admissible/consistent certificate.  It
+    still forbids dominance and state-bound pruning; the heuristic changes the
+    queue order, not the set of retained labels.
+    """
+
+    try:
+        research_session = create_non_fifo_temporal_certified_heuristic_session(
+            planner,
+            request,
+            certificate,
             identity=identity,
         )
     except NonFifoTemporalAdapterError:
@@ -686,13 +841,16 @@ def _validate_research_mode(
     identity: TemporalSessionIdentity | None,
     *,
     allow_state_bound: bool = False,
+    allow_heuristic: bool = False,
 ) -> None:
     if not isinstance(planner, TemporalLabelAStar):
         raise NonFifoTemporalAdapterError(
             "actual temporal adapter requires a TemporalLabelAStar instance"
         )
-    if request.use_heuristic:
+    if request.use_heuristic and not allow_heuristic:
         raise NonFifoTemporalAdapterError("non-FIFO adapter requires request.use_heuristic=False")
+    if allow_heuristic and not request.use_heuristic:
+        raise NonFifoTemporalAdapterError("certified heuristic adapter requires request.use_heuristic=True")
     if planner.dominance_policy.enabled:
         raise NonFifoTemporalAdapterError(
             "non-FIFO adapter requires TemporalDominancePolicy.disabled()"
@@ -704,6 +862,10 @@ def _validate_research_mode(
     if allow_state_bound and planner.state_bound_certificate is None:
         raise NonFifoTemporalAdapterError(
             "bounded non-FIFO adapter requires an explicit state-bound certificate"
+        )
+    if allow_heuristic and planner.heuristic_certificate is None:
+        raise NonFifoTemporalAdapterError(
+            "certified heuristic adapter requires an explicit heuristic certificate"
         )
     if identity is not None and not isinstance(identity, TemporalSessionIdentity):
         raise NonFifoTemporalAdapterError(
@@ -772,6 +934,51 @@ def _validate_arrival_bound_certificate(
         raise NonFifoTemporalAdapterError(
             "arrival-bounded adapter requires a complete arrival envelope"
         )
+
+
+def _validate_heuristic_certificate(
+    planner: TemporalLabelAStar,
+    certificate: TemporalHeuristicCertificate,
+    *,
+    request: PlanningRequest,
+) -> None:
+    """Validate the explicit lower-bound heuristic before starting a search."""
+
+    if not isinstance(certificate, TemporalHeuristicCertificate):
+        raise NonFifoTemporalAdapterError(
+            "certified heuristic adapter requires a TemporalHeuristicCertificate"
+        )
+    installed = planner.heuristic_certificate
+    if installed is None:
+        raise NonFifoTemporalAdapterError(
+            "certified heuristic adapter requires the certificate on the planner"
+        )
+    if installed.digest != certificate.digest:
+        raise NonFifoTemporalAdapterError("certified heuristic certificate digest mismatch")
+    if not certificate.usable:
+        raise NonFifoTemporalAdapterError(
+            "certified heuristic adapter requires a usable certified heuristic"
+        )
+    expected_scope = planner.temporal_scope(request)
+    if not certificate.permits(expected_scope):
+        raise NonFifoTemporalAdapterError(
+            "certified heuristic adapter certificate scope mismatch"
+        )
+    if certificate.objective != request.objective.value:
+        raise NonFifoTemporalAdapterError(
+            "certified heuristic adapter objective mismatch"
+        )
+    universe = {
+        (row, column)
+        for row in range(planner.grid.shape[0])
+        for column in range(planner.grid.shape[1])
+    }
+    if set(certificate.universe_nodes) != universe:
+        raise NonFifoTemporalAdapterError(
+            "certified heuristic certificate does not cover the finite grid"
+        )
+    if request.start not in universe or request.goal not in universe:
+        raise NonFifoTemporalAdapterError("certified heuristic request endpoints are invalid")
 
 
 def _failure(
@@ -859,11 +1066,14 @@ __all__ = [
     "NonFifoTemporalStepEvidence",
     "create_non_fifo_temporal_arrival_bounded_session",
     "create_non_fifo_temporal_bounded_session",
+    "create_non_fifo_temporal_certified_heuristic_session",
     "create_non_fifo_temporal_session",
     "restore_non_fifo_temporal_arrival_bounded_session",
     "restore_non_fifo_temporal_bounded_session",
+    "restore_non_fifo_temporal_certified_heuristic_session",
     "restore_non_fifo_temporal_session",
     "run_non_fifo_temporal_arrival_bounded_search",
     "run_non_fifo_temporal_bounded_search",
+    "run_non_fifo_temporal_certified_heuristic_search",
     "run_non_fifo_temporal_search",
 ]
