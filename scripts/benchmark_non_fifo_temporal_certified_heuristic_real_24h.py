@@ -350,7 +350,8 @@ def _run(args: argparse.Namespace) -> int:
             raise SystemExit("worker requires --objective")
         print(json.dumps(_jsonable(_worker(args)), ensure_ascii=False, sort_keys=True))
         return 0
-    point = _load_m8_runner()
+    m8 = _load_m8_runner()
+    point = m8._load_script("benchmark_temporal_dominance_real.py", "c_m9_point_runner")
     fixture = point._load_fixture(_fixture_args(args))
     selected = (ObjectiveMode(args.objective),) if args.objective else OBJECTIVES
     identity = _identity(args, fixture, root, selected)
