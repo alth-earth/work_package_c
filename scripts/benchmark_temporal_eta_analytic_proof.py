@@ -233,7 +233,7 @@ def _case(profile: str, objective: str, scenario: str) -> dict[str, Any]:
         diagnostic_reason = f"{reason}:{failure_class}"
         coverage = False
         evaluator = False
-        expected_status = EtaIntervalStatus.UNCERTAIN_NO_INTERVAL_PROOF.value
+        expected_status = EtaIntervalStatus.UNCERTAIN_COVERAGE.value
     elif scenario == "scope_mismatch":
         expected_scope = scope
         active_scope = TemporalScope.from_mapping({**scope.mapping, "goal": "different-goal"})
