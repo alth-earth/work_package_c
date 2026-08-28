@@ -11,9 +11,9 @@ contraction proof.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
-from math import isfinite, nextafter
+from math import isfinite, nextafter, ulp
 from typing import Any
 
 from arctic_route_planning.cost import VesselPerformanceModel
@@ -21,6 +21,13 @@ from arctic_route_planning.domain.models import PlannerConfig
 from arctic_route_planning.grid import GeoPoint, haversine_km
 from arctic_route_planning.risk.sampler import RiskIntervalSample, RiskSampler
 
+from .eta_analytic import (
+    EtaAnalyticCertificate,
+    NavigabilityStatus,
+    SlopeInterval,
+    derive_operator_sensitivity,
+    qualify_analytic_eta,
+)
 from .eta_interval import (
     EtaInterval,
     EtaIntervalCertificate,
@@ -72,6 +79,7 @@ class EtaOperatorIntervalEvidence:
     status: EtaIntervalStatus = EtaIntervalStatus.UNCERTAIN_NO_INTERVAL_PROOF
     reason: str | None = None
     certificate: EtaIntervalCertificate | None = None
+    analytic_certificate: EtaAnalyticCertificate | None = None
     schema_version: str = "c.p0.1-eta-operator-interval-evidence.v1"
 
     def __post_init__(self) -> None:
@@ -133,9 +141,15 @@ class EtaOperatorIntervalEvidence:
                         "risk_lower": sample.risk_lower,
                         "risk_upper": sample.risk_upper,
                         "confidence_lower": sample.confidence_lower,
+                        "confidence_upper": sample.confidence_upper,
                         "speed_lower": sample.environment_speed_factor_lower,
                         "speed_upper": sample.environment_speed_factor_upper,
+                        "risk_slope_lower": sample.risk_slope_lower,
+                        "risk_slope_upper": sample.risk_slope_upper,
+                        "speed_slope_lower": sample.environment_speed_factor_slope_lower,
+                        "speed_slope_upper": sample.environment_speed_factor_slope_upper,
                         "hard_mask_possible": sample.hard_mask_possible,
+                        "navigability_status": sample.navigability_status,
                         "source_risk_ids": sample.source_risk_ids,
                         "covered_frame_times": sample.covered_frame_times,
                         "coverage_complete": sample.coverage_complete,
@@ -156,6 +170,11 @@ class EtaOperatorIntervalEvidence:
                 "status": self.status,
                 "reason": self.reason,
                 "certificate_digest": self.certificate_digest,
+                "analytic_certificate_digest": (
+                    self.analytic_certificate.digest
+                    if self.analytic_certificate is not None
+                    else None
+                ),
             }
         )
 
@@ -169,7 +188,17 @@ class EtaOperatorIntervalEvidence:
 
     @property
     def permits_dominance(self) -> bool:
+        if self.analytic_certificate is not None:
+            return self.analytic_certificate.permits_dominance
         return self.authorization_usable
+
+    @property
+    def fifo_status(self) -> str | None:
+        """Return the derived FIFO status when analytic evidence is present."""
+
+        if self.analytic_certificate is None:
+            return None
+        return self.analytic_certificate.fifo_status.value
 
 
 class TemporalEtaIntervalEvaluator:
@@ -522,6 +551,132 @@ class TemporalEtaIntervalEvaluator:
 
     __call__ = evaluate
 
+    def evaluate_analytic(
+        self,
+        departure_interval: datetime | tuple[datetime, datetime] | EtaInterval,
+        travel_hour_domain: EtaInterval,
+        edge_sample_points: Sequence[GeoPoint] | None = None,
+        scope: Mapping[str, Any] | TemporalScope | None = None,
+        *,
+        endpoint_residuals: tuple[float, float] | None = None,
+    ) -> EtaOperatorIntervalEvidence:
+        """Derive ETA-root and FIFO evidence without caller proof flags.
+
+        The historical :meth:`evaluate` method remains available for the
+        finite qualification runner.  This method only authorizes a proof
+        when the scope explicitly names the certified evaluator, interval
+        samples carry complete coverage, frame/threshold behavior is
+        continuous, and the sensitivity bounds mechanically imply both a
+        unique root and a non-negative arrival slope.
+        """
+
+        active_scope = TemporalScope.from_mapping(scope or self.scope)
+        base = self.evaluate(
+            departure_interval,
+            travel_hour_domain,
+            edge_sample_points=edge_sample_points,
+            scope=active_scope,
+            contraction_bound=0.0,
+            evaluator_certified=True,
+            continuity_certified=True,
+            endpoint_residuals=endpoint_residuals,
+        )
+        policy_digest = canonical_digest(self.eta_policy)
+        samples = base.interval_samples
+        complete = bool(samples) and all(sample.usable for sample in samples)
+        hard_values = tuple(sample.hard_mask_possible for sample in samples)
+        if complete and all(not value for value in hard_values):
+            navigation = NavigabilityStatus.ALWAYS_NAVIGABLE
+        elif complete and hard_values and all(hard_values):
+            navigation = NavigabilityStatus.ALWAYS_BLOCKED
+        else:
+            navigation = NavigabilityStatus.TRANSITION_OR_UNKNOWN
+
+        evaluator_certified = bool(
+            complete
+            and active_scope.mapping.get("evaluator_certification")
+            == "certified:c.temporal-evaluator.v1"
+            and all(
+                sample.evaluator_digest == self.risk_sampler.interval_evaluator_digest
+                for sample in samples
+            )
+        )
+        continuity_certified = bool(
+            complete
+            and navigation is NavigabilityStatus.ALWAYS_NAVIGABLE
+            and all(
+                _collapsed_interval(
+                    sample.environment_speed_factor_lower,
+                    sample.environment_speed_factor_upper,
+                )
+                and _collapsed_interval(sample.confidence_lower, sample.confidence_upper)
+                and sample.risk_slope_lower is not None
+                and sample.risk_slope_upper is not None
+                and sample.environment_speed_factor_slope_lower is not None
+                and sample.environment_speed_factor_slope_upper is not None
+                for sample in samples
+            )
+        )
+
+        phi_departure: SlopeInterval | None = None
+        phi_travel: SlopeInterval | None = None
+        if complete and base.edge_distance_km is not None:
+            slope_lower = min(
+                sample.environment_speed_factor_slope_lower or 0.0
+                for sample in samples
+            )
+            slope_upper = max(
+                sample.environment_speed_factor_slope_upper or 0.0
+                for sample in samples
+            )
+            try:
+                phi_departure, phi_travel, _ = derive_operator_sensitivity(
+                    edge_distance_km=base.edge_distance_km,
+                    vessel_model=self.vessel_model,
+                    speed_factor_slope=SlopeInterval(slope_lower, slope_upper),
+                )
+            except ValueError:
+                phi_departure = None
+                phi_travel = None
+
+        partition_digest = canonical_digest(
+            {
+                "boundaries": base.partition_boundaries,
+                "sample_digests": tuple(
+                    {
+                        "start": sample.start,
+                        "end": sample.end,
+                        "frames": sample.covered_frame_times,
+                        "sources": sample.source_risk_ids,
+                    }
+                    for sample in samples
+                ),
+            }
+        )
+        certificate = qualify_analytic_eta(
+            domain=travel_hour_domain,
+            image=base.image,
+            scope=active_scope,
+            expected_scope=self.scope,
+            policy_digest=policy_digest,
+            partition_digest=partition_digest,
+            coverage_complete=complete,
+            evaluator_certified=evaluator_certified,
+            continuity_certified=continuity_certified,
+            navigation=navigation,
+            phi_departure_slope=phi_departure,
+            phi_travel_slope=phi_travel,
+            endpoint_residuals=endpoint_residuals,
+        )
+        return replace(
+            base,
+            analytic_certificate=certificate,
+            status=certificate.root_status,
+            reason=certificate.reason,
+            evaluator_certified=certificate.evaluator_certified,
+            continuity_certified=certificate.continuity_certified,
+            contraction_bound=certificate.contraction_bound,
+        )
     def _sample_point(
         self,
         point: GeoPoint,
@@ -666,6 +821,15 @@ class TemporalEtaIntervalEvaluator:
             reason=reason,
             certificate=certificate,
         )
+
+
+def _collapsed_interval(lower: float | None, upper: float | None) -> bool:
+    """Recognize an outward-rounded constant without hiding real variation."""
+
+    if lower is None or upper is None or not isfinite(lower) or not isfinite(upper):
+        return False
+    scale = max(1.0, abs(lower), abs(upper))
+    return upper >= lower and upper - lower <= 4.0 * ulp(scale)
 
 
 __all__ = ["EtaOperatorIntervalEvidence", "TemporalEtaIntervalEvaluator"]
