@@ -1762,3 +1762,10 @@ FIFO、dominance 或 candidate 资格。
 `REAL_INPUT_FIFO_VIOLATED` 不变，dominance 仍默认关闭，candidate/Winter/P2.1/P3/ARA*
 继续冻结。下一步只能另立带资源限界或 corridor/envelope 证明的 P0.2 计划，不自动启用任何
 生产路径。
+
+**验证收口。** 新 runner/adapter/session/non-FIFO/qualification 聚焦矩阵为 `107 passed`，
+隔离 worktree 全量 pytest 为 `453 passed, 3 skipped`；3 个 skip 仍仅来自退休 M2J
+orchestrator 脚本路径缺失。Ruff、`uv lock --check`、CLI smoke、active/archive import
+boundary 和 `git diff --check` 通过。原样 `UV_OFFLINE=1 make check` 因本隔离 worktree 没有
+`.mamba-env/bin/uv` 以 exit 127 阻塞，未修改环境；`uv sync --check --locked` 能解析并明确
+报告环境过期/需同步，故此环境边界不被误记为 Make 全通过。
