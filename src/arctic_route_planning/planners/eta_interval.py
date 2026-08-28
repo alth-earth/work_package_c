@@ -102,6 +102,10 @@ class EtaIntervalCertificate:
     continuity_certified: bool = False
     reason: str | None = None
     schema_version: str = "c.temporal-eta-interval-certificate.v1"
+    policy_digest: str | None = None
+    partition_digest: str | None = None
+    boundary_evidence: tuple[str, ...] = ()
+    endpoint_residuals: tuple[float, float] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "status", EtaIntervalStatus(self.status))
@@ -120,6 +124,16 @@ class EtaIntervalCertificate:
             raise ValueError("evaluator_certified must be boolean")
         if not isinstance(self.continuity_certified, bool):
             raise ValueError("continuity_certified must be boolean")
+        if self.policy_digest is not None and not self.policy_digest:
+            raise ValueError("policy_digest must be non-empty when supplied")
+        if self.partition_digest is not None and not self.partition_digest:
+            raise ValueError("partition_digest must be non-empty when supplied")
+        object.__setattr__(self, "boundary_evidence", tuple(self.boundary_evidence))
+        if self.endpoint_residuals is not None and (
+            len(self.endpoint_residuals) != 2
+            or any(not isfinite(value) for value in self.endpoint_residuals)
+        ):
+            raise ValueError("endpoint residuals must contain two finite values")
 
     @property
     def digest(self) -> str:
@@ -136,6 +150,10 @@ class EtaIntervalCertificate:
                 "contraction_bound": self.contraction_bound,
                 "continuity_certified": self.continuity_certified,
                 "reason": self.reason,
+                "policy_digest": self.policy_digest,
+                "partition_digest": self.partition_digest,
+                "boundary_evidence": self.boundary_evidence,
+                "endpoint_residuals": self.endpoint_residuals,
             }
         )
 
@@ -180,8 +198,25 @@ class EtaIntervalCertificate:
             and self.reason is None
         )
 
+    @property
+    def authorization_usable(self) -> bool:
+        """Whether this certificate is strong enough for temporal dominance.
+
+        A continuous endpoint sign change establishes existence only.  It does
+        not establish a unique arrival operator, so the dominance sidecar
+        accepts only the contraction-backed unique-root status.  ``usable``
+        remains the broader historical fixed-point evidence predicate for
+        compatibility with the finite qualification runner.
+        """
+
+        return self.usable and self.status is EtaIntervalStatus.ROOT_EXISTS_UNIQUE
+
+    @property
+    def permits_dominance(self) -> bool:
+        return self.authorization_usable
+
     def permits(self, expected_scope: Mapping[str, Any] | TemporalScope) -> bool:
-        return self.usable and self.scope.matches(expected_scope)
+        return self.authorization_usable and self.scope.matches(expected_scope)
 
 
 def qualify_eta_interval(
@@ -195,6 +230,9 @@ def qualify_eta_interval(
     contraction_bound: float | None = None,
     continuity_certified: bool = False,
     endpoint_residuals: tuple[float, float] | None = None,
+    policy_digest: str | None = None,
+    partition_digest: str | None = None,
+    boundary_evidence: Iterable[str] = (),
 ) -> EtaIntervalCertificate:
     """Qualify a fixed-point domain without silently promoting samples.
 
@@ -211,6 +249,7 @@ def qualify_eta_interval(
     """
 
     active_scope = TemporalScope.from_mapping(scope or {"scope": "unbound"})
+    evidence = tuple(str(item) for item in boundary_evidence)
     if not isfinite(tolerance_seconds) or tolerance_seconds < 0.0:
         raise ValueError("ETA interval tolerance must be finite and non-negative")
     if contraction_bound is not None and (
@@ -234,6 +273,10 @@ def qualify_eta_interval(
             contraction_bound=contraction_bound,
             continuity_certified=continuity_certified,
             reason="interval_domain_coverage_incomplete",
+            policy_digest=policy_digest,
+            partition_digest=partition_digest,
+            boundary_evidence=evidence,
+            endpoint_residuals=endpoint_residuals,
         )
 
     try:
@@ -252,6 +295,10 @@ def qualify_eta_interval(
             contraction_bound=contraction_bound,
             continuity_certified=continuity_certified,
             reason=f"evaluation_failed:{type(error).__name__}",
+            policy_digest=policy_digest,
+            partition_digest=partition_digest,
+            boundary_evidence=evidence,
+            endpoint_residuals=endpoint_residuals,
         )
 
     if image.disjoint(domain):
@@ -275,6 +322,10 @@ def qualify_eta_interval(
                 if status is EtaIntervalStatus.ROOT_EXCLUDED
                 else "interval_extension_unverified"
             ),
+            policy_digest=policy_digest,
+            partition_digest=partition_digest,
+            boundary_evidence=evidence,
+            endpoint_residuals=endpoint_residuals,
         )
 
     if (
@@ -293,6 +344,10 @@ def qualify_eta_interval(
             evaluator_certified=evaluator_certified,
             contraction_bound=contraction_bound,
             continuity_certified=continuity_certified,
+            policy_digest=policy_digest,
+            partition_digest=partition_digest,
+            boundary_evidence=evidence,
+            endpoint_residuals=endpoint_residuals,
         )
 
     endpoint_brackets = endpoint_residuals is not None and (
@@ -311,6 +366,10 @@ def qualify_eta_interval(
             evaluator_certified=evaluator_certified,
             contraction_bound=contraction_bound,
             continuity_certified=continuity_certified,
+            policy_digest=policy_digest,
+            partition_digest=partition_digest,
+            boundary_evidence=evidence,
+            endpoint_residuals=endpoint_residuals,
         )
 
     status = (
@@ -329,6 +388,10 @@ def qualify_eta_interval(
         contraction_bound=contraction_bound,
         continuity_certified=continuity_certified,
         reason="missing_certified_contraction_or_continuity_proof",
+        policy_digest=policy_digest,
+        partition_digest=partition_digest,
+        boundary_evidence=evidence,
+        endpoint_residuals=endpoint_residuals,
     )
 
 
@@ -353,6 +416,8 @@ class EtaIntervalQualification:
     boundary_continuity_certified: bool = False
     reason: str | None = None
     schema_version: str = "c.temporal-eta-qualification.v1"
+    policy_digest: str | None = None
+    boundary_evidence: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "status", EtaIntervalStatus(self.status))
@@ -378,6 +443,9 @@ class EtaIntervalQualification:
             raise ValueError("ETA qualification segments do not cover the complete domain")
         if not isinstance(self.boundary_digest, str) or not self.boundary_digest:
             raise ValueError("boundary digest must be non-empty")
+        if self.policy_digest is not None and not self.policy_digest:
+            raise ValueError("policy_digest must be non-empty when supplied")
+        object.__setattr__(self, "boundary_evidence", tuple(self.boundary_evidence))
 
     @property
     def digest(self) -> str:
@@ -392,6 +460,8 @@ class EtaIntervalQualification:
                 "boundary_digest": self.boundary_digest,
                 "boundary_continuity_certified": self.boundary_continuity_certified,
                 "reason": self.reason,
+                "policy_digest": self.policy_digest,
+                "boundary_evidence": self.boundary_evidence,
             }
         )
 
@@ -407,8 +477,20 @@ class EtaIntervalQualification:
             and all(certificate.scope.matches(self.scope) for certificate in self.certificates)
         )
 
+    @property
+    def authorization_usable(self) -> bool:
+        """Strict dominance authorization: every segment must be unique."""
+
+        return self.usable and all(
+            certificate.authorization_usable for certificate in self.certificates
+        )
+
+    @property
+    def permits_dominance(self) -> bool:
+        return self.authorization_usable
+
     def permits(self, expected_scope: Mapping[str, Any] | TemporalScope) -> bool:
-        return self.usable and self.scope.matches(expected_scope)
+        return self.authorization_usable and self.scope.matches(expected_scope)
 
 
 def partition_eta_domain(
@@ -443,6 +525,7 @@ def qualify_eta_partition(
     boundary_continuity_certified: bool = False,
     endpoint_residuals: Mapping[int, tuple[float, float]] | None = None,
     boundary_reasons: Iterable[str] = (),
+    policy_digest: str | None = None,
 ) -> EtaIntervalQualification:
     """Qualify every segment and aggregate only independently proven claims.
 
@@ -468,6 +551,11 @@ def qualify_eta_partition(
             contraction_bound=contraction_bound,
             continuity_certified=continuity_certified,
             endpoint_residuals=(endpoint_residuals or {}).get(index),
+            policy_digest=policy_digest,
+            partition_digest=canonical_digest(
+                {"domain": segment, "boundaries": boundary_values}
+            ),
+            boundary_evidence=reasons,
         )
         for index, segment in enumerate(segments)
     )
@@ -525,6 +613,8 @@ def qualify_eta_partition(
         ),
         boundary_continuity_certified=boundary_continuity_certified,
         reason=reason,
+        policy_digest=policy_digest,
+        boundary_evidence=reasons,
     )
 
 
