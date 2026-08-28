@@ -281,6 +281,30 @@ def test_pareto_prunes_only_new_dominated_label_at_same_exact_state() -> None:
     assert result.label.costs == pytest.approx((1.0, 5.0))
 
 
+def test_pareto_keeps_equal_cost_paths_for_auditability() -> None:
+    graph = {"start": ("left", "right"), "left": ("join",), "right": ("join",), "join": ()}
+
+    def evaluate(start: str, end: str, arrival: datetime):
+        if start == "start":
+            return NonFifoParetoTransition(arrival + timedelta(hours=1), (1.0, 1.0))
+        return NonFifoParetoTransition(arrival + timedelta(hours=1), (1.0, 1.0))
+
+    result = search_non_fifo_pareto(
+        start="start",
+        goal="join",
+        departure_time=T0,
+        neighbors=graph.__getitem__,
+        evaluate_edge=evaluate,
+        objective_count=2,
+        pareto_pruning=True,
+    )
+
+    join_labels = [label for label in result.labels if label.node == "join"]
+    assert result.status is NonFifoSearchStatus.GOAL_FOUND
+    assert len(join_labels) == 2
+    assert result.pareto_pruned == 0
+
+
 def test_pareto_never_cross_prunes_different_exact_arrivals() -> None:
     graph = {"start": ("join", "join"), "join": ("goal",), "goal": ()}
     calls = 0

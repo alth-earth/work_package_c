@@ -473,10 +473,7 @@ def search_non_fifo_pareto(
                 (*label.transitions, transition),
             )
             frontier = labels_by_key.setdefault(next_label.exact_key, [])
-            if pareto_pruning and any(
-                existing.dominates(next_label) or existing.costs == next_label.costs
-                for existing in frontier
-            ):
+            if pareto_pruning and any(existing.dominates(next_label) for existing in frontier):
                 pareto_pruned += 1
                 continue
             if total_labels >= max_labels:
