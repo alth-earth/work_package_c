@@ -4148,3 +4148,29 @@ CLI smoke、active/archive `temporal_session` import boundary 和 `git diff --ch
 原样 `UV_OFFLINE=1 make check` 仅被隔离 worktree 缺少
 `.mamba-env/bin/uv` 阻塞，未修改环境或 lock。所有实验产物留在 `.runtime/experiments/`，
 未写正式 latest/frozen 路径，未 push。
+
+### 【2026-08-30 | PLANNED】P0.2-M33：proof-carrying environmental speed envelope
+
+M31 的 edge lower-time envelope 只使用 vessel maximum speed，M32 的 heading-aware
+heuristic 在真实 6h 已没有额外 expansion/queue 收益；24h exact-arrival 资源边界仍未
+解决。本轮不继续调 priority，而是利用已有 `RiskSampler._sample_interval` 研究一个更紧、
+仍保守的 C 内部边界：在完整 RiskFrame 时间域和 edge spatial sample points 上认证
+environment speed-factor upper envelope，将其通过单调 `VesselPerformanceModel` 转为每条
+有向边的 travel-hour lower bound，再复用既有 edge/corridor pre-gating。
+
+证书必须绑定完整 `TemporalScope`、RiskFrame interval evaluator digest、vessel model、
+grid/edge geometry、时间 partition、hard-mask/navigability、search limits 和 proof digest。
+只在所有 edge sample points coverage complete、speed upper bound finite/positive、evaluator
+known、scope 完全匹配且未跨越未证明的 frame/hard-mask discontinuity 时授权；缺失、未知、
+非有限或可能不可航的边保持 live，不从图中静默删除。新生成转移只有在 downward-rounded
+`elapsed + edge_lower > destination arrival upper` 且严格成立时才可在 edge evaluator 之前
+拒绝；不删除已扩展 label、predecessor、不同 exact arrival 或 goal evidence。
+
+先以 synthetic finite graph 对照独立 zero-heuristic exact-arrival oracle，验证 interval
+upper envelope 不低估、路线/ETA/业务字段/失败语义/确定性不变，certified edge 至少产生
+一次 pre-gating，incomplete/hard-mask/scope mismatch/non-finite fixture 的 pruning 必须
+为零。随后只在冻结 145 帧 holdout/development 的 `executable_0_6h` 做单 worker 诊断；
+24h 不自动启动，除非 6h 显示可解释的额外 frontier 收益且语义证据完整。继续保持
+`dominance=disabled`、`50k/100k/50k/400k` 上限、candidate/Winter 关闭，reference
+Dijkstra 只作正确性证据。若速度 envelope 无净收益或资源证据不完整，记录诊断边界并
+停止继续调参，转向更强 corridor/state bound 或 test-only P0.2 non-FIFO 设计。
