@@ -1018,6 +1018,7 @@ def restore_session(
                     "dominance_rejection_reasons",
                     "heuristic_rejection_reasons",
                     "queue_peak_by_elapsed_hour",
+                    "queue_compaction_rejection_reasons",
                     "state_bound_rejection_reasons",
                 }
                 else getattr(checkpoint.diagnostics, field.name)
