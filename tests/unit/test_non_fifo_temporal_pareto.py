@@ -325,6 +325,75 @@ def test_actual_bridge_accepts_explicit_state_bound_and_prunes_new_labels_only()
     assert bounded.diagnostics.state_bound_pruned > 0
 
 
+def test_actual_bridge_pre_gates_only_certified_partial_edges() -> None:
+    request = _research_request()
+    baseline = run_non_fifo_temporal_pareto_search(
+        _configured_planner(), request, pareto_pruning=True
+    )
+    planner = _configured_planner()
+    scope = planner.temporal_scope(request)
+    nodes = tuple((row, column) for row in range(2) for column in range(3))
+    certificate = TemporalStateBoundCertificate.certified(
+        scope,
+        nodes,
+        proof_digest="actual-pareto-transition-bound-v1",
+        arrival_upper_hours=tuple((node, 6.0) for node in nodes),
+        edge_lower_hours=(((1, 0), (1, 1), 100.0),),
+        edge_bound_partial=True,
+    )
+
+    bounded = run_non_fifo_temporal_pareto_search(
+        planner,
+        request,
+        pareto_pruning=True,
+        state_bound_certificate=certificate,
+    )
+
+    assert baseline.status is NonFifoSearchStatus.GOAL_FOUND
+    assert bounded.status is NonFifoSearchStatus.GOAL_FOUND
+    assert bounded.semantic_digest == baseline.semantic_digest
+    assert bounded.state_bound_edge_checks > 0
+    assert bounded.state_bound_edge_pruned == 1
+    assert bounded.diagnostics.state_bound_rejected == 0
+
+
+def test_actual_bridge_checkpoint_preserves_transition_bound_counters() -> None:
+    planner = _configured_planner()
+    request = _research_request()
+    scope = planner.temporal_scope(request)
+    nodes = tuple((row, column) for row in range(2) for column in range(3))
+    certificate = TemporalStateBoundCertificate.certified(
+        scope,
+        nodes,
+        proof_digest="actual-pareto-transition-checkpoint-v1",
+        arrival_upper_hours=tuple((node, 6.0) for node in nodes),
+        edge_lower_hours=(((1, 0), (1, 1), 100.0),),
+        edge_bound_partial=True,
+    )
+    session = create_non_fifo_temporal_pareto_session(
+        planner,
+        request,
+        pareto_pruning=True,
+        state_bound_certificate=certificate,
+    )
+    while session.context.diagnostics.state_bound_edge_pruned == 0:
+        assert session.advance(expansion_slice=1) is None
+    checkpoint = session.checkpoint()
+    assert checkpoint.state_bound_edge_checks > 0
+    assert checkpoint.state_bound_edge_pruned == 1
+
+    restored = restore_non_fifo_temporal_pareto_session(
+        planner,
+        request,
+        checkpoint,
+        state_bound_certificate=certificate,
+    )
+    while (result := restored.advance(expansion_slice=1)) is None:
+        pass
+    assert result.status is NonFifoSearchStatus.GOAL_FOUND
+    assert result.state_bound_edge_pruned == 1
+
+
 def test_actual_bridge_accepts_explicit_heuristic_ordering_without_pruning() -> None:
     planner = _configured_planner()
     request = _research_request()

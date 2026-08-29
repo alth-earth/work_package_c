@@ -301,6 +301,20 @@ class NonFifoTemporalParetoResult:
 
         return self.raw_result.selection_only
 
+    @property
+    def state_bound_edge_checks(self) -> int:
+        """Number of transition-level bound checks made before edge evaluation."""
+
+        diagnostics = self.diagnostics
+        return int(getattr(diagnostics, "state_bound_edge_checks", 0) or 0)
+
+    @property
+    def state_bound_edge_pruned(self) -> int:
+        """Number of newly generated transitions rejected before edge evaluation."""
+
+        diagnostics = self.diagnostics
+        return int(getattr(diagnostics, "state_bound_edge_pruned", 0) or 0)
+
 
 @dataclass(frozen=True, slots=True)
 class NonFifoTemporalParetoCheckpoint:
@@ -313,6 +327,8 @@ class NonFifoTemporalParetoCheckpoint:
     state_bound_checks: int = 0
     state_bound_pruned: int = 0
     state_bound_arrival_pruned: int = 0
+    state_bound_edge_checks: int = 0
+    state_bound_edge_pruned: int = 0
     state_bound_rejected: int = 0
     state_bound_rejection_reasons: tuple[tuple[str, int], ...] = ()
     incumbent_bound_digest: str = _INCUMBENT_BOUND_DISABLED_DIGEST
@@ -343,6 +359,8 @@ class NonFifoTemporalParetoCheckpoint:
             "state_bound_checks",
             "state_bound_pruned",
             "state_bound_arrival_pruned",
+            "state_bound_edge_checks",
+            "state_bound_edge_pruned",
             "state_bound_rejected",
         ):
             value = getattr(self, name)
@@ -378,6 +396,8 @@ class NonFifoTemporalParetoCheckpoint:
                 "state_bound_checks": getattr(self, "state_bound_checks", 0),
                 "state_bound_pruned": getattr(self, "state_bound_pruned", 0),
                 "state_bound_arrival_pruned": getattr(self, "state_bound_arrival_pruned", 0),
+                "state_bound_edge_checks": getattr(self, "state_bound_edge_checks", 0),
+                "state_bound_edge_pruned": getattr(self, "state_bound_edge_pruned", 0),
                 "state_bound_rejected": getattr(self, "state_bound_rejected", 0),
                 "state_bound_rejection_reasons": getattr(self, "state_bound_rejection_reasons", ()),
                 "incumbent_bound_digest": getattr(
@@ -537,6 +557,8 @@ class NonFifoTemporalParetoResearchSession:
             state_bound_checks=diagnostics.state_bound_checks,
             state_bound_pruned=diagnostics.state_bound_pruned,
             state_bound_arrival_pruned=diagnostics.state_bound_arrival_pruned,
+            state_bound_edge_checks=diagnostics.state_bound_edge_checks,
+            state_bound_edge_pruned=diagnostics.state_bound_edge_pruned,
             state_bound_rejected=diagnostics.state_bound_rejected,
             state_bound_rejection_reasons=diagnostics.state_bound_rejection_reasons,
             incumbent_bound_digest=self.session.identity.incumbent_bound_digest,
@@ -670,6 +692,8 @@ def restore_non_fifo_temporal_pareto_session(
     context.diagnostics.state_bound_checks = checkpoint.state_bound_checks
     context.diagnostics.state_bound_pruned = checkpoint.state_bound_pruned
     context.diagnostics.state_bound_arrival_pruned = checkpoint.state_bound_arrival_pruned
+    context.diagnostics.state_bound_edge_checks = getattr(checkpoint, "state_bound_edge_checks", 0)
+    context.diagnostics.state_bound_edge_pruned = getattr(checkpoint, "state_bound_edge_pruned", 0)
     context.diagnostics.state_bound_rejected = checkpoint.state_bound_rejected
     context.diagnostics.state_bound_rejection_reasons = dict(
         checkpoint.state_bound_rejection_reasons
@@ -903,6 +927,17 @@ def _callbacks(
     ) -> NonFifoParetoTransition:
         node, incoming_code = _state_parts(state)
         next_node, _next_heading = _state_parts(next_state)
+        if state_bound_certificate is not None and planner._should_prune_state_bound_transition(
+            node,
+            next_node,
+            arrival_time,
+            request,
+            context=context,
+        ):
+            # The transition has not entered the Pareto session and the
+            # expensive edge evaluator has not run.  Missing edge evidence
+            # remains live because ``allows_transition`` is fail-closed.
+            raise NonFifoEvaluationSkipped("state_bound_edge")
         previous_heading = planner._previous_heading(node, incoming_code)
         try:
             traversal = planner._evaluate_edge(
