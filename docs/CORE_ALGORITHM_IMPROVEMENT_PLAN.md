@@ -3510,3 +3510,30 @@ fail、M19/M20/M21/M22/M23 历史结论保持不变。
 保守 corridor/envelope”计划；若仍无法证明，则转入独立 P0.2 label-correcting/Pareto
 实现计划。不得自动重开 Winter、提高 `50k/100k/50k/400k` 上限、启用 candidate 或写入
 formal latest/replanning baseline/frozen artifact。
+
+### 【2026-08-29 | PLANNED】P0.2-M25：selected-route terminal incumbent bound
+
+M24 的真实 qualification 证明 incumbent bound 在没有 exact goal-arrival 证明时必须拒绝，
+因此真实 Pareto frontier 仍无法靠该证书减小。为响应“适当放宽非关键门禁以加快研究”，
+本轮只新增一个显式的 C 内部 `selected-route-only` 研究模式：goal 是 terminal state，
+允许对不同 exact goal arrival 的已发现终点 label 做最终选择比较；该模式不声称完整
+exact-arrival frontier 等价，也绝不改变默认 Pareto/session 或正式 planner。
+
+**安全边界。** 新增 proof-carrying terminal lower-bound certificate，绑定完整
+`TemporalScope`、goal、objective count、lexicographic lower-bound vector、节点覆盖、
+evaluator/proof digest 和 `selection_only=true`。只有证书完整且可证明、候选 label 的
+`costs + lower_bound` 严格劣于已有终点 label 时，才丢弃尚未入队的新 label；等价成本保留
+以避免改变确定性 tie-break。goal 没有后继，因此跨 arrival 的比较仅用于选定终点，不被
+包装成 Pareto frontier 证明。任何 scope/coverage/proof/evaluator/checkpoint 漂移、非有限
+下界、取消、失败或资源上限都 fail-closed；已扩展 label 不删除。
+
+**验证与实验。** synthetic adversarial fixtures 必须与禁用 bound 的 selected-route
+reference 逐项匹配路线、exact ETA、业务字段、成本、source IDs、失败语义，并观察真实
+terminal pruning；同时证明完整-frontier certificate 对 `selection_only` 结果拒绝。再以
+现有 145 帧 holdout/development 的 `rolling_0_24h` 做短资源诊断，使用几何
+`CostModel.lower_bound` 证书，不下载数据、不提高 `50k/100k/50k/400k` 上限。任何失败只
+记录为研究诊断，不启动 Winter 或 candidate。
+
+**收口。** selected-route 语义、determinism、checkpoint、fail-closed 和资源证据通过时，
+状态只标记 `READY_FOR_SEPARATE_SELECTED_ROUTE_BOUND_PLAN`；不把它升级为
+`READY_FOR_REAL_DOMINANCE`，不写 formal latest/replanning baseline/frozen artifact。
