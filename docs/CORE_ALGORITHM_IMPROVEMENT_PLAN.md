@@ -3920,3 +3920,55 @@ state-bound/terminal-bound selected objective 上做单 worker 诊断，保持
 `dominance=disabled`、`50k/100k/50k/400k` 上限、candidate/Winter 关闭。真实结果只用于
 判断 queue/RSS 是否改善，不构成 Pareto、dominance 或生产资格；若 stale 比例不足或无
 净收益，停止继续 queue policy 调参，转向更强独立证明的 corridor/envelope。
+
+### 【2026-08-30 | COMPLETED（safe compaction；no net resource gain）】P0.2-M30：proof-carrying stale queue compaction
+
+**实现与身份。** M30 从 M29 clean research tree 建立隔离分支
+`research/p02-m30-queue-compaction`，依次提交计划 `2047579`、核心实现
+`01e9708`、real-input runner `4df4f01`、证据状态测试 `a8e14aa`，以及 checkpoint
+恢复修复 `f04cf89`。新增 C 内部 `TemporalQueueCompactionPolicy`：默认
+`disabled`，研究调用才可用 `live_only`；只有 queue entry 的 exact state 仍存在且
+`labels[state] == queued_cost` 时才判定 stale，重建时保留完整 priority/cost/node/
+heading/arrival/serial/state key 并 `heapify`。label、predecessor、已扩展 label、不同
+exact arrival 和 goal evidence 均不删除；malformed/unhashable entry、policy 或 identity
+漂移均保持原 queue 并记录拒绝。新增 policy digest、compaction counters 和 checkpoint
+identity fence；修复 restore 时 rejection-reasons tuple→dict 的回归后，正式 planner、
+默认行为、合同、ingress/service、candidate 与 Winter 均未改变。
+
+**真实 6h 语义诊断（最终 clean identity `f04cf89`）。** holdout
+`.runtime/experiments/c-p02-m30-queue-compaction-holdout-6h-final-20260830-r1/` 和
+development `.runtime/experiments/c-p02-m30-queue-compaction-development-6h-final-20260830-r1/`
+各覆盖 `fastest/low_risk/recommended × 1`。两输入的 baseline（compaction disabled）、
+compacted（live-only）和独立 exact-arrival reference 均 route/ETA/cost/风险/confidence/
+source IDs 一致，`semantic_all_match=true`、`reference_all_match=true`；真实拓扑没有
+可回收 stale entry，`queue_compactions=0`。进程与主机 swap 均为零，无 OOM/timeout；但
+隔离 worktree 未置于强制 4 GiB cgroup（`memory.max= max`、`memory.swap.max=max`），
+故 `resource_evidence_complete=false`，不宣称资源门通过。
+
+**真实 24h 资源边界。** 默认阈值的 holdout
+`.runtime/experiments/c-p02-m30-queue-compaction-holdout-24h-fastest-20260830-r1/`
+（identity `4df4f01`）完成 baseline/compacted：两者均 `GOAL_FOUND`、semantic digest
+一致，expanded `4,708`、queue peak `31,948`、exact-state replacement `6`、stale pop
+`1`；独立 reference 在冻结 `queue=50,000` 处失败。development
+`.runtime/experiments/c-p02-m30-queue-compaction-development-24h-fastest-20260830-r1/`
+同样 semantic 一致，expanded `3,114`、queue peak `20,115`、replacement `121`、stale
+pop `10`，reference 也在 `queue=50,000` 处失败；这两份构件均为
+`EXACT_LABEL_RESOURCE_FAIL` 诊断，不是语义失败或性能资格。
+
+为确认实现确实能回收 stale entry，development 另做显式激进阈值诊断
+`.runtime/experiments/c-p02-m30-queue-compaction-development-24h-fastest-aggressive-20260830-r1/`
+（identity `a8e14aa`）：baseline 与 compacted semantic digest 一致；compacted 执行
+`83` 次 compaction、移除 `120` 个 stale entry，queue peak `20,115→20,005`（约
+`0.55%`），但 compute `58,913.5→127,623.0 ms`（约 `2.17×`），RSS 约 `127 MiB`，
+reference 仍在 queue 上限失败。结果证明规则安全但没有净资源收益；激进扫描只作为
+审计证据，不作为推荐配置。
+
+**验证与结论。** M30 聚焦/恢复回归及全量 C 测试最终为 `612 passed, 3 skipped`；
+skip 仅因隔离 worktree 没有已退休的 orchestrator archive fixture。变更文件和
+`src/tests` Ruff、compileall、`uv lock --check`、offline sync、CLI smoke、
+active/archive `temporal_session` import boundary 与 `git diff --check` 均通过；原样
+`UV_OFFLINE=1 make check` 仅被该 worktree 缺少 `.mamba-env/bin/uv` 阻塞，未修改环境或
+lock。M30 结论为 `SAFE_BUT_NO_NET_QUEUE_GAIN / EXACT_LABEL_RESOURCE_FAIL`：停止继续
+调 queue threshold，保持 `50k/100k/50k/400k` 上限和 dominance disabled，转向带独立
+证明的 corridor/state envelope 研究。M30 不触发 candidate、Winter、P2.1、P3、ARA*、
+formal latest、replanning baseline 或 frozen artifact；M29 及更早历史记录保持不变。
