@@ -379,7 +379,7 @@ def _worker(args: argparse.Namespace) -> dict[str, Any]:
             raise RuntimeError("reference/bound request identity diverged")
         if (
             baseline_planner.temporal_scope(baseline_request).digest
-            != corridor.certificate.scope_digest
+            != corridor.certificate.scope.digest
         ):
             raise RuntimeError("reference/bound scope identity diverged")
         baseline, baseline_certificate, baseline_checkpoint = _run_policy(
