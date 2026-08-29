@@ -3897,3 +3897,26 @@ M29 结论为 `NO_ADDITIONAL_NET_GAIN / READY_FOR_SEPARATE_QUEUE_COMPACTION_OR_C
 24h 资源限制 `50k/100k/50k/400k` 不变。M29 不改变 formal contract、ingress/service、
 production planner、P2.1、P3、ARA*、formal latest、replanning baseline 或 frozen
 artifact；M27、M28、M26、M25 及更早历史记录保持不变。
+
+### 【2026-08-30 | PLANNED】P0.2-M30：proof-carrying stale queue compaction
+
+M29 的 `until_goal` 只恢复了 M27 的 terminal pruning，未降低 queue pressure。下一轮
+不再继续调 priority，而研究 `TemporalSession` 中由 exact-state cost replacement
+产生的 stale heap entries：旧 entry 仍占据 Python heap，直到偶然到达堆顶才被丢弃，
+因此可能放大 queue peak/RSS，却不再代表可扩展 label。
+
+M30 新增显式 C 内部 `TemporalQueueCompactionPolicy`，默认 `disabled`，仅在研究调用中
+打开。compaction 只扫描 queue 并保留 `labels[state] == queued_cost` 的 live entry，
+再以原有完整 queue key `heapify`；不删除 label、predecessor、已扩展 state、不同 exact
+arrival 或 goal evidence，不改变 live entry 的排序/tie-break。compaction threshold、
+policy digest、removed count、before/after size 和 checkpoint state digest 均进入证据，
+scope/policy/implementation 漂移或 malformed queue 一律 fail-closed。
+
+先在 finite synthetic temporal session 覆盖 replacement、same-exact/different-arrival、
+cancel、resource limit、slice→restore、identity/policy drift 和 deterministic ordering；
+要求 compaction 前后 selected route、exact ETA、cost、business/source evidence、failure
+semantic 与未压缩 baseline 完全一致，且只能减少 stale entries。随后在已有真实 24h
+state-bound/terminal-bound selected objective 上做单 worker 诊断，保持
+`dominance=disabled`、`50k/100k/50k/400k` 上限、candidate/Winter 关闭。真实结果只用于
+判断 queue/RSS 是否改善，不构成 Pareto、dominance 或生产资格；若 stale 比例不足或无
+净收益，停止继续 queue policy 调参，转向更强独立证明的 corridor/envelope。
