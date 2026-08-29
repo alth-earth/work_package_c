@@ -2843,3 +2843,35 @@ state bound 下安全拒绝新 label，同时保留 exact-arrival/业务语义�
 145 帧输入本轮没有启用该证书路径；下一步另立带真实 scope、独立 admissible bound 证明和
 强制 cgroup 的 Pareto 资源计划。M10、M13、M14、M15、FIFO violation 及 P3/ARA* 历史结论
 保持不变；完成后仅本地集成，不 push。
+
+### 【2026-08-29 | PLANNED】P0.2-M17：real actual-Pareto topological state-bound qualification
+
+M16 已证明 proof-carrying state bound 可以安全接入 actual Pareto bridge，但证书和剪枝只
+在 synthetic finite graph 上验证。M17 仅把已有、独立实现的 graph-topological maximum-speed
+lower-bound/corridor envelope 接到冻结的真实 145 帧 `executable_0_6h` 输入，审计真实 scope
+下的语义与资源边界；不执行 24h、full-voyage、Winter 或 candidate。
+
+**实现边界。** 新增独立 real runner，复用已审计的 RiskFrame/route-plan-set loader、完整
+frame digest、目标自动解析和 reference Dijkstra。每个 holdout/development、
+`fastest/low_risk/recommended` case 固定 `EtaRefinementPolicy(method="bounded")`（仅研究
+worker）、`use_heuristic=False`、`pareto_pruning=True` 和 `skip_expected_rejections=True`；
+baseline 不传证书，candidate 显式传同 scope 的 topological arrival certificate。证书只基于
+完整有限网格邻接、最大船速和保守 reverse lower bound，不能注入 reference route；actual
+bridge 仍只丢弃新生成 label，已扩展 label、不同 exact arrival 和 domain rejection 不被
+删除。所有 identity 绑定 implementation/lock/config/RiskFrame/route-plan-set/scope/ETA
+policy/search-limit/evaluator digest。
+
+**验证与状态。** 每输入/目标运行 one-shot、slice→restore、两次重复，并保存
+`manifest.json`、`cases.jsonl`、`resource-frontier.jsonl`、`comparison-summary.json`、
+`heartbeat.json` 和终态 marker。要求无证书与证书路线、ETA、7 维 cost、speed/risk/
+confidence/source IDs 和失败语义与 reference 一致，恢复 deterministic，证书 scope/身份
+完整且拒绝时 pruning=0。实际 pruning 为零不算失败，但不得宣称性能收益。宿主 cgroup 若
+`memory.max`/`memory.swap.max` 为 `max`，只记录 `RESOURCE_EVIDENCE_INCONCLUSIVE`，不宣称
+4GiB 资源资格；不提高 `50k/100k/50k/400k` 上限。
+
+**收口。** 语义、身份和恢复完整且强 cgroup 存在时标记
+`READY_FOR_P0.2-REAL-STATE-BOUND-RESOURCE-REVIEW`；语义通过但强 cgroup 缺失标记
+`REAL_INPUT_STATE_BOUND_SEMANTIC_PASS_RESOURCE_INCONCLUSIVE`；语义/identity/fail-closed
+失败标记 `NO_PERFORMANCE_PROOF/FAIL`，构件不完整标记 `INVALID/PENDING`。任何状态都不授权
+dominance/candidate/Winter；M9 的真实 24h resource fail、FIFO violation、M14--M16 历史
+结论保持不变。完成后仅本地集成、保留构件、清理辅助 worktree，不 push。
