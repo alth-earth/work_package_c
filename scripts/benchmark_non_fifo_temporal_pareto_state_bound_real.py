@@ -598,6 +598,8 @@ def _worker(args: argparse.Namespace) -> dict[str, Any]:
         "candidate_frontier_digest": (
             candidate.frontier_digest if candidate is not None else None
         ),
+        "baseline_scope_digest": baseline.scope_digest if baseline is not None else None,
+        "candidate_scope_digest": candidate.scope_digest if candidate is not None else None,
         "semantic_match": semantic_match,
         "baseline_reference_match": baseline_reference_match,
         "candidate_reference_match": candidate_reference_match,
@@ -644,6 +646,13 @@ def _git_identity(root: Path) -> dict[str, Any]:
 def _identity(args: argparse.Namespace, fixture: Any, root: Path) -> dict[str, Any]:
     files = {relative: _sha256(root / relative) for relative in IMPLEMENTATION_FILES}
     point = _point_runner()
+    scope_digests = {}
+    for objective in OBJECTIVES:
+        planner = point._build_planner(fixture, objective)
+        planner.eta_policy = EtaRefinementPolicy(method="bounded")
+        scope_digests[objective.value] = planner.temporal_scope(
+            _request(point, fixture, objective)
+        ).digest
     return {
         "schema_version": SCHEMA_VERSION,
         "git": _git_identity(root),
@@ -687,6 +696,7 @@ def _identity(args: argparse.Namespace, fixture: Any, root: Path) -> dict[str, A
         "state_bound_policy": "graph-topological-arrival-envelope-v1",
         "bound_method": BOUND_METHOD,
         "bound_evaluator": BOUND_EVALUATOR,
+        "scope_digests": scope_digests,
         "pareto_pruning": True,
         "skip_expected_rejections": True,
         "search_limits": LIMITS,
@@ -900,7 +910,7 @@ def _summary(
     elif not resource_clean:
         status = "REAL_INPUT_PARETO_STATE_BOUND_RESOURCE_FAIL"
     elif not resource_evidence:
-        status = "REAL_INPUT_PARETO_STATE_BOUND_SEMANTIC_PASS_RESOURCE_INCONCLUSIVE"
+        status = "REAL_INPUT_STATE_BOUND_SEMANTIC_PASS_RESOURCE_INCONCLUSIVE"
     else:
         status = "READY_FOR_P0.2-REAL-PARETO-STATE-BOUND-REVIEW"
     return {
