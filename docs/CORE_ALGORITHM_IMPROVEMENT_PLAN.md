@@ -2953,3 +2953,49 @@ certificate 或 state-bound rejection 失败时 pruning 必须为零。24h 观�
 `REAL_INPUT_STATE_BOUND_SEMANTIC_PASS_RESOURCE_INCONCLUSIVE`；身份漂移、fail-open 或不完整
 构件为 `INVALID/PENDING`。无论结果如何，FIFO violation、dominance disabled、candidate 和
 Winter 边界不变；仅可为后续 corridor/envelope 或 P0.2 implementation 计划提供证据。
+
+### 【2026-08-29 | COMPLETED】P0.2-M18：real 24h actual-Pareto state-bound resource frontier
+
+本轮在隔离分支 `research/p02-m18-real-pareto-24h-20260829` 的 clean commit
+`f582e634258a7b18acc15e75657f39b02dc4f265` 完成；新增 M18 schema
+`c.p0.2-temporal-pareto-state-bound-24h.v1`，只扩展 M17 actual-edge Pareto state-bound
+研究 runner 的 `rolling_0_24h` 输入和冻结资源结果语义。没有修改 B/C、C/D 合同、ingress/service
+或正式 planner 默认路径；`TemporalDominancePolicy.disabled()`、candidate/Winter 均保持关闭。
+
+**输入与身份。** holdout/development 均复用完整 145 帧 committed RiskFrame 和冻结
+four-layer route-plan-set 自动解析的 `rolling_0_24h` 目标（共同起点 `(5, 7)`；holdout
+目标 `(14, 5)`，development 目标 `(14, 6)`）。manifest 绑定 implementation 文件 hashes、
+branch/commit、`uv.lock`、configs tree、每帧 content digest、route-plan-set、三目标
+TemporalScope digest、bounded ETA、topological bound/evaluator 和冻结
+`50k/100k/50k/400k` search limits。权威构件为：
+
+- holdout：`.runtime/experiments/c-p02-m18-real-pareto-24h-holdout-20260829-r1/`，experiment
+  id `c.p0.2-temporal-pareto-state-bound-24h.v1-361e5d987a1a1877`；
+- development：`.runtime/experiments/c-p02-m18-real-pareto-24h-development-20260829-r1/`，
+  experiment id `c.p0.2-temporal-pareto-state-bound-24h.v1-3e261b87102e017c`。
+
+每个输入均完成 `fastest/low_risk/recommended × one_shot/slice_restore × 1`，共 `6/6`
+case；`manifest.json`、`cases.jsonl`、`resource-frontier.jsonl`、`comparison-summary.json`、
+`heartbeat.json` 和 `ALL_DONE` 齐全，deterministic=true，scope/certificate rejection=0，
+unexpected pruning=false。slice→restore 的 checkpoint/session identity 与 one-shot 稳定。
+
+**资源前沿。** holdout 三目标两模式均为 baseline `RESOURCE_LIMIT`（queue peak `50,001`）
+而 candidate `GOAL_FOUND`；candidate queue peak 为 fastest `3,369`、low_risk `3,358`、
+recommended `3,398`，每 case state-bound checks `81,927`、合法新-label pruning `71,446`，
+合计 `428,676`。development 同样三目标两模式均为 baseline queue `50,001` 的
+`RESOURCE_LIMIT`、candidate `GOAL_FOUND`；candidate queue peak 为 fastest `1,997`、
+low_risk `1,911`、recommended `1,943`，pruning 分别为 `38,382`、`38,366`、`38,382`，
+合计 `230,260`，checks 为 `44,056`、`44,040`、`44,056`。两输入所有 case 的候选
+state-bound rejection 为 0，未提高任何上限。由于 baseline 在冻结 queue 上限前没有完成，
+独立 reference Dijkstra 未进入路线对照；因此本轮不宣称 24h semantic/correctness 或性能
+通过，只记录 candidate 可完成与资源边界的研究观察。
+
+**资源证据与结论。** 全部 12 case 在 systemd scope `MemoryMax=4G`、`MemorySwapMax=0`、
+固定 CPU 0 下运行；记录 `memory.max=4294967296`、`memory.swap.max=0`、
+`memory.swap.current=0`，process/host swap 为零，OOM/timeout/cgroup memory events 全为 0，
+`resource_evidence_complete=true`。两份 summary 均为
+`REAL_INPUT_24H_STATE_BOUND_RESOURCE_FAIL`，表示冻结 queue limit 仍是资源失败边界，而非
+state-bound 语义失败；M9 的 24h resource fail、已知 `REAL_INPUT_FIFO_VIOLATED`、M14--M17、
+P3/ARA* 历史结论保持不变。最终状态不授权 dominance/candidate/Winter，也不构成连续海洋
+模型的全局最优性或生产资格。下一步只能另立“带独立 reference/semantic proof 的 24h
+corridor/envelope”或 P0.2 非 FIFO implementation 计划；不自动放宽 queue、不重跑 Winter。
