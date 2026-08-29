@@ -3583,3 +3583,37 @@ Winter、formal latest、replanning baseline 和 frozen artifact 均未启动/�
 ARA* 及 M24 的 `REAL_INPUT_INCUMBENT_BOUND_UNCERTAIN` 历史结论保持不变。下一步只能另立
 带独立 resource-bound/corridor proof 的计划，或推进 test-only P0.2 label-correcting 设计；
 不得通过放宽资源上限、缩短输入或将 selection-only 结果包装成完整 frontier 来制造通过。
+
+### 【2026-08-29 | PLANNED】P0.2-M26：composed certified state-bound + selected-route terminal bound
+
+M25 的 terminal-only 诊断在真实 `rolling_0_24h` 上仍触及冻结的 queue 上限；这并不否定
+terminal bound 的 synthetic 安全性，而是说明它不能替代已经在 M18/M22 通过等价性审计的
+拓扑 arrival state-bound。本轮把两种**已分别审计、显式关闭默认路径**的证书组合起来，
+只做 C 内部研究诊断：拓扑 state-bound 负责证明有限网格上的可达 arrival envelope，
+selected-route terminal bound 只负责对尚未扩展的新 label 做终点选择性剪枝。
+
+**治理与边界。** 从 M25 clean research commit 建立独立 worktree；不修改正式分支、
+M2J/M2K 构件、合同、ingress/service 或生产 planner。所有 identity 绑定实现、lock、
+配置、RiskFrame、route-plan-set、完整 scope、两份证书 digest 和冻结资源上限。
+`TemporalDominancePolicy.disabled()`、正式 `plan()`、candidate/Winter 保持不变。研究
+诊断可以把 timeout/resource limit 记为可恢复分支并继续其他 objective，但不把不完整结果
+写成性能通过；正确性、scope、证书完整性和 fail-closed 仍是硬门。
+
+**组合规则。** baseline 使用已认证且 scope 完全匹配的拓扑 state-bound、terminal bound
+关闭；candidate 使用同一 state-bound 加 `selection_only=true` terminal certificate。
+state-bound 只能按既有 arrival envelope 丢弃新生成 label，terminal bound 只能在已有终点
+label 严格支配其保守完成下界时丢弃新 label；已扩展 label、等价成本、未知/不完整/漂移
+证书一律保留。两条路径必须共享同一 fixture、ETA policy、evaluator、seed 和搜索限制。
+
+**验证与实验。** 先扩展 synthetic bridge 测试，证明组合证书的 digest/session/checkpoint
+绑定、scope mismatch 和 fail-closed 行为；然后在 holdout/development `rolling_0_24h`
+按固定 CPU 串行运行三目标。优先复用 M18/M22 的拓扑证书构造，不提高
+`50k/100k/50k/400k` 上限；保留 route/ETA/业务字段/失败语义、queue/label/expansion、
+state-bound 与 terminal pruning、RSS/swap/OOM/timeout 证据。若 baseline/candidate 均
+完成且语义一致，只标记 `READY_FOR_COMPOSED_BOUND_REVIEW`；若仅 state-bound 完成而
+terminal 无 pruning，记录 `NO_ADDITIONAL_TERMINAL_PRUNING`，不夸大收益；若仍超限，
+记录 `REAL_COMPOSED_BOUND_RESOURCE_FAIL`，继续转向 corridor/envelope 或 P0.2 研究。
+
+**收口。** 本轮任何结果都不授予真实 FIFO/dominance 资格，不自动进入 Winter 或启用
+candidate。实验构件只留在 `.runtime/experiments/`；完成验证后删除辅助 worktree，保留
+本地分支和历史证据。
