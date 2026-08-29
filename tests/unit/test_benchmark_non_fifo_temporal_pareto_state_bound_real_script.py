@@ -1,4 +1,4 @@
-"""Static safety checks for the M17 real actual-Pareto runner."""
+"""Static safety checks for the M18 real actual-Pareto runner."""
 
 from __future__ import annotations
 
@@ -28,6 +28,8 @@ def test_runner_uses_actual_pareto_and_explicit_topological_certificate() -> Non
     assert "derive_temporal_corridor" in _SOURCE
     assert '"dominance_policy": "disabled"' in _SOURCE
     assert '"state_bound_policy": "graph-topological-arrival-envelope-v1"' in _SOURCE
+    assert '"c.p0.2-temporal-pareto-state-bound-24h.v1"' in _SOURCE
+    assert '"rolling_0_24h"' in _SOURCE
 
 
 def test_runner_keeps_frozen_limits_and_zero_heuristic_fence() -> None:
@@ -48,6 +50,14 @@ def test_runner_persists_identity_resume_and_resource_evidence() -> None:
     assert '"resource_evidence_complete"' in _SOURCE
     assert '"INCONCLUSIVE_CGROUP_BOUNDARY"' in _SOURCE
     assert '"ALL_DONE" if summary["complete"] else "STOPPED_HARD"' in _SOURCE
+    assert '"REAL_INPUT_24H_STATE_BOUND_RESOURCE_FAIL"' in _SOURCE
+    assert '"REAL_INPUT_24H_STATE_BOUND_RESOURCE_REVIEW"' in _SOURCE
+
+
+def test_frozen_resource_limit_is_recorded_without_being_a_semantic_pass() -> None:
+    assert 'case_status = "RESOURCE_LIMIT"' in _SOURCE
+    assert 'case_reason = "frozen search limit reached"' in _SOURCE
+    assert 'case.get("status") in {"PASS", "RESOURCE_LIMIT", "TIMEOUT"}' in _SOURCE
 
 
 def test_runner_does_not_call_production_planner_or_enable_candidate() -> None:

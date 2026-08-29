@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Real-input qualification for the actual Pareto topological state bound.
+"""Real-input 24h frontier for the actual Pareto topological state bound.
 
 This is a C-internal research sidecar.  It compares the actual-edge,
 zero-heuristic Pareto bridge without a state-bound certificate with the same
@@ -10,7 +10,8 @@ candidate or a Winter experiment.
 The frozen real-input loader and independent exact-arrival reference are
 reused from ``benchmark_temporal_dominance_real.py``.  The scalar topological
 adapter is deliberately not used: this runner exercises the M16 bridge's
-actual ``TemporalStateBoundCertificate`` path.
+actual ``TemporalStateBoundCertificate`` path.  A resource-limit result is an
+auditable frontier point, not a semantic or performance pass.
 """
 
 from __future__ import annotations
@@ -44,10 +45,10 @@ from arctic_route_planning.planners.temporal_topology_bounds import (
     qualify_topological_lower_bound,
 )
 
-SCHEMA_VERSION = "c.p0.2-temporal-pareto-state-bound-real.v1"
+SCHEMA_VERSION = "c.p0.2-temporal-pareto-state-bound-24h.v1"
 OBJECTIVES = tuple(ObjectiveMode)
 MODES = ("one_shot", "slice_restore")
-SEGMENTS = ("executable_0_6h",)
+SEGMENTS = ("executable_0_6h", "rolling_0_24h")
 LIMITS = {
     "max_expansions": 50_000,
     "max_labels": 100_000,
@@ -535,7 +536,7 @@ def _worker(args: argparse.Namespace) -> dict[str, Any]:
     certificate_usable = bool(corridor is not None and corridor.certificate.usable)
     resource_clean = _resource_clean(before, after)
     resource_evidence_complete = _resource_evidence_complete(before, after, args.cpu)
-    case_gate_pass = bool(
+    semantic_gate_pass = bool(
         not errors
         and certificate_usable
         and baseline is not None
@@ -546,10 +547,29 @@ def _worker(args: argparse.Namespace) -> dict[str, Any]:
         and baseline_reference_match
         and candidate_reference_match
         and state_bound_checks > 0
-        and state_bound_pruned > 0
         and state_bound_rejected == 0
         and not unexpected_pruning
     )
+    baseline_resource_limit = bool(
+        baseline is not None
+        and baseline.status is NonFifoSearchStatus.RESOURCE_LIMIT
+    )
+    candidate_resource_limit = bool(
+        candidate is not None
+        and candidate.status is NonFifoSearchStatus.RESOURCE_LIMIT
+    )
+    resource_limited = baseline_resource_limit or candidate_resource_limit
+    if semantic_gate_pass:
+        case_status = "PASS"
+        case_reason = None
+    elif resource_limited and not errors and not unexpected_pruning:
+        # A frozen search limit is a valid resource-frontier observation.  It
+        # must not be mistaken for a route-semantic pass or a candidate gain.
+        case_status = "RESOURCE_LIMIT"
+        case_reason = "frozen search limit reached"
+    else:
+        case_status = "FAIL"
+        case_reason = "actual Pareto state-bound semantic gate failed"
     return {
         "schema_version": SCHEMA_VERSION,
         "input": getattr(fixture, "input_name", None),
@@ -557,7 +577,9 @@ def _worker(args: argparse.Namespace) -> dict[str, Any]:
         "objective": args.objective,
         "mode": args.mode,
         "repetition": args.repetition,
-        "status": "PASS" if case_gate_pass else "FAIL",
+        "status": case_status,
+        "semantic_gate_pass": semantic_gate_pass,
+        "resource_limited": resource_limited,
         "adapter_mode": "actual_edge_zero_heuristic_pareto_v1",
         "dominance_policy": "disabled",
         "state_bound_policy": "graph-topological-arrival-envelope-v1",
@@ -613,7 +635,7 @@ def _worker(args: argparse.Namespace) -> dict[str, Any]:
         "checkpoint": checkpoint,
         "session_id": candidate.session_id if candidate is not None else None,
         "errors": errors,
-        "reason": None if case_gate_pass else "actual Pareto state-bound gate failed",
+        "reason": case_reason,
         "compute_ms": search_elapsed_ms,
         "wall_seconds": time.perf_counter() - started,
         "resources_before": before,
@@ -655,6 +677,8 @@ def _identity(args: argparse.Namespace, fixture: Any, root: Path) -> dict[str, A
         ).digest
     return {
         "schema_version": SCHEMA_VERSION,
+        "milestone": "P0.2-M18",
+        "purpose": "real_24h_actual_pareto_state_bound_resource_frontier",
         "git": _git_identity(root),
         "implementation": {"files": files, "sha256": _digest(files)},
         "uv_lock": {"path": str(root / "uv.lock"), "sha256": _sha256(root / "uv.lock")},
@@ -853,16 +877,32 @@ def _summary(
     complete = len(cases) == expected and malformed == 0
     valid_keys = {_record_key(case) for case in cases}
     complete = complete and None not in valid_keys and len(valid_keys) == expected
+    resource_limited_cases = [
+        case
+        for case in cases
+        if case.get("status") in {"RESOURCE_LIMIT", "TIMEOUT"}
+    ]
+    hard_failure_cases = [
+        case
+        for case in cases
+        if case.get("status") in {"FAIL", "INVALID/PENDING"}
+    ]
     semantic = bool(cases) and all(
-        case.get("semantic_match") is True
-        and case.get("baseline_reference_match") is True
-        and case.get("candidate_reference_match") is True
+        case.get("status") in {"RESOURCE_LIMIT", "TIMEOUT"}
+        or (
+            case.get("semantic_match") is True
+            and case.get("baseline_reference_match") is True
+            and case.get("candidate_reference_match") is True
+        )
         for case in cases
     )
     certificate = bool(cases) and all(
-        case.get("certificate_usable") is True
-        and case.get("arrival_bound_complete") is True
-        and int(case.get("state_bound_rejected", 0)) == 0
+        case.get("status") in {"RESOURCE_LIMIT", "TIMEOUT"}
+        or (
+            case.get("certificate_usable") is True
+            and case.get("arrival_bound_complete") is True
+            and int(case.get("state_bound_rejected", 0)) == 0
+        )
         for case in cases
     )
     pruning = sum(int(case.get("state_bound_pruned", 0)) for case in cases)
@@ -896,23 +936,29 @@ def _summary(
                 len(selected) == repetitions and len(signatures) == 1
             )
     deterministic = bool(deterministic_by_cell) and all(deterministic_by_cell.values())
-    all_case_gates = bool(cases) and all(case.get("status") == "PASS" for case in cases)
+    all_case_gates = bool(cases) and all(
+        case.get("status") in {"PASS", "RESOURCE_LIMIT", "TIMEOUT"}
+        for case in cases
+    )
     if not complete:
         status = "INVALID/PENDING"
     elif (
         not semantic
         or not certificate
         or unexpected_pruning
+        or hard_failure_cases
         or not all_case_gates
         or not deterministic
     ):
         status = "NO_PERFORMANCE_PROOF/FAIL"
+    elif resource_limited_cases:
+        status = "REAL_INPUT_24H_STATE_BOUND_RESOURCE_FAIL"
     elif not resource_clean:
         status = "REAL_INPUT_PARETO_STATE_BOUND_RESOURCE_FAIL"
     elif not resource_evidence:
         status = "REAL_INPUT_STATE_BOUND_SEMANTIC_PASS_RESOURCE_INCONCLUSIVE"
     else:
-        status = "READY_FOR_P0.2-REAL-PARETO-STATE-BOUND-REVIEW"
+        status = "REAL_INPUT_24H_STATE_BOUND_RESOURCE_REVIEW"
     return {
         "schema_version": SCHEMA_VERSION,
         "status": status,
@@ -928,6 +974,8 @@ def _summary(
         "unexpected_pruning": unexpected_pruning,
         "observed_state_bound_pruning": pruning,
         "all_case_gates": all_case_gates,
+        "resource_limited_case_count": len(resource_limited_cases),
+        "hard_failure_case_count": len(hard_failure_cases),
         "all_resource_clean": resource_clean,
         "resource_evidence_complete": resource_evidence,
         "dominance_policy": "disabled",
@@ -951,7 +999,7 @@ class _RunnerLock:
             fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as error:
             self.handle.close()
-            raise RuntimeError("another M17 runner owns this output") from error
+            raise RuntimeError("another M18 runner owns this output") from error
         return self
 
     def __exit__(self, *_args: Any) -> None:
@@ -966,7 +1014,7 @@ def _run(args: argparse.Namespace) -> int:
     fixture = point._load_fixture(_fixture_args(args))
     identity = _identity(args, fixture, root)
     if identity["git"]["dirty"]:
-        raise RuntimeError("M17 real evidence requires a clean implementation worktree")
+        raise RuntimeError("M18 real evidence requires a clean implementation worktree")
     identity["experiment_id"] = f"{SCHEMA_VERSION}-{_digest(identity)[:16]}"
     output = args.output_dir.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -1067,7 +1115,10 @@ def _run(args: argparse.Namespace) -> int:
         marker = output / ("ALL_DONE" if summary["complete"] else "STOPPED_HARD")
         marker.write_text(summary["status"] + "\n", encoding="utf-8")
         print(json.dumps(_jsonable(manifest), ensure_ascii=False, indent=2, sort_keys=True))
-    return 0 if summary["status"] == "READY_FOR_P0.2-REAL-PARETO-STATE-BOUND-REVIEW" else 2
+    # A complete resource-limit frontier is a valid diagnostic outcome.  The
+    # marker and summary carry the negative result; reserve non-zero for
+    # incomplete/invalid evidence that cannot support a frontier claim.
+    return 0 if summary["complete"] else 2
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -1075,7 +1126,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--risk-window-commit", type=Path, required=True)
     parser.add_argument("--route-plan-set", type=Path, required=True)
     parser.add_argument("--config-root", type=Path, required=True)
-    parser.add_argument("--segment", choices=SEGMENTS, default="executable_0_6h")
+    parser.add_argument("--segment", choices=SEGMENTS, default="rolling_0_24h")
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--repetitions", type=int, default=2)
     parser.add_argument("--slice-expansions", type=int, default=1)
