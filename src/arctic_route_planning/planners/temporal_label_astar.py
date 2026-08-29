@@ -44,6 +44,7 @@ from .eta_refinement import (
     refine_eta,
 )
 from .temporal_bounds import TemporalStateBoundCertificate, TemporalStateBoundStatus
+from .temporal_heading_heuristic import TemporalHeadingHeuristicCertificate
 from .temporal_heuristic_bounds import TemporalHeuristicCertificate
 from .temporal_qualification import (
     TemporalDominancePolicy,
@@ -175,6 +176,11 @@ class TemporalDiagnostics:
     heuristic_scope_match: bool = False
     heuristic_rejected: int = 0
     heuristic_rejection_reasons: tuple[tuple[str, int], ...] = ()
+    heading_heuristic_policy: str = "default"
+    heading_heuristic_certificate_digest: str | None = None
+    heading_heuristic_scope_match: bool = False
+    heading_heuristic_rejected: int = 0
+    heading_heuristic_rejection_reasons: tuple[tuple[str, int], ...] = ()
     incumbent_pruned: int = 0
     queue_peak_by_elapsed_hour: tuple[tuple[int, int], ...] = ()
     queue_compaction_policy: str = "disabled"
@@ -253,6 +259,11 @@ class _MutableDiagnostics:
     heuristic_scope_match: bool = False
     heuristic_rejected: int = 0
     heuristic_rejection_reasons: dict[str, int] = field(default_factory=dict)
+    heading_heuristic_policy: str = "default"
+    heading_heuristic_certificate_digest: str | None = None
+    heading_heuristic_scope_match: bool = False
+    heading_heuristic_rejected: int = 0
+    heading_heuristic_rejection_reasons: dict[str, int] = field(default_factory=dict)
     incumbent_pruned: int = 0
     queue_peak_by_elapsed_hour: dict[int, int] = field(default_factory=dict)
     queue_compaction_policy: str = "disabled"
@@ -327,6 +338,13 @@ class _MutableDiagnostics:
             heuristic_scope_match=self.heuristic_scope_match,
             heuristic_rejected=self.heuristic_rejected,
             heuristic_rejection_reasons=tuple(sorted(self.heuristic_rejection_reasons.items())),
+            heading_heuristic_policy=self.heading_heuristic_policy,
+            heading_heuristic_certificate_digest=self.heading_heuristic_certificate_digest,
+            heading_heuristic_scope_match=self.heading_heuristic_scope_match,
+            heading_heuristic_rejected=self.heading_heuristic_rejected,
+            heading_heuristic_rejection_reasons=tuple(
+                sorted(self.heading_heuristic_rejection_reasons.items())
+            ),
             incumbent_pruned=self.incumbent_pruned,
             queue_peak_by_elapsed_hour=tuple(sorted(self.queue_peak_by_elapsed_hour.items())),
             queue_compaction_policy=self.queue_compaction_policy,
@@ -368,6 +386,8 @@ class _TemporalExecutionContext:
     dominance_policy: TemporalDominancePolicy | None = None
     heuristic_certificate: TemporalHeuristicCertificate | None = None
     heuristic_authorized: bool | None = None
+    heading_heuristic_certificate: TemporalHeadingHeuristicCertificate | None = None
+    heading_heuristic_authorized: bool | None = None
     state_bound_certificate: TemporalStateBoundCertificate | None = None
     state_bound_authorized: bool | None = None
 
@@ -401,6 +421,7 @@ class TemporalLabelAStar(TimeDependentAStar):
         dominance_policy: TemporalDominancePolicy | None = None,
         state_bound_certificate: TemporalStateBoundCertificate | None = None,
         heuristic_certificate: TemporalHeuristicCertificate | None = None,
+        heading_heuristic_certificate: TemporalHeadingHeuristicCertificate | None = None,
         queue_compaction_policy: TemporalQueueCompactionPolicy | None = None,
     ) -> None:
         super().__init__(
@@ -417,6 +438,7 @@ class TemporalLabelAStar(TimeDependentAStar):
         self.dominance_policy = dominance_policy or TemporalDominancePolicy.disabled()
         self.state_bound_certificate = state_bound_certificate
         self.heuristic_certificate = heuristic_certificate
+        self.heading_heuristic_certificate = heading_heuristic_certificate
         self.queue_compaction_policy = (
             queue_compaction_policy or TemporalQueueCompactionPolicy.disabled()
         )
@@ -444,6 +466,14 @@ class TemporalLabelAStar(TimeDependentAStar):
         if self.heuristic_certificate is None:
             return "temporal-heuristic-default"
         return self.heuristic_certificate.digest
+
+    @property
+    def heading_heuristic_policy_digest(self) -> str:
+        """Identity fence for the optional heading-expanded heuristic."""
+
+        if self.heading_heuristic_certificate is None:
+            return "temporal-heading-heuristic-default"
+        return self.heading_heuristic_certificate.digest
 
     @property
     def queue_compaction_policy_digest(self) -> str:
@@ -683,6 +713,7 @@ class TemporalLabelAStar(TimeDependentAStar):
         cost_model: CostModel,
         cost: float,
         *,
+        heading_code: HeadingCode = None,
         context: _TemporalExecutionContext | None = None,
     ) -> float:
         return cost + self._heuristic_for_context(
@@ -690,6 +721,7 @@ class TemporalLabelAStar(TimeDependentAStar):
             goal,
             cost_model,
             request,
+            heading_code=heading_code,
             context=context,
         )
 
@@ -700,12 +732,29 @@ class TemporalLabelAStar(TimeDependentAStar):
         cost_model: CostModel,
         request: PlanningRequest,
         *,
+        heading_code: HeadingCode = None,
         context: _TemporalExecutionContext | None = None,
     ) -> float:
         if not request.use_heuristic:
             return 0.0
         if context is None:
             context = self._new_execution_context()
+        heading_certificate = (
+            context.heading_heuristic_certificate or self.heading_heuristic_certificate
+        )
+        if heading_certificate is not None and self._authorize_heading_heuristic(context, request):
+            lower_bound = heading_certificate.lower_bound(node, heading_code)
+            if lower_bound is not None and isfinite(lower_bound) and lower_bound >= 0.0:
+                return float(lower_bound)
+            if context.heading_heuristic_authorized:
+                context.heading_heuristic_authorized = False
+                context.diagnostics.heading_heuristic_rejected += 1
+                context.diagnostics.heading_heuristic_rejection_reasons["missing_state_bound"] = (
+                    context.diagnostics.heading_heuristic_rejection_reasons.get(
+                        "missing_state_bound", 0
+                    )
+                    + 1
+                )
         certificate = context.heuristic_certificate or self.heuristic_certificate
         if certificate is not None:
             if not self._authorize_heuristic(context, request):
@@ -728,6 +777,37 @@ class TemporalLabelAStar(TimeDependentAStar):
             distance = self.grid.distance_km(node, goal)
             context.heuristic_distances[node] = distance
         return cost_model.lower_bound(distance)
+
+    def _authorize_heading_heuristic(
+        self,
+        context: _TemporalExecutionContext,
+        request: PlanningRequest,
+        *,
+        input_revision: int = 0,
+    ) -> bool:
+        """Authorize a complete heading-expanded lower-bound certificate."""
+
+        certificate = context.heading_heuristic_certificate or self.heading_heuristic_certificate
+        if certificate is None:
+            context.heading_heuristic_authorized = False
+            return False
+        if context.heading_heuristic_authorized is None:
+            expected_scope = self.temporal_scope(request, input_revision=input_revision)
+            context.heading_heuristic_authorized = certificate.permits(expected_scope)
+            if context.heading_heuristic_authorized:
+                context.diagnostics.heading_heuristic_scope_match = True
+            else:
+                context.diagnostics.heading_heuristic_rejected += 1
+                if not certificate.usable:
+                    reason = certificate.reason or "certificate_unusable"
+                elif not certificate.scope.matches(expected_scope):
+                    reason = "scope_mismatch"
+                else:
+                    reason = "certificate_scope_or_status"
+                context.diagnostics.heading_heuristic_rejection_reasons[reason] = (
+                    context.diagnostics.heading_heuristic_rejection_reasons.get(reason, 0) + 1
+                )
+        return bool(context.heading_heuristic_authorized)
 
     def _authorize_heuristic(
         self,
@@ -779,6 +859,12 @@ class TemporalLabelAStar(TimeDependentAStar):
         if self.heuristic_certificate is not None:
             context.diagnostics.heuristic_policy = "certified"
             context.diagnostics.heuristic_certificate_digest = self.heuristic_certificate.digest
+        context.heading_heuristic_certificate = self.heading_heuristic_certificate
+        if self.heading_heuristic_certificate is not None:
+            context.diagnostics.heading_heuristic_policy = "certified-heading"
+            context.diagnostics.heading_heuristic_certificate_digest = (
+                self.heading_heuristic_certificate.digest
+            )
         context.diagnostics.queue_compaction_policy = self.queue_compaction_policy.digest
         context.state_bound_certificate = self.state_bound_certificate
         return context

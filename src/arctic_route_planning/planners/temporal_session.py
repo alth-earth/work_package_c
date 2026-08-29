@@ -242,6 +242,7 @@ class TemporalSessionIdentity:
     dominance_policy_digest: str = ""
     state_bound_policy_digest: str = ""
     heuristic_policy_digest: str = ""
+    heading_heuristic_policy_digest: str = ""
     queue_compaction_policy_digest: str = QUEUE_COMPACTION_DISABLED_DIGEST
     algorithm_version: str = _ALGORITHM_VERSION
 
@@ -330,6 +331,11 @@ class TemporalSessionIdentity:
                 "heuristic_policy_digest",
                 "temporal-heuristic-default",
             ),
+            heading_heuristic_policy_digest=getattr(
+                planner,
+                "heading_heuristic_policy_digest",
+                "temporal-heading-heuristic-default",
+            ),
             queue_compaction_policy_digest=getattr(
                 planner,
                 "queue_compaction_policy_digest",
@@ -365,6 +371,7 @@ class TemporalSessionIdentity:
             self.dominance_policy_digest,
             self.state_bound_policy_digest,
             self.heuristic_policy_digest,
+            self.heading_heuristic_policy_digest,
             self.queue_compaction_policy_digest,
         )
         if (
@@ -533,6 +540,7 @@ class TemporalSession:
                 request,
                 self.cost_model,
                 0.0,
+                heading_code=None,
                 context=self.context,
             ),
             0.0,
@@ -698,6 +706,7 @@ class TemporalSession:
                         self.request,
                         self.cost_model,
                         tentative_cost,
+                        heading_code=heading_code,
                         context=self.context,
                     )
                     if self.incumbent_state is not None and priority >= self.incumbent_cost - 1e-12:
@@ -1001,6 +1010,13 @@ def restore_session(
         raise TemporalSessionIdentityMismatch("queue compaction policy type is invalid")
     if session.queue_compaction_policy.digest != checkpoint.identity.queue_compaction_policy_digest:
         raise TemporalSessionIdentityMismatch("queue compaction policy digest mismatch")
+    heading_policy_digest = getattr(
+        planner,
+        "heading_heuristic_policy_digest",
+        "temporal-heading-heuristic-default",
+    )
+    if heading_policy_digest != checkpoint.identity.heading_heuristic_policy_digest:
+        raise TemporalSessionIdentityMismatch("heading heuristic policy digest mismatch")
     session.state = checkpoint.state
     session.context = planner._new_execution_context()
     planner._authorize_dominance(
@@ -1009,6 +1025,11 @@ def restore_session(
         input_revision=checkpoint.identity.input_revision,
     )
     planner._authorize_state_bound(
+        session.context,
+        restored_request,
+        input_revision=checkpoint.identity.input_revision,
+    )
+    planner._authorize_heading_heuristic(
         session.context,
         restored_request,
         input_revision=checkpoint.identity.input_revision,
@@ -1025,6 +1046,7 @@ def restore_session(
                     "eta_failure_reasons",
                     "dominance_rejection_reasons",
                     "heuristic_rejection_reasons",
+                    "heading_heuristic_rejection_reasons",
                     "queue_peak_by_elapsed_hour",
                     "queue_compaction_rejection_reasons",
                     "state_bound_rejection_reasons",
