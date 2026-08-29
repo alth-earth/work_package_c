@@ -4272,3 +4272,65 @@ development 上复用已审计 M22 actual Pareto frontier harness 做 dominance-
 转向独立 corridor/envelope 或 test-only P0.2 label-correcting 设计；若出现可审计的真实
 资源改善，仅标记 `READY_FOR_SEPARATE_REAL_FRONTIER_PLAN`，不启用 candidate。所有实验构件
 留在 `.runtime/experiments/`，本分支只做本地提交。
+
+### 【2026-08-30 | COMPLETED（synthetic pass；real 24h semantic pass，resource evidence incomplete）】P0.2-M34：组合 edge/state-bound 与 actual Pareto 转移 pre-gate
+
+**实现与身份。** M34 在隔离分支
+`research/p02-m34-composed-envelope-20260830` 完成，核心实现提交为 `5e891fd`，取消
+模式 runner 修复为 `7ebb51b`，回归测试补充为 `f4bac39`；计划记录为 `949b4ee`。
+`NonFifoTemporalParetoResult` 和 checkpoint 新增 transition-bound counters；actual
+Pareto bridge 在昂贵 `_evaluate_edge` 之前调用 scope-authorized
+`_should_prune_state_bound_transition`。证书未授权、partial edge 缺口、scope mismatch 或
+coverage/evaluator 不完整时 edge 保持 live；只抑制新生成且由严格、向下取整的 arrival
+不等式证明不可能的转移，不删除已扩展 label、predecessor、exact arrival 或 goal
+evidence。`TemporalDominancePolicy`、正式 `plan()`、contracts、ingress/service、
+candidate 和 Winter 均未改变，生产 candidate 全程为 `false`。
+
+**Synthetic proof matrix。** 构件位于
+`.runtime/experiments/c-p02-m34-pareto-transition-bound-matrix-20260830-r4/`，实验
+identity 为 `c.p0.2-temporal-pareto-transition-bound.v1-357f57c6cb5de493`，绑定提交
+`f4bac396ba2a6eba7d09355b974fb28ca9071c87`。90/90 cases 通过：certified partial 的
+18 个 case 中非取消路径观察到 12 次真实 transition pre-pruning；scope mismatch、
+coverage incomplete、disabled、cancel 和 checkpoint drift 等拒绝场景 pruning 为 0，
+drift 恢复被拒绝。所有 case 的 semantic/oracle match 与 fail-closed 均为 true，
+`dominance_policy=disabled`，无错误构件。
+
+**真实 development 24h。** 构件位于
+`.runtime/experiments/c-p02-m34-pareto-transition-bound-real-development-24h-20260830-r1/`，
+identity 为 `c.p0.2-temporal-pareto-state-bound-frontier-real.v1-f2c0a2b75db137d7`，输入
+为冻结 145 帧 development、`rolling_0_24h`、goal `(14,6)`、单 CPU `[0]`，实现提交为
+`f4bac396ba2a6eba7d09355b974fb28ca9071c87`。fastest/low_risk/recommended × one-shot/
+slice-restore 共 6/6 case PASS；路线、frontier、ETA、业务字段和 reference digest
+一致，`frontier_equivalence=true`、`deterministic=true`、`fail_closed=true`，无资源上限、
+OOM、swap 或 timeout。node/arrival state-bound pruning 合计 `230260`，queue peak 为
+`1911–1997`；新 transition pre-gate 检查 `271120` 次但 pruning 为 `0`，未观察到额外
+真实 transition 收益。候选仍未授权。
+
+**真实 holdout 24h。** 构件位于
+`.runtime/experiments/c-p02-m34-pareto-transition-bound-real-holdout-24h-20260830-r1/`，
+identity 为 `c.p0.2-temporal-pareto-state-bound-frontier-real.v1-4f790f6b5e877396`，输入
+为冻结 145 帧 holdout、`rolling_0_24h`、goal `(14,5)`，实现提交同上。6/6 case PASS，
+frontier/semantic/reference/deterministic/fail-closed 门均通过；node/arrival state-bound
+pruning 合计 `428676`，queue peak 为 `3358–3400`，transition pre-gate 检查 `499536`
+次但 pruning 为 `0`，同样没有可归因的额外 transition frontier 收益。两输入的 runner
+summary 均为 `REAL_INPUT_24H_STATE_BOUND_FRONTIER_INCONCLUSIVE`，这是资源审计状态，不是
+语义失败。
+
+**资源与决策。** 两个真实 summary 的 `all_case_gates=true`、`all_resource_clean=true`、
+`resource_limited_case_count=0`，进程/主机 swap 为 `0B`、memory events 无 OOM；但 cgroup
+仍报告 `/init.scope`、`memory.max=max`、`memory.swap.max=max`，故
+`resource_evidence_complete=false`，不把本轮写成性能资格，也不提高
+`50k/100k/50k/400k` 上限。M34 最终状态固定为
+`REAL_INPUT_STATE_BOUND_SEMANTIC_PASS_RESOURCE_EVIDENCE_INCOMPLETE_NO_ADDITIONAL_TRANSITION_GAIN`：
+synthetic 安全性已证明，真实 24h 语义与 frontier 等价已证明，但没有新的可审计性能/资源
+资格。下一步转向独立 corridor/envelope 或 test-only P0.2 label-correcting 研究；不自动
+进入 Winter、P2.1、P3、ARA* 或 candidate。
+
+**验证。** M34 分支全量 pytest 为 `645 passed, 3 skipped`；skip 仅因隔离 worktree 缺少
+已退休的 orchestrator archive fixture。去重后的 M34/Pareto/state-bound/相关 reference
+聚焦测试为 `189 passed`，其中 M34 transition runner 为 `24 passed`（19 个现有 Pareto +
+5 个 runner tests）。变更文件 Ruff check、compileall、`uv lock --offline --check`、offline
+import boundary、CLI smoke 和 `git diff --check` 均通过；原样 `UV_OFFLINE=1 make check`
+仍被隔离 worktree 缺少 `.mamba-env/bin/uv` 阻塞，另有全仓既有
+`scripts/benchmark_bc_coupling.py:721` E501，均未修改无关文件。实验产物仅留在
+`.runtime/experiments/`，本分支未 push、未合并正式树。
