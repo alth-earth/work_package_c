@@ -3888,8 +3888,10 @@ comparison summary、heartbeat 和 `ALL_DONE`；资源本身未观察到 swap/OO
 “诊断可继续”的证据完整性门，不放宽语义、身份、fail-closed、搜索上限或 candidate
 门禁。
 
-**验证与结论。** M29 聚焦测试为 `55 passed`；默认 planner、checkpoint/restore、
-cancel、phase reheapify、scope/policy digest 和 bridge no-certificate 拒绝路径均通过。
+**验证与结论。** M29 实现与 bridge 聚焦测试为 `55 passed`，连同 M28/M29 两个
+诊断 wrapper 为 `60 passed`；默认 planner、checkpoint/restore、cancel、phase
+reheapify、scope/policy digest 和 bridge no-certificate 拒绝路径均通过。C 全量测试为
+`607 passed, 3 skipped`（skip 仅因已退休 orchestrator 脚本不在该隔离 worktree）。
 M29 结论为 `NO_ADDITIONAL_NET_GAIN / READY_FOR_SEPARATE_QUEUE_COMPACTION_OR_CORRIDOR_ENVELOPE_RESEARCH`：
 停止继续调 priority 权重，转向具有独立证明的 queue compaction/corridor envelope；
 24h 资源限制 `50k/100k/50k/400k` 不变。M29 不改变 formal contract、ingress/service、
