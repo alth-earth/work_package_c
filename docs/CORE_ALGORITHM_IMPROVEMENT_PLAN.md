@@ -3109,3 +3109,49 @@ failure、资源上限、hard-mask 和重复运行 deterministic。任何不完�
 不完整则标记 `NO_FRONTIER_PROOF/FAIL`。本轮不执行真实 24h 重跑、不提高
 `50k/100k/50k/400k` 上限、不调用 `certified_only(...)`，不启用 candidate/Winter；M19
 真实 reference、M18 queue resource fail、FIFO violation、P3/ARA* 历史结论全部保留。
+
+### 【2026-08-29 | COMPLETED】P0.2-M20：complete non-FIFO Pareto frontier proof
+
+本轮在隔离分支 `research/p02-m20-frontier-proof-20260829` 的 clean tip
+`7eb7d4248d57307ddc0ef9be775292a15240a6be` 完成。新增内容仍是 C 内部研究 sidecar：
+
+- `NonFifoParetoFrontierCertificate`：只有 terminal `GOAL_FOUND`、无 evaluator error、无
+  resource/cancel、search limits 与 session identity 完全一致且 goal frontier 非空时才
+  `usable=true`；证书绑定完整 callback session digest、独立比较用 input/config digest、
+  scope digest、Pareto policy、冻结四项资源上限和 canonical frontier digest；
+- `NonFifoParetoFrontierComparison` / `compare_non_fifo_pareto_frontiers`：对独立实现的全部
+  goal labels 做多重集合精确比较，包含节点、精确 UTC 到达时间、完整路径、向量成本和每条
+  transition business/source evidence；scope、输入 identity、frontier 不一致或证书不完整
+  分别返回 `IDENTITY_MISMATCH`、`FRONTIER_MISMATCH`、`INCOMPLETE`，没有数值容差或 selected
+  route 替代；
+- `NonFifoTemporalParetoResearchSession.frontier_certificate`：仅 terminal session 暴露证书，
+  paused/ready 状态直接拒绝；既有 `NonFifoParetoSession` checkpoint/restore 的 callback
+  digest fence 保持不变。
+
+**权威 synthetic 构件。** `c.p0.2-nonfifo-pareto-frontier.v1` runner 已接入 certificate
+并记录其 digest、scope、policy、goal/frontier counts 和 rejection reason；代码提交后在 clean
+tip 重新执行（此前 dirty 代码下的 r3 构件不作为证据）。权威目录为
+`.runtime/experiments/c-p02-m20-frontier-proof-synthetic-20260829-r4/`，manifest 的
+implementation commit 与 clean tip 一致，`cases.jsonl` 共 `72/72`（12 fixture × 3 objective ×
+2 policy × 1 repetition），并包含 `manifest.json`、`cases.jsonl`、`comparison-summary.json`、
+`heartbeat.json`、`ALL_DONE`。
+
+**结果。** summary 为 `TEMPORAL_NONFIFO_PARETO_FRONTIER_MATRIX_PASS`：
+`deterministic=true`、`semantic_match=true`、`fail_closed=true`、
+`frontier_certificate_complete=true`、`policy_digest_bound=true`、
+`resource_evidence_complete=true`、`resource_clean=true`、`worker_errors=false`；所有失败
+fixture 均保持无 partial route，严格同 exact state 的 candidate pruning 观察到 `3` 次，
+不同 exact arrival、周期/后缀反例、hard-mask、evaluator failure、取消、资源上限和维度/到达
+错误均未被误判为成功。全量 C 测试 `557 passed, 3 skipped`；跳过仍是隔离 worktree 缺少
+orchestrator `winter_p2_shadow.py` 的既有 M2J 诊断项。Ruff、lock check、offline sync、CLI
+smoke、active/archive `temporal_session` import boundary、`git diff --check` 均通过；直接
+`UV_OFFLINE=1 make check` 仍因 Makefile 期待隔离 worktree 自带 `.mamba-env/bin/uv` 而不可执行，
+已用正式 C `.mamba-env/bin/uv` 逐项等价复现并通过。
+
+**边界与下一步。** 本轮没有真实 24h 重跑、没有提高 `50k/100k/50k/400k`、没有调用
+`certified_only(...)`，`TemporalDominancePolicy.disabled()`、candidate/Winter、B/C 与 C/D
+合同、ingress/service、formal latest/replanning baseline/frozen artifact 均未改变。M20 只证明
+有限非 FIFO sidecar 的完整 frontier 证据链可审计；不构成真实连续海洋模型最优性、性能晋级或
+生产资格。已知真实 `FIFO_UNCERTAIN/VIOLATED`、M18 queue resource fail、M19 independent
+24h semantic reference、P3/ARA* 历史结论继续保留；后续才可另立带真实 scope 的 P0.2
+implementation review 或 ETA interval proof 计划。
