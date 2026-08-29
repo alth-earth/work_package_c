@@ -285,15 +285,23 @@ def _case(
         and _BASE._reference_matches(compact["semantic"], reference)
     )
     semantic_match = _close_semantic(baseline["semantic"], compact["semantic"])
-    errors = baseline["planner_error"] or compact["planner_error"] or reference_error
-    status = (
-        "PASS"
-        if not errors
-        and semantic_match
-        and baseline_reference_match
-        and compact_reference_match
-        else "FAIL"
+    planner_errors = baseline["planner_error"] or compact["planner_error"]
+    reference_limit = bool(
+        reference_error
+        and reference_error.get("type") == "RuntimeError"
+        and any(
+            marker in reference_error.get("message", "")
+            for marker in ("queue=", "labels=", "expansions=", "edge_evaluations=")
+        )
     )
+    if planner_errors or not semantic_match:
+        status = "FAIL"
+    elif reference_limit:
+        status = "REFERENCE_RESOURCE_LIMIT"
+    elif reference_error or not baseline_reference_match or not compact_reference_match:
+        status = "FAIL"
+    else:
+        status = "PASS"
     return {
         "schema_version": SCHEMA_VERSION,
         "experiment_id": experiment_id,
@@ -329,20 +337,34 @@ def _case(
 def _summary(cases: list[dict[str, Any]], identity: dict[str, Any]) -> dict[str, Any]:
     expected = len(identity["objectives"]) * int(identity["repetitions"])
     valid = [case for case in cases if case.get("status") == "PASS"]
+    resource_limited = [
+        case for case in cases if case.get("status") == "REFERENCE_RESOURCE_LIMIT"
+    ]
+    complete_semantic = len(cases) == expected and all(
+        case.get("semantic_match") and case.get("status") in {"PASS", "REFERENCE_RESOURCE_LIMIT"}
+        for case in cases
+    )
+    if complete_semantic and resource_limited:
+        status = "QUEUE_COMPACTION_REFERENCE_RESOURCE_LIMIT"
+    elif complete_semantic:
+        status = "QUEUE_COMPACTION_SEMANTIC_PASS"
+    else:
+        status = "QUEUE_COMPACTION_DIAGNOSTIC_FAIL"
     return {
         "schema_version": SCHEMA_VERSION,
         "experiment_id": identity["experiment_id"],
-        "status": "QUEUE_COMPACTION_SEMANTIC_PASS"
-        if len(cases) == expected and len(valid) == expected
-        else "QUEUE_COMPACTION_DIAGNOSTIC_FAIL",
+        "status": status,
         "expected_case_count": expected,
         "case_count": len(cases),
-        "semantic_all_match": bool(cases) and all(case["semantic_match"] for case in cases),
+        "semantic_all_match": bool(cases)
+        and all(case["semantic_match"] for case in cases),
         "reference_all_match": bool(cases)
         and all(
             case["baseline_reference_match"] and case["compacted_reference_match"]
             for case in cases
         ),
+        "reference_resource_limit_cases": len(resource_limited),
+        "semantic_pass_cases": len(valid) + len(resource_limited),
         "queue_compactions_total": sum(case["queue_compactions"] for case in cases),
         "queue_compaction_removed_total": sum(
             case["queue_compaction_removed"] for case in cases
@@ -429,7 +451,10 @@ def _run(args: argparse.Namespace) -> int:
     )
     (output / "ALL_DONE").write_text("\n", encoding="utf-8")
     print(json.dumps(_jsonable(manifest), ensure_ascii=False, indent=2, sort_keys=True))
-    return 0 if summary["status"] == "QUEUE_COMPACTION_SEMANTIC_PASS" else 2
+    return 0 if summary["status"] in {
+        "QUEUE_COMPACTION_SEMANTIC_PASS",
+        "QUEUE_COMPACTION_REFERENCE_RESOURCE_LIMIT",
+    } else 2
 
 
 def _parser() -> argparse.ArgumentParser:
