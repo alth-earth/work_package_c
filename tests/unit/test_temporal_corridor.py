@@ -150,3 +150,69 @@ def test_invalid_lower_bound_never_fails_open() -> None:
     assert not evidence.certificate.usable
     assert evidence.certificate.allowed_nodes == ()
     assert evidence.reason.startswith("invalid_bound_evidence:")
+
+
+def test_complete_edge_envelope_is_scope_bound_and_digest_visible() -> None:
+    universe = ((0, 0), (0, 1), (1, 1))
+    edges = {
+        (0, 0): ((0, 1),),
+        (0, 1): ((1, 1),),
+        (1, 1): (),
+    }
+    forward = {(0, 0): 0.0, (0, 1): 1.0, (1, 1): 2.0}
+    reverse = {(0, 0): 2.0, (0, 1): 1.0, (1, 1): 0.0}
+    edge_lower = {
+        ((0, 0), (0, 1)): 1.0,
+        ((0, 1), (1, 1)): 1.0,
+    }
+    scope = _scope()
+
+    evidence = derive_temporal_corridor(
+        scope=scope,
+        expected_scope=scope,
+        universe_nodes=universe,
+        start=(0, 0),
+        goal=(1, 1),
+        neighbors=lambda node: edges[node],
+        forward_lower_hours=forward,
+        reverse_lower_hours=reverse,
+        horizon_hours=2.0,
+        objective="fastest",
+        bound_evidence=_evidence(scope),
+        include_arrival_upper_bounds=True,
+        edge_lower_hours=edge_lower,
+        edge_bound_complete=True,
+    )
+
+    assert evidence.certificate.usable
+    assert evidence.certificate.edge_bound_complete
+    assert evidence.certificate.edge_bound_digest
+    assert evidence.edge_lower_hours == tuple((*edge, value) for edge, value in edge_lower.items())
+
+
+def test_incomplete_edge_envelope_is_rejected_without_authorization() -> None:
+    universe = ((0, 0), (0, 1), (1, 1))
+    scope = _scope()
+    evidence = derive_temporal_corridor(
+        scope=scope,
+        expected_scope=scope,
+        universe_nodes=universe,
+        start=(0, 0),
+        goal=(1, 1),
+        neighbors=lambda node: {
+            (0, 0): ((0, 1),),
+            (0, 1): ((1, 1),),
+            (1, 1): (),
+        }[node],
+        forward_lower_hours={node: 0.0 for node in universe},
+        reverse_lower_hours={node: 0.0 for node in universe},
+        horizon_hours=2.0,
+        objective="fastest",
+        bound_evidence=_evidence(scope),
+        include_arrival_upper_bounds=True,
+        edge_lower_hours={((0, 0), (0, 1)): 1.0},
+        edge_bound_complete=True,
+    )
+
+    assert not evidence.certificate.usable
+    assert evidence.reason == "invalid_edge_bound:ValueError"

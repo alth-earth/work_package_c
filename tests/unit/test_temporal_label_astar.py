@@ -10,8 +10,14 @@ import pytest
 from arctic_route_planning.cost import EdgeCostInput, VesselPerformanceModel
 from arctic_route_planning.domain.models import ObjectiveMode
 from arctic_route_planning.grid import RegularGrid, heading_change_degrees
-from arctic_route_planning.planners import NoRouteError, PlanningCancelled, PlanningRequest
+from arctic_route_planning.planners import (
+    NoRouteError,
+    PlanningCancelled,
+    PlanningHorizonExceeded,
+    PlanningRequest,
+)
 from arctic_route_planning.planners.eta_refinement import EtaRefinementError
+from arctic_route_planning.planners.temporal_bounds import qualify_state_bound
 from arctic_route_planning.planners.temporal_label_astar import (
     TemporalLabel,
     TemporalLabelAStar,
@@ -234,9 +240,7 @@ def test_eta_failure_class_is_preserved_in_session_diagnostics() -> None:
     with pytest.raises(NoRouteError, match="no exact-arrival route"):
         planner.advance_session(session)
 
-    assert session.context.diagnostics.eta_failure_reasons == {
-        "fixed_point_uncertain": 3
-    }
+    assert session.context.diagnostics.eta_failure_reasons == {"fixed_point_uncertain": 3}
 
 
 def test_queue_compaction_removes_only_stale_entries() -> None:
@@ -353,3 +357,52 @@ def test_eta_failure_rejects_edge_and_does_not_return_partial_route() -> None:
 
     with pytest.raises(NoRouteError, match="no exact-arrival route"):
         planner.plan(request)
+
+
+def test_edge_envelope_prefilters_before_evaluator_and_preserves_horizon_failure() -> None:
+    request = PlanningRequest(
+        start=(0, 0),
+        goal=(0, 1),
+        departure_time=T0,
+        maximum_elapsed=timedelta(hours=1),
+    )
+
+    baseline = _planner(rows=2, columns=2, allow_diagonal=False)
+    baseline._injected_edge_evaluator = _scripted_edge(baseline, 2.0)
+    with pytest.raises(PlanningHorizonExceeded, match="no complete exact-arrival route"):
+        baseline.plan(request)
+
+    candidate = _planner(rows=2, columns=2, allow_diagonal=False)
+    candidate._injected_edge_evaluator = _scripted_edge(candidate, 2.0)
+    scope = candidate.temporal_scope(request)
+    nodes = tuple(
+        (row, column)
+        for row in range(candidate.grid.shape[0])
+        for column in range(candidate.grid.shape[1])
+    )
+    edges = tuple((node, neighbor) for node in nodes for neighbor in candidate.grid.neighbors(node))
+    certificate = qualify_state_bound(
+        scope,
+        nodes,
+        universe_nodes=nodes,
+        exclusion_proof=True,
+        proof_digest="edge-envelope-test-v1",
+        coverage_complete=True,
+        evaluator_certified=True,
+        arrival_upper_hours={node: 1.0 for node in nodes},
+        edge_lower_hours={edge: 2.0 for edge in edges},
+        edge_bound_complete=True,
+    )
+    assert certificate.usable
+    candidate.state_bound_certificate = certificate
+    session = candidate.create_session(request)
+
+    with pytest.raises(PlanningHorizonExceeded, match="no complete exact-arrival route"):
+        candidate.advance_session(session)
+
+    assert session.context.diagnostics.edge_evaluations == 0
+    assert session.context.diagnostics.state_bound_edge_checks == len(
+        tuple(candidate.grid.neighbors(request.start))
+    )
+    assert session.context.diagnostics.state_bound_edge_pruned > 0
+    assert session.context.diagnostics.rejected_coverage_edges > 0

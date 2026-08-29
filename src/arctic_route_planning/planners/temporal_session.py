@@ -624,6 +624,14 @@ class TemporalSession:
                 previous_heading = self.planner._previous_heading(node, incoming_code)
                 for neighbor in self.planner.grid.neighbors(node):
                     self.planner._check_cancelled(self.request)
+                    if self.planner._should_prune_state_bound_transition(
+                        node,
+                        neighbor,
+                        arrival_time,
+                        self.request,
+                        context=self.context,
+                    ):
+                        continue
                     self.context.diagnostics.edge_evaluations += 1
                     if (
                         self.context.diagnostics.edge_evaluations

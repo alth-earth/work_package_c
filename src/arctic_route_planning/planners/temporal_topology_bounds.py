@@ -106,6 +106,18 @@ class TopologicalLowerBoundEvidence:
     def reverse_map(self) -> Mapping[Any, float]:
         return dict(self.reverse_lower_hours)
 
+    @property
+    def edge_lower_map(self) -> Mapping[tuple[Any, Any], float]:
+        """Return the certified directed per-edge lower travel times."""
+
+        if not self.usable:
+            return {}
+        speed = self.max_speed_km_per_hour
+        return {
+            (start, end): max(0.0, nextafter(distance / speed, float("-inf")))
+            for start, end, distance in self.edge_distances_km
+        }
+
     def as_admissible_bound_evidence(self) -> Any:
         """Adapt to the existing corridor evidence without a public export."""
 

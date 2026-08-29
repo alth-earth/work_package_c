@@ -186,6 +186,8 @@ class TemporalDiagnostics:
     state_bound_checks: int = 0
     state_bound_pruned: int = 0
     state_bound_arrival_pruned: int = 0
+    state_bound_edge_checks: int = 0
+    state_bound_edge_pruned: int = 0
     state_bound_rejected: int = 0
     state_bound_rejection_reasons: tuple[tuple[str, int], ...] = ()
 
@@ -262,6 +264,8 @@ class _MutableDiagnostics:
     state_bound_checks: int = 0
     state_bound_pruned: int = 0
     state_bound_arrival_pruned: int = 0
+    state_bound_edge_checks: int = 0
+    state_bound_edge_pruned: int = 0
     state_bound_rejected: int = 0
     state_bound_rejection_reasons: dict[str, int] = field(default_factory=dict)
 
@@ -336,6 +340,8 @@ class _MutableDiagnostics:
             state_bound_checks=self.state_bound_checks,
             state_bound_pruned=self.state_bound_pruned,
             state_bound_arrival_pruned=self.state_bound_arrival_pruned,
+            state_bound_edge_checks=self.state_bound_edge_checks,
+            state_bound_edge_pruned=self.state_bound_edge_pruned,
             state_bound_rejected=self.state_bound_rejected,
             state_bound_rejection_reasons=tuple(sorted(self.state_bound_rejection_reasons.items())),
         )
@@ -862,6 +868,46 @@ class TemporalLabelAStar(TimeDependentAStar):
                 context.diagnostics.state_bound_arrival_pruned += 1
             return True
         return False
+
+    def _should_prune_state_bound_transition(
+        self,
+        start_node: Node,
+        end_node: Node,
+        arrival_time: datetime,
+        request: PlanningRequest,
+        *,
+        context: _TemporalExecutionContext,
+    ) -> bool:
+        """Reject an impossible transition before expensive edge evaluation.
+
+        The optional transition envelope is stronger than the historical
+        node/arrival check only when both a complete edge lower-bound map and
+        a complete destination arrival envelope are present.  All other
+        certificates return ``False`` so the exact evaluator remains the
+        source of truth.
+        """
+
+        if not self._authorize_state_bound(context, request):
+            return False
+        certificate = context.state_bound_certificate or self.state_bound_certificate
+        if certificate is None:
+            return False
+        context.diagnostics.state_bound_edge_checks += 1
+        if certificate.allows_transition(
+            start_node,
+            end_node,
+            arrival_time,
+            request.departure_time,
+        ):
+            return False
+        context.diagnostics.state_bound_edge_pruned += 1
+        context.diagnostics.state_bound_pruned += 1
+        # Preserve the historical terminal failure semantic: an edge ruled
+        # out solely because its certified lower arrival already exceeds the
+        # request horizon is still a coverage rejection, not an unexplained
+        # generic no-route result.
+        context.diagnostics.reject("coverage")
+        return True
 
     def _should_prune_dominated_label(
         self,

@@ -43,6 +43,11 @@ class TemporalStateBoundCertificate:
     # elapsed hours at which a newly generated label may still reach the goal.
     # An empty tuple preserves the historical node-only bound semantics.
     arrival_upper_hours: tuple[tuple[Any, float], ...] = ()
+    # Optional transition-level envelope.  Values are conservative lower
+    # travel times for directed edges.  The map is used only when the caller
+    # explicitly certifies complete edge coverage; missing edges remain live.
+    edge_lower_hours: tuple[tuple[Any, Any, float], ...] = ()
+    edge_bound_complete: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "scope", TemporalScope.from_mapping(self.scope))
@@ -73,6 +78,31 @@ class TemporalStateBoundCertificate:
         if any(node not in self.allowed_nodes for node, _ in normalized_arrival_bounds):
             raise ValueError("arrival upper-bound nodes must be allowed nodes")
         object.__setattr__(self, "arrival_upper_hours", tuple(normalized_arrival_bounds))
+        raw_edge_bounds = self.edge_lower_hours
+        if isinstance(raw_edge_bounds, Mapping):
+            raw_edge_bounds = tuple(
+                (*key, value) for key, value in raw_edge_bounds.items()
+            )
+        else:
+            raw_edge_bounds = tuple(raw_edge_bounds)
+        normalized_edge_bounds: list[tuple[Any, Any, float]] = []
+        seen_edges: set[tuple[Any, Any]] = set()
+        for item in raw_edge_bounds:
+            if not isinstance(item, (tuple, list)) or len(item) != 3:
+                raise ValueError("edge lower bounds must be start/end/value triples")
+            start, end, lower_hours = item
+            try:
+                edge = (start, end)
+                duplicate = edge in seen_edges
+                seen_edges.add(edge)
+            except TypeError as error:
+                raise ValueError("edge lower-bound endpoints must be hashable") from error
+            if duplicate:
+                raise ValueError("edge lower bounds must not contain duplicate edges")
+            if not isfinite(float(lower_hours)) or float(lower_hours) < 0.0:
+                raise ValueError("edge lower bounds must be finite and non-negative")
+            normalized_edge_bounds.append((start, end, float(lower_hours)))
+        object.__setattr__(self, "edge_lower_hours", tuple(normalized_edge_bounds))
         if self.schema_version != "c.temporal-state-bound-certificate.v1":
             raise ValueError("unsupported temporal state-bound certificate schema")
         if not isinstance(self.exclusion_proof, bool):
@@ -81,6 +111,8 @@ class TemporalStateBoundCertificate:
             raise ValueError("coverage_complete must be boolean")
         if not isinstance(self.evaluator_certified, bool):
             raise ValueError("evaluator_certified must be boolean")
+        if not isinstance(self.edge_bound_complete, bool):
+            raise ValueError("edge_bound_complete must be boolean")
         if self.status is TemporalStateBoundStatus.CERTIFIED and not self.exclusion_proof:
             raise ValueError("certified state bound requires an exclusion proof")
         if self.status is TemporalStateBoundStatus.CERTIFIED and not self.proof_digest:
@@ -89,6 +121,12 @@ class TemporalStateBoundCertificate:
             raise ValueError("certified state bound requires complete coverage")
         if self.status is TemporalStateBoundStatus.CERTIFIED and not self.evaluator_certified:
             raise ValueError("certified state bound requires a certified evaluator")
+        if (
+            self.status is TemporalStateBoundStatus.CERTIFIED
+            and self.edge_bound_complete
+            and not self.edge_lower_hours
+        ):
+            raise ValueError("complete edge bound requires edge lower bounds")
 
     @classmethod
     def disabled(
@@ -112,6 +150,8 @@ class TemporalStateBoundCertificate:
         coverage_complete: bool = True,
         evaluator_certified: bool = True,
         arrival_upper_hours: Mapping[Any, float] | Iterable[tuple[Any, float]] = (),
+        edge_lower_hours: Mapping[Any, float] | Iterable[tuple[Any, Any, float]] = (),
+        edge_bound_complete: bool = False,
     ) -> TemporalStateBoundCertificate:
         if not isinstance(proof_digest, str) or not proof_digest.strip():
             raise ValueError("proof_digest must be a non-empty stable string")
@@ -125,6 +165,8 @@ class TemporalStateBoundCertificate:
             coverage_complete=coverage_complete,
             evaluator_certified=evaluator_certified,
             arrival_upper_hours=arrival_upper_hours,
+            edge_lower_hours=edge_lower_hours,
+            edge_bound_complete=edge_bound_complete,
         )
 
     @property
@@ -142,6 +184,8 @@ class TemporalStateBoundCertificate:
                 "evaluator_certified": self.evaluator_certified,
                 "reason": self.reason,
                 "arrival_upper_hours": self.arrival_upper_hours,
+                "edge_lower_hours": self.edge_lower_hours,
+                "edge_bound_complete": self.edge_bound_complete,
             }
         )
 
@@ -170,6 +214,17 @@ class TemporalStateBoundCertificate:
         if not self.arrival_upper_hours:
             return False
         return {node for node, _ in self.arrival_upper_hours} == set(self.allowed_nodes)
+
+    @property
+    def edge_bound_digest(self) -> str:
+        """Return a stable digest for the optional transition envelope."""
+
+        return canonical_digest(
+            {
+                "edge_lower_hours": self.edge_lower_hours,
+                "edge_bound_complete": self.edge_bound_complete,
+            }
+        )
 
     def allows_state(
         self,
@@ -207,6 +262,46 @@ class TemporalStateBoundCertificate:
         # boundary cannot be rejected because of binary floating-point noise.
         return nextafter(elapsed_hours, float("-inf")) <= upper_hours
 
+    def allows_transition(
+        self,
+        start_node: Any,
+        end_node: Any,
+        arrival_time: datetime,
+        departure_time: datetime,
+    ) -> bool:
+        """Return whether a transition can still reach its node envelope.
+
+        This is deliberately conservative: without a complete edge envelope,
+        a matching edge, a complete arrival envelope, or valid UTC timestamps,
+        the transition is retained.  A transition is rejected only when the
+        certified lower travel time makes the destination's upper arrival
+        bound impossible even after outward rounding.
+        """
+
+        if not self.edge_bound_complete or not self.arrival_bound_complete:
+            return True
+        edge_lower_by_pair = {
+            (start, end): lower for start, end, lower in self.edge_lower_hours
+        }
+        lower_hours = edge_lower_by_pair.get((start_node, end_node))
+        upper_hours = dict(self.arrival_upper_hours).get(end_node)
+        if lower_hours is None or upper_hours is None:
+            return True
+        if (
+            arrival_time.tzinfo is None
+            or arrival_time.utcoffset() is None
+            or departure_time.tzinfo is None
+            or departure_time.utcoffset() is None
+        ):
+            return True
+        elapsed_hours = (
+            arrival_time.astimezone(UTC) - departure_time.astimezone(UTC)
+        ).total_seconds() / 3600.0
+        if not isfinite(elapsed_hours) or elapsed_hours < 0.0:
+            return True
+        lower_arrival_hours = nextafter(elapsed_hours + lower_hours, float("-inf"))
+        return lower_arrival_hours <= upper_hours
+
 
 def qualify_state_bound(
     scope: Mapping[str, Any] | TemporalScope,
@@ -218,6 +313,8 @@ def qualify_state_bound(
     coverage_complete: bool = False,
     evaluator_certified: bool = False,
     arrival_upper_hours: Mapping[Any, float] | Iterable[tuple[Any, float]] = (),
+    edge_lower_hours: Mapping[Any, float] | Iterable[tuple[Any, Any, float]] = (),
+    edge_bound_complete: bool = False,
 ) -> TemporalStateBoundCertificate:
     """Construct a state-bound certificate without accepting partial proofs.
 
@@ -244,6 +341,8 @@ def qualify_state_bound(
                 coverage_complete=False,
                 evaluator_certified=evaluator_certified,
                 arrival_upper_hours=arrival_upper_hours,
+                edge_lower_hours=edge_lower_hours,
+                edge_bound_complete=False,
             )
         excluded = tuple(node for node in universe if node not in set(allowed))
     else:
@@ -256,6 +355,8 @@ def qualify_state_bound(
         reason = "unknown_evaluator"
     elif not proof_digest:
         reason = "missing_proof_digest"
+    elif edge_bound_complete and not edge_lower_hours:
+        reason = "edge_bound_coverage_incomplete"
     else:
         reason = None
     status = (
@@ -274,6 +375,8 @@ def qualify_state_bound(
         coverage_complete=coverage_complete,
         evaluator_certified=evaluator_certified,
         arrival_upper_hours=arrival_upper_hours,
+        edge_lower_hours=edge_lower_hours,
+        edge_bound_complete=edge_bound_complete and reason is None,
     )
 
 

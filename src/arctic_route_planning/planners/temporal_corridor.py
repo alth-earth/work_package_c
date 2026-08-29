@@ -79,6 +79,8 @@ class TemporalCorridorEvidence:
     reverse_bounds: tuple[tuple[Any, float], ...]
     objective: str
     arrival_upper_bounds: tuple[tuple[Any, float], ...] = ()
+    edge_lower_hours: tuple[tuple[Any, Any, float], ...] = ()
+    edge_bound_complete: bool = False
     projected_label_reduction: float | None = None
     reason: str | None = None
     schema_version: str = "c.p0.1-temporal-corridor-evidence.v1"
@@ -102,6 +104,8 @@ class TemporalCorridorEvidence:
                 "forward_bounds": self.forward_bounds,
                 "reverse_bounds": self.reverse_bounds,
                 "arrival_upper_bounds": self.arrival_upper_bounds,
+                "edge_lower_hours": self.edge_lower_hours,
+                "edge_bound_complete": self.edge_bound_complete,
                 "objective": self.objective,
                 "projected_label_reduction": self.projected_label_reduction,
                 "reason": self.reason,
@@ -168,6 +172,9 @@ def derive_temporal_corridor(
     objective_lower_bound: Mapping[Any, float] | Callable[[Any], float] | None = None,
     generated_nodes: Iterable[Any] | None = None,
     include_arrival_upper_bounds: bool = False,
+    edge_lower_hours: Mapping[tuple[Any, Any], float]
+    | Iterable[tuple[Any, Any, float]] = (),
+    edge_bound_complete: bool = False,
 ) -> TemporalCorridorEvidence:
     """Derive a necessary-condition corridor and a fail-closed certificate.
 
@@ -220,6 +227,51 @@ def derive_temporal_corridor(
             universe_count=len(universe),
             objective=objective,
             reason="start_or_goal_outside_universe",
+        )
+
+    normalized_edge_bounds: list[tuple[Any, Any, float]] = []
+    try:
+        if isinstance(edge_lower_hours, Mapping):
+            raw_edges = tuple(
+                (*edge, value) for edge, value in edge_lower_hours.items()
+            )
+        else:
+            raw_edges = tuple(edge_lower_hours)
+        seen_edges: set[tuple[Any, Any]] = set()
+        universe_set = set(universe)
+        for item in raw_edges:
+            if not isinstance(item, (tuple, list)) or len(item) != 3:
+                raise ValueError("edge lower bounds must be start/end/value triples")
+            edge_start, edge_end, lower_hours_value = item
+            edge = (edge_start, edge_end)
+            if edge in seen_edges:
+                raise ValueError("duplicate edge lower bound")
+            seen_edges.add(edge)
+            if edge_start not in universe_set or edge_end not in universe_set:
+                raise ValueError("edge lower bound outside universe")
+            value = float(lower_hours_value)
+            if not isfinite(value) or value < 0.0:
+                raise ValueError("edge lower bounds must be finite and non-negative")
+            normalized_edge_bounds.append((edge_start, edge_end, value))
+        if edge_bound_complete:
+            if not normalized_edge_bounds or neighbors is None:
+                raise ValueError("edge bound coverage is incomplete")
+            expected_edges = {
+                (node, neighbour)
+                for node in universe
+                for neighbour in neighbors(node)
+            }
+            if not expected_edges.issubset(seen_edges):
+                raise ValueError("edge bound coverage is incomplete")
+    except (KeyError, TypeError, ValueError) as error:
+        return _rejected(
+            scope=active_scope,
+            start=start,
+            goal=goal,
+            horizon_hours=horizon_hours,
+            universe_count=len(universe),
+            objective=objective,
+            reason=f"invalid_edge_bound:{type(error).__name__}",
         )
 
     def read_bound(value: Mapping[Any, float] | Callable[[Any], float], node: Any) -> float:
@@ -313,6 +365,8 @@ def derive_temporal_corridor(
         "horizon_hours": horizon_hours,
         "objective": objective,
         "incumbent_upper_bound": incumbent_upper_bound,
+        "edge_lower_hours": tuple(normalized_edge_bounds),
+        "edge_bound_complete": edge_bound_complete,
     }
     if include_arrival_upper_bounds:
         proof_payload["arrival_upper"] = tuple(arrival_upper)
@@ -326,6 +380,8 @@ def derive_temporal_corridor(
         coverage_complete=True,
         evaluator_certified=True,
         arrival_upper_hours=tuple(arrival_upper),
+        edge_lower_hours=tuple(normalized_edge_bounds),
+        edge_bound_complete=edge_bound_complete,
     )
     projected = None
     if generated_nodes is not None:
@@ -343,6 +399,8 @@ def derive_temporal_corridor(
         forward_bounds=tuple(forward),
         reverse_bounds=tuple(reverse),
         arrival_upper_bounds=tuple(arrival_upper),
+        edge_lower_hours=tuple(normalized_edge_bounds),
+        edge_bound_complete=edge_bound_complete,
         objective=objective,
         projected_label_reduction=projected,
         reason=None if certificate.usable else certificate.reason,

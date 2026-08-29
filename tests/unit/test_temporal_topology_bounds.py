@@ -37,6 +37,12 @@ def test_graph_lower_bounds_are_complete_and_adapt_to_corridor_evidence() -> Non
     assert evidence.usable
     assert evidence.forward_map[NODES[-1]] < 3.0
     assert evidence.reverse_map[NODES[0]] < 3.0
+    assert set(evidence.edge_lower_map) == {
+        (NODES[0], NODES[1]),
+        (NODES[1], NODES[2]),
+        (NODES[2], NODES[3]),
+    }
+    assert all(value > 0.0 for value in evidence.edge_lower_map.values())
     adapted = evidence.as_admissible_bound_evidence()
     assert adapted.usable(evidence.scope)
     assert evidence.digest
