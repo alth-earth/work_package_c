@@ -2919,3 +2919,37 @@ production/frozen/latest 写入；M9 的 24h queue resource fail、FIFO violatio
 P3 和 ARA* 历史结论保持不变。下一步仅可另立“带连续 FIFO/interval proof 的 dominance
 资格”或“真实 24h corridor/resource frontier”计划；不因本轮 pruning 结果自动启用任何
 生产算法。
+
+### 【2026-08-29 | PLANNED】P0.2-M18：real 24h actual-Pareto state-bound resource frontier
+
+M17 已在真实 145 帧 `executable_0_6h` 输入、完整 scope 和强制 `MemoryMax=4G`/
+`MemorySwapMax=0` 下证明 graph-topological arrival envelope 可以安全接入 actual Pareto
+bridge，并观察到真实新 label pruning；但 M9 的 `rolling_0_24h` frozen queue 上限失败仍未
+得到 state-bound 路径下的可审计前沿。本轮只做真实 24h 资源诊断，不提高
+`50k/100k/50k/400k` 限制，不调用 `certified_only(...)`，不授权 candidate/Winter。
+
+**隔离与身份。** 从 M17 权威提交 `63bf381` 建立本地分支
+`research/p02-m18-real-pareto-24h-20260829` 和独立 worktree；正式
+`research-validation-system`、M17 worktree/构件和其他 agent 改动保持只读。runner identity
+继续绑定 implementation、`uv.lock`、configs、145 帧 RiskFrame content/frame digests、冻结
+route-plan-set、三目标 TemporalScope、bounded ETA、search limits、topological bound/evaluator
+digest，并要求 clean implementation worktree。复用 holdout/development 的冻结
+`rolling_0_24h` 目标，不下载或替换输入。
+
+**执行。** 扩展 M17 actual-Pareto state-bound runner 仅支持
+`rolling_0_24h`（并保留 `executable_0_6h` 兼容性），每输入、目标、one-shot 与
+slice→restore 至少一份独立 case；worker 固定 CPU、`MemoryMax=4G`、`MemorySwapMax=0`，每个
+case 立即 fsync manifest/cases/resource evidence。baseline 不传证书，candidate 只显式传完整
+scope 的 graph-topological arrival certificate；reference zero-heuristic Dijkstra 仅用于路线和
+业务字段正确性。某目标触及 queue/label/expansion/edge 上限、timeout、OOM 或资源证据缺失时，
+保存该失败并继续其他目标/输入；不择优重跑，不放宽上限。
+
+**通过与失败语义。** 每个完成 case 必须保持 baseline/candidate/reference 的节点、精确 ETA、
+速度、风险、成本、confidence、source IDs、失败语义和 deterministic digest 一致；scope、
+certificate 或 state-bound rejection 失败时 pruning 必须为零。24h 观察到合法 pruning 只作
+资源证据，不构成性能门或连续海洋模型最优性证明。状态固定为：语义完整且强 cgroup 资源干净
+时 `REAL_INPUT_24H_STATE_BOUND_RESOURCE_REVIEW`；触及冻结上限时
+`REAL_INPUT_24H_STATE_BOUND_RESOURCE_FAIL`；语义通过但 cgroup/构件不完整时
+`REAL_INPUT_STATE_BOUND_SEMANTIC_PASS_RESOURCE_INCONCLUSIVE`；身份漂移、fail-open 或不完整
+构件为 `INVALID/PENDING`。无论结果如何，FIFO violation、dominance disabled、candidate 和
+Winter 边界不变；仅可为后续 corridor/envelope 或 P0.2 implementation 计划提供证据。
