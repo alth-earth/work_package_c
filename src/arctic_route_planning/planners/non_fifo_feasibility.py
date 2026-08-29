@@ -22,6 +22,7 @@ from types import CodeType
 from typing import Any
 
 _INCUMBENT_BOUND_DISABLED_DIGEST = "non-fifo-pareto-incumbent-bound-disabled"
+_PARETO_PRIORITY_DEFAULT_DIGEST = "non-fifo-pareto-priority-cost-vector-v1"
 
 
 def _digest(value: Any) -> str:
@@ -645,6 +646,7 @@ class NonFifoParetoSearchResult:
     incumbent_bound_pruned: int = 0
     incumbent_bound_rejected: int = 0
     incumbent_bound_rejection_reasons: tuple[tuple[str, int], ...] = ()
+    priority_policy_digest: str = _PARETO_PRIORITY_DEFAULT_DIGEST
     # A terminal-bound search deliberately proves only the selected route,
     # not the complete exact-arrival goal frontier.  Keep this explicit in
     # the result so callers cannot accidentally promote it to a frontier
@@ -717,6 +719,7 @@ class NonFifoParetoSearchResult:
             "reason": self.reason,
             "pareto_pruning": self.pareto_pruning,
             "incumbent_bound_digest": self.incumbent_bound_digest,
+            "priority_policy_digest": self.priority_policy_digest,
             "frontier_complete": self.frontier_complete,
             "selection_only": self.selection_only,
             "search_limits": self.search_limits,
@@ -1165,6 +1168,8 @@ class NonFifoParetoSessionIdentity:
     config_digest: str = "unspecified-config"
     scope_digest: str = "unspecified-scope"
     incumbent_bound_digest: str = _INCUMBENT_BOUND_DISABLED_DIGEST
+    priority_callback_digest: str = "non-fifo-pareto-priority-none"
+    priority_policy_digest: str = _PARETO_PRIORITY_DEFAULT_DIGEST
     schema_version: str = "c.p0.2-nonfifo-pareto-session.v1"
 
     @classmethod
@@ -1189,6 +1194,8 @@ class NonFifoParetoSessionIdentity:
         config_digest: str = "unspecified-config",
         scope_digest: str = "unspecified-scope",
         incumbent_bound_digest: str = _INCUMBENT_BOUND_DISABLED_DIGEST,
+        priority: Callable[[NonFifoParetoLabel], float] | None = None,
+        priority_policy_digest: str = _PARETO_PRIORITY_DEFAULT_DIGEST,
     ) -> NonFifoParetoSessionIdentity:
         return cls(
             start=start,
@@ -1209,6 +1216,8 @@ class NonFifoParetoSessionIdentity:
             config_digest=config_digest,
             scope_digest=scope_digest,
             incumbent_bound_digest=incumbent_bound_digest,
+            priority_callback_digest=_priority_callback_digest(priority),
+            priority_policy_digest=priority_policy_digest,
         )
 
     @property
@@ -1232,6 +1241,8 @@ class NonFifoParetoSessionIdentity:
                 "config_digest": self.config_digest,
                 "scope_digest": self.scope_digest,
                 "incumbent_bound_digest": self.incumbent_bound_digest,
+                "priority_callback_digest": self.priority_callback_digest,
+                "priority_policy_digest": self.priority_policy_digest,
             }
         )
 
@@ -1248,6 +1259,7 @@ class NonFifoParetoSessionIdentity:
                 "maximum_elapsed_seconds": self.maximum_elapsed_seconds,
                 "scope_digest": self.scope_digest,
                 "incumbent_bound_digest": self.incumbent_bound_digest,
+                "priority_policy_digest": self.priority_policy_digest,
             }
         )
 
@@ -1319,6 +1331,8 @@ class NonFifoParetoSessionIdentity:
                 self.config_digest,
                 self.scope_digest,
                 self.incumbent_bound_digest,
+                self.priority_callback_digest,
+                self.priority_policy_digest,
             )
         ):
             raise NonFifoParetoSessionIdentityMismatch("session identity digests are incomplete")
@@ -1809,6 +1823,14 @@ def _callback_digest(callback: Any) -> str:
     return f"code:{_digest(payload)}"
 
 
+def _priority_callback_digest(callback: Any) -> str:
+    """Fingerprint the optional queue-priority callback, including absence."""
+
+    if callback is None:
+        return "non-fifo-pareto-priority-none"
+    return _callback_digest(callback)
+
+
 class NonFifoParetoSession:
     """A resumable finite exact-arrival Pareto research session.
 
@@ -1837,6 +1859,7 @@ class NonFifoParetoSession:
         "maximum_elapsed",
         "neighbors",
         "pareto_pruned",
+        "priority",
         "queue",
         "queue_peak",
         "result",
@@ -1866,6 +1889,8 @@ class NonFifoParetoSession:
         config_digest: str = "unspecified-config",
         scope_digest: str = "unspecified-scope",
         incumbent_bound_certificate: NonFifoParetoBoundCertificate | None = None,
+        priority: Callable[[NonFifoParetoLabel], float] | None = None,
+        priority_policy_digest: str = _PARETO_PRIORITY_DEFAULT_DIGEST,
         cancel_check: Callable[[], bool] | None = None,
         identity: NonFifoParetoSessionIdentity | None = None,
     ) -> None:
@@ -1890,6 +1915,8 @@ class NonFifoParetoSession:
                 if incumbent_bound_certificate is not None
                 else _INCUMBENT_BOUND_DISABLED_DIGEST
             ),
+            priority=priority,
+            priority_policy_digest=priority_policy_digest,
         )
         expected_identity = candidate_identity if identity is None else identity
         expected_identity.assert_valid()
@@ -1910,6 +1937,7 @@ class NonFifoParetoSession:
             incumbent_bound_certificate, NonFifoParetoTerminalBoundCertificate
         )
         self.neighbors = neighbors
+        self.priority = priority
         self.evaluate_edge = evaluate_edge
         self.cancel_check = cancel_check
         self.maximum_elapsed = (
@@ -1929,7 +1957,7 @@ class NonFifoParetoSession:
         )
         self.state = NonFifoParetoSessionState.READY
         self.labels_by_key = {initial.exact_key: [initial]}
-        self.queue = [(initial.costs, departure, 0, initial)]
+        self.queue = [self._queue_entry(initial, 0)]
         self.serial = 0
         self.expanded = 0
         self.generated = 0
@@ -1956,6 +1984,7 @@ class NonFifoParetoSession:
         ],
         cancel_check: Callable[[], bool] | None,
         incumbent_bound_certificate: NonFifoParetoBoundCertificate | None,
+        priority: Callable[[NonFifoParetoLabel], float] | None,
     ) -> NonFifoParetoSession:
         checkpoint.assert_valid()
         identity = checkpoint.identity
@@ -1963,6 +1992,8 @@ class NonFifoParetoSession:
             raise NonFifoParetoSessionIdentityMismatch("neighbor callback digest mismatch")
         if _callback_digest(evaluate_edge) != identity.evaluator_digest:
             raise NonFifoParetoSessionIdentityMismatch("evaluator callback digest mismatch")
+        if _priority_callback_digest(priority) != identity.priority_callback_digest:
+            raise NonFifoParetoSessionIdentityMismatch("priority callback digest mismatch")
         session = cls.__new__(cls)
         session.identity = identity
         if incumbent_bound_certificate is not None and not isinstance(
@@ -1986,6 +2017,7 @@ class NonFifoParetoSession:
             incumbent_bound_certificate, NonFifoParetoTerminalBoundCertificate
         )
         session.neighbors = neighbors
+        session.priority = priority
         session.evaluate_edge = evaluate_edge
         session.cancel_check = cancel_check
         session.maximum_elapsed = (
@@ -2016,6 +2048,23 @@ class NonFifoParetoSession:
         session.goals = list(checkpoint.goals)
         session.result = None
         return session
+
+    def _queue_key(self, label: NonFifoParetoLabel) -> tuple[float, ...]:
+        """Return a deterministic ordering key without changing label semantics."""
+
+        if self.priority is None:
+            return label.costs
+        value = float(self.priority(label))
+        if not isfinite(value) or value < 0.0:
+            raise NonFifoParetoSessionError("priority callback returned an invalid value")
+        # Keep the original vector after the scalar ordering value so ties are
+        # resolved exactly as in the historical queue.
+        return (value, *label.costs)
+
+    def _queue_entry(
+        self, label: NonFifoParetoLabel, serial: int
+    ) -> tuple[tuple[float, ...], datetime, int, NonFifoParetoLabel]:
+        return (self._queue_key(label), label.arrival_time, serial, label)
 
     def _record_incumbent_bound_rejection(self, reason: str) -> None:
         self.incumbent_bound_rejected += 1
@@ -2157,6 +2206,7 @@ class NonFifoParetoSession:
             incumbent_bound_rejection_reasons=tuple(
                 sorted(self.incumbent_bound_rejection_reasons.items())
             ),
+            priority_policy_digest=self.identity.priority_policy_digest,
             selection_only=self.incumbent_bound_selection_only,
         )
         return self.result
@@ -2256,7 +2306,7 @@ class NonFifoParetoSession:
                 self.serial += 1
                 heappush(
                     self.queue,
-                    (next_label.costs, next_label.arrival_time, self.serial, next_label),
+                    self._queue_entry(next_label, self.serial),
                 )
                 self.generated += 1
                 self.queue_peak = max(self.queue_peak, len(self.queue))
@@ -2325,6 +2375,7 @@ def restore_non_fifo_pareto_session(
     cancel_check: Callable[[], bool] | None = None,
     identity: NonFifoParetoSessionIdentity | None = None,
     incumbent_bound_certificate: NonFifoParetoBoundCertificate | None = None,
+    priority: Callable[[NonFifoParetoLabel], float] | None = None,
 ) -> NonFifoParetoSession:
     """Restore a paused finite session after all identity fences."""
 
@@ -2339,6 +2390,7 @@ def restore_non_fifo_pareto_session(
         evaluate_edge=evaluate_edge,
         cancel_check=cancel_check,
         incumbent_bound_certificate=incumbent_bound_certificate,
+        priority=priority,
     )
 
 
@@ -2361,6 +2413,8 @@ def search_non_fifo_pareto(
     config_digest: str = "one-shot-config",
     scope_digest: str = "unspecified-scope",
     incumbent_bound_certificate: NonFifoParetoBoundCertificate | None = None,
+    priority: Callable[[NonFifoParetoLabel], float] | None = None,
+    priority_policy_digest: str = _PARETO_PRIORITY_DEFAULT_DIGEST,
 ) -> NonFifoParetoSearchResult:
     """Run one finite session to completion with the historical API."""
 
@@ -2382,6 +2436,8 @@ def search_non_fifo_pareto(
         config_digest=config_digest,
         scope_digest=scope_digest,
         incumbent_bound_certificate=incumbent_bound_certificate,
+        priority=priority,
+        priority_policy_digest=priority_policy_digest,
     ).run()
 
 
@@ -2495,6 +2551,7 @@ def _pareto_result(
     incumbent_bound_pruned: int = 0,
     incumbent_bound_rejected: int = 0,
     incumbent_bound_rejection_reasons: Iterable[tuple[str, int]] = (),
+    priority_policy_digest: str = _PARETO_PRIORITY_DEFAULT_DIGEST,
     selection_only: bool = False,
 ) -> NonFifoParetoSearchResult:
     goal_list = tuple(goals)
@@ -2527,6 +2584,7 @@ def _pareto_result(
         incumbent_bound_pruned=incumbent_bound_pruned,
         incumbent_bound_rejected=incumbent_bound_rejected,
         incumbent_bound_rejection_reasons=tuple(incumbent_bound_rejection_reasons),
+        priority_policy_digest=priority_policy_digest,
         frontier_complete=not selection_only,
         selection_only=selection_only,
     )

@@ -4,7 +4,9 @@ This module is an explicit C-internal research path.  It adapts the real
 ``TemporalLabelAStar`` edge evaluator to the finite exact-arrival Pareto
 session without changing the production planner, its default policies, or
 any route contract.  The bridge keeps the incoming heading in the state and
-therefore does not accidentally erase turn-dependent future behaviour.
+therefore does not accidentally erase turn-dependent future behaviour.  An
+explicit certified heuristic may order the finite queue, but it never removes
+a label and is never enabled implicitly.
 
 The vector is additive and objective-scoped.  Its first component is the
 ordinary equivalent-hours total, followed by the raw business cost
@@ -47,6 +49,7 @@ from .non_fifo_feasibility import (
     restore_non_fifo_pareto_session,
 )
 from .temporal_bounds import TemporalStateBoundCertificate
+from .temporal_heuristic_bounds import TemporalHeuristicCertificate
 from .temporal_label_astar import TemporalLabelAStar, _eta_rejection_reason, _RejectedEdge
 from .temporal_qualification import TemporalScope
 from .time_dependent_astar import PlanningRequest, _EdgeTraversal
@@ -72,6 +75,7 @@ TEMPORAL_PARETO_COMPONENTS = tuple(TemporalParetoComponent)
 TEMPORAL_PARETO_SCHEMA = "c.p0.2-temporal-pareto-bridge.v1"
 _STATE_BOUND_DISABLED_DIGEST = "temporal-state-bound-disabled"
 _INCUMBENT_BOUND_DISABLED_DIGEST = "non-fifo-pareto-incumbent-bound-disabled"
+_HEURISTIC_DISABLED_DIGEST = "non-fifo-pareto-heuristic-disabled"
 _HEADING_NONE: tuple[int, int] | None = None
 type TemporalParetoState = tuple[tuple[int, int], tuple[int, int] | None]
 
@@ -550,12 +554,17 @@ def create_non_fifo_temporal_pareto_session(
         | NonFifoParetoTerminalBoundCertificate
         | None
     ) = None,
+    heuristic_certificate: TemporalHeuristicCertificate | None = None,
     identity: NonFifoParetoSessionIdentity | None = None,
 ) -> NonFifoTemporalParetoResearchSession:
     """Create an actual-edge Pareto session for explicit research only."""
 
     scope = _validate_bridge(
-        planner, request, state_bound_certificate, incumbent_bound_certificate
+        planner,
+        request,
+        state_bound_certificate,
+        incumbent_bound_certificate,
+        heuristic_certificate,
     )
     callbacks, context, component_digest = _callbacks(
         planner,
@@ -564,6 +573,7 @@ def create_non_fifo_temporal_pareto_session(
         skip_expected_rejections=skip_expected_rejections,
         state_bound_certificate=state_bound_certificate,
         incumbent_bound_certificate=incumbent_bound_certificate,
+        heuristic_certificate=heuristic_certificate,
     )
     session = create_non_fifo_pareto_session(
         start=(request.start, _HEADING_NONE),
@@ -583,6 +593,8 @@ def create_non_fifo_temporal_pareto_session(
         config_digest=component_digest,
         scope_digest=scope.digest,
         incumbent_bound_certificate=incumbent_bound_certificate,
+        priority=callbacks.priority,
+        priority_policy_digest=_heuristic_digest(heuristic_certificate),
         identity=identity,
     )
     return NonFifoTemporalParetoResearchSession(
@@ -603,6 +615,7 @@ def restore_non_fifo_temporal_pareto_session(
         | NonFifoParetoTerminalBoundCertificate
         | None
     ) = None,
+    heuristic_certificate: TemporalHeuristicCertificate | None = None,
 ) -> NonFifoTemporalParetoResearchSession:
     """Restore an actual-edge Pareto session after all bridge fences."""
 
@@ -610,7 +623,11 @@ def restore_non_fifo_temporal_pareto_session(
         raise NonFifoTemporalParetoError("checkpoint type is invalid")
     checkpoint.assert_valid()
     scope = _validate_bridge(
-        planner, request, state_bound_certificate, incumbent_bound_certificate
+        planner,
+        request,
+        state_bound_certificate,
+        incumbent_bound_certificate,
+        heuristic_certificate,
     )
     callbacks, context, component_digest = _callbacks(
         planner,
@@ -619,6 +636,7 @@ def restore_non_fifo_temporal_pareto_session(
         skip_expected_rejections=skip_expected_rejections,
         state_bound_certificate=state_bound_certificate,
         incumbent_bound_certificate=incumbent_bound_certificate,
+        heuristic_certificate=heuristic_certificate,
     )
     if checkpoint.scope_digest != scope.digest:
         raise NonFifoTemporalParetoError("actual Pareto checkpoint scope mismatch")
@@ -629,6 +647,11 @@ def restore_non_fifo_temporal_pareto_session(
     if checkpoint.incumbent_bound_digest != expected_incumbent_bound_digest:
         raise NonFifoTemporalParetoError(
             "actual Pareto checkpoint incumbent-bound digest mismatch"
+        )
+    expected_heuristic_digest = _heuristic_digest(heuristic_certificate)
+    if checkpoint.pareto_checkpoint.identity.priority_policy_digest != expected_heuristic_digest:
+        raise NonFifoTemporalParetoError(
+            "actual Pareto checkpoint heuristic policy digest mismatch"
         )
     if checkpoint.component_digest != component_digest:
         raise NonFifoTemporalParetoError("actual Pareto checkpoint component mismatch")
@@ -645,6 +668,7 @@ def restore_non_fifo_temporal_pareto_session(
         evaluate_edge=callbacks.evaluate_edge,
         cancel_check=request.cancel_check if cancel_check is None else cancel_check,
         incumbent_bound_certificate=incumbent_bound_certificate,
+        priority=callbacks.priority,
     )
     return NonFifoTemporalParetoResearchSession(
         planner, request, session, context, scope, component_digest
@@ -663,6 +687,7 @@ def run_non_fifo_temporal_pareto_search(
         | NonFifoParetoTerminalBoundCertificate
         | None
     ) = None,
+    heuristic_certificate: TemporalHeuristicCertificate | None = None,
 ) -> NonFifoTemporalParetoResult:
     """Run the actual-edge Pareto sidecar to a terminal state."""
 
@@ -673,6 +698,7 @@ def run_non_fifo_temporal_pareto_search(
         skip_expected_rejections=skip_expected_rejections,
         state_bound_certificate=state_bound_certificate,
         incumbent_bound_certificate=incumbent_bound_certificate,
+        heuristic_certificate=heuristic_certificate,
     ).run()
 
 
@@ -680,6 +706,7 @@ def run_non_fifo_temporal_pareto_search(
 class _Callbacks:
     neighbors: Any
     evaluate_edge: Any
+    priority: Any = None
 
 
 def _state_bound_digest(certificate: TemporalStateBoundCertificate | None) -> str:
@@ -702,6 +729,10 @@ def _incumbent_bound_digest(
     )
 
 
+def _heuristic_digest(certificate: TemporalHeuristicCertificate | None) -> str:
+    return certificate.digest if certificate is not None else _HEURISTIC_DISABLED_DIGEST
+
+
 def _validate_bridge(
     planner: TemporalLabelAStar,
     request: PlanningRequest,
@@ -711,6 +742,7 @@ def _validate_bridge(
         | NonFifoParetoTerminalBoundCertificate
         | None
     ) = None,
+    heuristic_certificate: TemporalHeuristicCertificate | None = None,
 ) -> TemporalScope:
     if not isinstance(planner, TemporalLabelAStar):
         raise NonFifoTemporalParetoError("actual Pareto bridge requires TemporalLabelAStar")
@@ -735,9 +767,22 @@ def _validate_bridge(
         raise NonFifoTemporalParetoError("incumbent-bound certificate type is invalid")
     if planner.heuristic_certificate is not None:
         raise NonFifoTemporalParetoError("actual Pareto bridge rejects heuristic certificates")
+    if heuristic_certificate is not None and not isinstance(
+        heuristic_certificate, TemporalHeuristicCertificate
+    ):
+        raise NonFifoTemporalParetoError("heuristic certificate type is invalid")
     scope = planner.temporal_scope(request)
     if not scope.evaluator_identity_known:
         raise NonFifoTemporalParetoError("actual Pareto bridge requires known evaluator identity")
+    if heuristic_certificate is not None:
+        if not heuristic_certificate.usable:
+            raise NonFifoTemporalParetoError(
+                "heuristic certificate is unusable or incomplete"
+            )
+        if not heuristic_certificate.permits(scope):
+            raise NonFifoTemporalParetoError("heuristic certificate scope mismatch")
+        if heuristic_certificate.objective != ObjectiveMode(request.objective).value:
+            raise NonFifoTemporalParetoError("heuristic certificate objective mismatch")
     return scope
 
 
@@ -753,6 +798,7 @@ def _callbacks(
         | NonFifoParetoTerminalBoundCertificate
         | None
     ),
+    heuristic_certificate: TemporalHeuristicCertificate | None,
 ) -> tuple[_Callbacks, Any, str]:
     component_digest = _digest(
         {
@@ -763,10 +809,18 @@ def _callbacks(
             "skip_expected_rejections": skip_expected_rejections,
             "state_bound_digest": _state_bound_digest(state_bound_certificate),
             "incumbent_bound_digest": _incumbent_bound_digest(incumbent_bound_certificate),
+            "heuristic_policy_digest": _heuristic_digest(heuristic_certificate),
         }
     )
     context = planner._new_execution_context()
     context.state_bound_certificate = state_bound_certificate
+    priority = None
+    if heuristic_certificate is not None:
+        context.heuristic_certificate = heuristic_certificate
+        context.heuristic_authorized = True
+        context.diagnostics.heuristic_policy = "certified"
+        context.diagnostics.heuristic_certificate_digest = heuristic_certificate.digest
+        context.diagnostics.heuristic_scope_match = True
     cost_model = planner._cost_model(ObjectiveMode(request.objective))
     token = f"{TEMPORAL_PARETO_SCHEMA}:{scope.digest}:{component_digest}"
 
@@ -832,9 +886,28 @@ def _callbacks(
             business=step.business,
         )
 
+    if heuristic_certificate is not None:
+        def priority(label: NonFifoParetoLabel) -> float:
+            node, _heading = _state_parts(label.node)
+            lower_bound = heuristic_certificate.lower_bound(node)
+            if lower_bound is None or not isfinite(lower_bound) or lower_bound < 0.0:
+                raise NonFifoTemporalParetoError(
+                    "heuristic certificate has no finite bound for a queued node"
+                )
+            value = label.costs[0] + float(lower_bound)
+            if not isfinite(value) or value < 0.0:
+                raise NonFifoTemporalParetoError(
+                    "heuristic priority is non-finite or negative"
+                )
+            return value
+
+        priority.__non_fifo_identity__ = (
+            f"priority:{token}:{heuristic_certificate.digest}"
+        )
+
     neighbors.__non_fifo_identity__ = f"neighbors:{token}"
     evaluate_edge.__non_fifo_identity__ = f"evaluator:{token}"
-    return _Callbacks(neighbors, evaluate_edge), context, component_digest
+    return _Callbacks(neighbors, evaluate_edge, priority), context, component_digest
 
 
 def _expected_rejection_reason(error: Exception, context: Any) -> str | None:
