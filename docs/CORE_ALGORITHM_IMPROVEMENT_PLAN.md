@@ -2123,6 +2123,51 @@ affinity、RSS、无 swap、4 GiB cgroup 和 OOM 事件证据完整（`resource_
 state/corridor 计划的证据；candidate、Winter、P2.1、P3、ARA* 和 dominance 继续默认关闭。
 完成验证后移除本轮辅助 worktree，保留研究分支和实验构件，不 push。
 
+### 【2026-08-29 | PLANNED】P0.2-M13：actual temporal session resumability and evidence audit
+
+M12/M12.1 已在有限非 FIFO Pareto sidecar 上证明 session/checkpoint 的 identity fence、
+恢复等价和 fail-closed 语义；M2-M4 则已将同一边界接到 active exact-arrival
+`TemporalSession`。当前缺口是：真实冻结输入的 actual session 仍只有 one-shot runner 证据，
+尚未把 one-shot、分片暂停、checkpoint→restore 和取消路径放在同一输入 identity 下逐项比较。
+本轮只补齐可恢复研究证据，不新增搜索剪枝、不改变 ETA 策略、不启用 candidate，也不重开
+Winter/P2.1/P3/ARA*。
+
+**治理与围栏。** 从 `e7bb916` 建立隔离分支
+`research/p02-m13-actual-session-20260829` 与独立 worktree；本段先提交后实现。
+主 worktree、B/C 与 C/D 合同、ingress/service、正式 planner、formal latest、replanning
+baseline、frozen artifact、M2J/M2K 历史均只读。实验 identity 绑定 implementation、
+`uv.lock`、配置树、完整 145 帧 RiskFrame/route-plan-set digest、scope、request、ETA policy、
+search limits、evaluator 和 adapter mode；冻结 `50k/100k/50k/400k` 资源上限。
+
+**研究 runner。** 新增独立 `scripts/benchmark_non_fifo_temporal_session.py`，schema
+`c.p0.2-temporal-session-real.v1`，复用已冻结 `benchmark_temporal_dominance_real.py`
+fixture loader，但不修改既有 real adapter runner。每个 worker 使用固定 CPU、独立进程和
+资源快照，支持 `one_shot`、`slice_restore`、`cancelled` 三种模式；`slice_restore` 必须在
+同一 session identity 下先暂停、保存 adapter/active checkpoint digest，再恢复并完成，
+不得把重新创建 session 当作恢复。每个完成 case 立即 fsync 写入 manifest/cases/session
+checkpoint/summary/heartbeat，并支持仅接受完全一致 identity 的 resume。
+
+**语义矩阵。** 对 holdout/development 的 `executable_0_6h`、三个 objective，先 synthetic
+adapter fixtures，再按资源预算执行 one-shot 与 slice→restore；每个成功结果比较 route
+nodes、exact UTC ETA、speed/risk/cost/confidence/source IDs、failure status 和 semantic
+digest，并以独立 zero-heuristic reference 作为正确性证据。取消、evaluator failure、
+resource limit、identity/policy/config/limit/checkpoint drift 必须无 partial route/frontier，
+且 dominance/state-bound pruning 为零。24h 只在 6h 三目标构件完整且资源稳定时作为单独诊断，
+不因任何成功结果自动扩大到 full-voyage。
+
+**收口门。** 仅当 one-shot 与 slice→restore 的成功/失败语义和业务字段完全一致、恢复
+session identity fence 生效、取消/资源/漂移 fail-closed、确定性和资源证据完整时标记
+`READY_FOR_P0.2-REAL-SESSION-RECOVERY-REVIEW`。真实 FIFO 已知为
+`REAL_INPUT_FIFO_VIOLATED`，本轮不重新解释为 dominance 资格；任一 semantic mismatch、
+partial frontier、pruning、identity 漂移或资源证据缺失标记 `NO_PERFORMANCE_PROOF/FAIL` 或
+`INVALID/PENDING`，保持 adapter/default-off。
+
+**验证与提交。** 先跑 adapter/session/checkpoint、runner contract 和正式默认路径聚焦测试，
+再跑 Ruff、`UV_OFFLINE=1 make check`、`uv lock --check`、offline sync、CLI smoke、active/archive
+import boundary 与 `git diff --check`。完成后只追加本段 COMPLETED/INVALID 证据，保留 M0-M12.1
+历史；本地提交后 fast-forward 正式 C 分支并删除辅助 worktree，实验构件留在
+`.runtime/experiments/`，不 push、不自动启用 candidate。
+
 ### 【2026-08-29 | PLANNED】P0.2-M10：composed arrival envelope and heuristic ordering
 
 M9 的 phase-isolated 24h 诊断显示：证书化 heuristic 在部分真实目标中能够找到 route，但
