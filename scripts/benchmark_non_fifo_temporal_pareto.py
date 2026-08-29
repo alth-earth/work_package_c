@@ -448,7 +448,13 @@ def _worker_record(
     started = perf_counter()
     _set_cpu(cpu)
     planner = _planner(scenario, objective)
-    request = _request(objective, cancel=mode == "cancelled")
+    request = _request(
+        objective,
+        cancel=(
+            mode == "cancelled"
+            and scenario not in {"scope_drift", "checkpoint_tamper"}
+        ),
+    )
     before = _resource_snapshot()
     checkpoint_digest = None
     restore_match = None
