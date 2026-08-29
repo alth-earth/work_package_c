@@ -76,7 +76,7 @@ TEMPORAL_PARETO_SCHEMA = "c.p0.2-temporal-pareto-bridge.v1"
 _STATE_BOUND_DISABLED_DIGEST = "temporal-state-bound-disabled"
 _INCUMBENT_BOUND_DISABLED_DIGEST = "non-fifo-pareto-incumbent-bound-disabled"
 _HEURISTIC_DISABLED_DIGEST = "non-fifo-pareto-heuristic-disabled"
-_HEURISTIC_ORDERING_MODES = ("always", "after_goal")
+_HEURISTIC_ORDERING_MODES = ("always", "after_goal", "until_goal")
 _HEADING_NONE: tuple[int, int] | None = None
 type TemporalParetoState = tuple[tuple[int, int], tuple[int, int] | None]
 
@@ -762,7 +762,11 @@ def _heuristic_policy_digest(
     return _digest(
         {
             "schema": TEMPORAL_PARETO_SCHEMA,
-            "policy": "certified-goal-gated-priority-v1",
+            "policy": (
+                "certified-goal-gated-priority-v1"
+                if ordering == "after_goal"
+                else "certified-until-goal-priority-v1"
+            ),
             "ordering": ordering,
             "certificate_digest": certificate.digest,
         }
@@ -869,7 +873,11 @@ def _callbacks(
         context.heuristic_certificate = heuristic_certificate
         context.heuristic_authorized = True
         context.diagnostics.heuristic_policy = (
-            "certified" if heuristic_ordering == "always" else "certified-after-goal"
+            "certified"
+            if heuristic_ordering == "always"
+            else "certified-after-goal"
+            if heuristic_ordering == "after_goal"
+            else "certified-until-goal"
         )
         context.diagnostics.heuristic_certificate_digest = heuristic_certificate.digest
         context.diagnostics.heuristic_scope_match = True
@@ -959,6 +967,14 @@ def _callbacks(
         if heuristic_ordering == "after_goal":
             priority_after_goal = priority
             priority = None
+        elif heuristic_ordering == "until_goal":
+            def baseline_priority(label: NonFifoParetoLabel) -> float:
+                return float(label.costs[0])
+
+            baseline_priority.__non_fifo_identity__ = (
+                f"baseline-priority:{token}:cost-vector-v1"
+            )
+            priority_after_goal = baseline_priority
 
     neighbors.__non_fifo_identity__ = f"neighbors:{token}"
     evaluate_edge.__non_fifo_identity__ = f"evaluator:{token}"

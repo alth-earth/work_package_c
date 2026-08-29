@@ -273,7 +273,13 @@ def _worker_record(args: argparse.Namespace) -> dict[str, Any]:
         and _diagnostic_int(ordered_diagnostics, "heuristic_rejected") == 0
         and bool(ordered_diagnostics)
         and ordered_diagnostics.get("heuristic_policy")
-        == ("certified" if heuristic_ordering == "always" else "certified-after-goal")
+        == (
+            "certified"
+            if heuristic_ordering == "always"
+            else "certified-after-goal"
+            if heuristic_ordering == "after_goal"
+            else "certified-until-goal"
+        )
         and ordered_diagnostics.get("heuristic_scope_match") is True
         and ordered is not None
         and ordered.raw_result.priority_policy_digest
@@ -358,7 +364,11 @@ def _worker_record(args: argparse.Namespace) -> dict[str, Any]:
         "priority_policy": (
             "certified-total-equivalent-hours-lower-bound-v1"
             if getattr(args, "heuristic_ordering", "always") == "always"
-            else "certified-goal-gated-total-equivalent-hours-lower-bound-v1"
+            else (
+                "certified-goal-gated-total-equivalent-hours-lower-bound-v1"
+                if getattr(args, "heuristic_ordering", "always") == "after_goal"
+                else "certified-until-goal-total-equivalent-hours-lower-bound-v1"
+            )
         ),
         "production_candidate_enabled": False,
         "winter_enabled": False,
@@ -453,7 +463,11 @@ def _identity(
         "priority_policy": (
             "certified-total-equivalent-hours-lower-bound-v1"
             if getattr(args, "heuristic_ordering", "always") == "always"
-            else "certified-goal-gated-total-equivalent-hours-lower-bound-v1"
+            else (
+                "certified-goal-gated-total-equivalent-hours-lower-bound-v1"
+                if getattr(args, "heuristic_ordering", "always") == "after_goal"
+                else "certified-until-goal-total-equivalent-hours-lower-bound-v1"
+            )
         ),
         "heuristic_ordering": getattr(args, "heuristic_ordering", "always"),
         "selection_only": True,
@@ -807,7 +821,7 @@ def main() -> int:
     parser.add_argument("--cpu", type=int, default=0)
     parser.add_argument(
         "--heuristic-ordering",
-        choices=("always", "after_goal"),
+        choices=("always", "after_goal", "until_goal"),
         default="always",
         help="apply the certified queue priority always or only after the first goal",
     )
