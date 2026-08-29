@@ -237,14 +237,18 @@ class NonFifoParetoSearchResult:
     pareto_pruned: int = 0
     evaluator_errors: tuple[str, ...] = ()
     reason: str | None = None
+    goal_node: Any | None = None
+    pareto_pruning: bool = False
+    search_limits: tuple[int, int, int, int] = ()
 
     @property
     def goal_labels(self) -> tuple[NonFifoParetoLabel, ...]:
         """All retained goal labels, ordered by objective vector."""
 
-        if self.label is None:
+        if self.status is not NonFifoSearchStatus.GOAL_FOUND or self.label is None:
             return ()
-        return tuple(label for label in self.labels if label.node == self.label.node)
+        goal = self.goal_node if self.goal_node is not None else self.label.node
+        return tuple(label for label in self.labels if label.node == goal)
 
     @property
     def goal_frontier(self) -> tuple[NonFifoParetoLabel, ...]:
@@ -270,6 +274,41 @@ class NonFifoParetoSearchResult:
         return hashlib.sha256(
             json.dumps(_jsonable(payload), sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
+
+    @property
+    def frontier_digest(self) -> str:
+        """Digest the complete successful frontier and its search policy.
+
+        The digest is deliberately distinct from ``semantic_digest``: it binds
+        every non-dominated goal label, exact arrival, transition evidence and
+        the explicit Pareto policy/limits used to produce the result.  Failed
+        or cancelled searches therefore produce an evidence digest with an
+        empty frontier and can never be mistaken for a successful route.
+        """
+
+        frontier = tuple(
+            sorted(
+                (_pareto_label_payload(label) for label in self.goal_frontier),
+                key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":")),
+            )
+        )
+        payload = {
+            "schema_version": "c.p0.2-nonfifo-pareto-frontier.v1",
+            "status": self.status.value,
+            "reason": self.reason,
+            "pareto_pruning": self.pareto_pruning,
+            "search_limits": self.search_limits,
+            "frontier": frontier,
+        }
+        return hashlib.sha256(
+            json.dumps(_jsonable(payload), sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+
+    @property
+    def pareto_frontier_digest(self) -> str:
+        """Compatibility alias for callers using the longer evidence name."""
+
+        return self.frontier_digest
 
 
 def search_non_fifo(
@@ -298,6 +337,8 @@ def search_non_fifo(
 
     if departure_time.tzinfo is None or departure_time.utcoffset() is None:
         raise ValueError("departure_time must be timezone-aware")
+    if maximum_elapsed is not None and maximum_elapsed <= timedelta(0):
+        raise ValueError("maximum_elapsed must be positive")
     _validate_non_fifo_limits(
         objective_count=1,
         max_expansions=max_expansions,
@@ -344,7 +385,12 @@ def search_non_fifo(
             # Continue draining: non-FIFO means another arrival may unlock a
             # cheaper suffix even after a goal label has been observed.
             continue
-        for neighbor in neighbors(label.node):
+        try:
+            ordered_neighbors = _ordered_neighbors(neighbors(label.node))
+        except Exception as error:
+            errors.append(f"{type(error).__name__}:{error}")
+            continue
+        for neighbor in ordered_neighbors:
             if cancel_check is not None and cancel_check():
                 return _result(
                     NonFifoSearchStatus.CANCELLED,
@@ -491,6 +537,7 @@ def search_non_fifo_pareto(
     errors: list[str] = []
     goals: list[NonFifoParetoLabel] = []
     bounded = False
+    search_limits = (max_expansions, max_labels, max_queue, max_edge_evaluations)
 
     while queue:
         if _cancelled(cancel_check):
@@ -505,6 +552,9 @@ def search_non_fifo_pareto(
                 pareto_pruned,
                 errors,
                 "cancelled",
+                goal_node=goal,
+                pareto_pruning=pareto_pruning,
+                search_limits=search_limits,
             )
         _, _, _, label = heappop(queue)
         if not _contains_label(labels_by_key[label.exact_key], label):
@@ -519,7 +569,7 @@ def search_non_fifo_pareto(
             # system a later-arriving label can still have a cheaper vector.
             continue
         try:
-            neighbours = tuple(neighbors(label.node))
+            neighbours = _ordered_neighbors(neighbors(label.node))
         except Exception as error:
             errors.append(f"{type(error).__name__}:{error}")
             continue
@@ -536,6 +586,9 @@ def search_non_fifo_pareto(
                     pareto_pruned,
                     errors,
                     "cancelled",
+                    goal_node=goal,
+                    pareto_pruning=pareto_pruning,
+                    search_limits=search_limits,
                 )
             edge_evaluations += 1
             if edge_evaluations > max_edge_evaluations:
@@ -610,6 +663,9 @@ def search_non_fifo_pareto(
         pareto_pruned,
         errors,
         reason,
+        goal_node=goal,
+        pareto_pruning=pareto_pruning,
+        search_limits=search_limits,
     )
 
 
@@ -666,6 +722,34 @@ def _contains_label(labels: Iterable[NonFifoParetoLabel], candidate: NonFifoPare
     return any(existing == candidate for existing in labels)
 
 
+def _ordered_neighbors(neighbors: Iterable[Any]) -> tuple[Any, ...]:
+    """Materialize neighbors in a stable order without collapsing duplicates."""
+
+    values = tuple(neighbors)
+    return tuple(sorted(values, key=_canonical_token))
+
+
+def _canonical_token(value: Any) -> str:
+    """Return a deterministic token for arbitrary finite fixture nodes."""
+
+    try:
+        return json.dumps(_jsonable(value), sort_keys=True, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return repr(value)
+
+
+def _pareto_label_payload(label: NonFifoParetoLabel) -> dict[str, Any]:
+    """Serialize one label for the auditable frontier digest."""
+
+    return {
+        "node": _jsonable(label.node),
+        "arrival_time": _jsonable(label.arrival_time),
+        "costs": label.costs,
+        "path": _jsonable(label.path),
+        "transitions": _jsonable(label.transitions),
+    }
+
+
 def _flatten_labels(
     labels_by_key: Mapping[tuple[Any, datetime], Iterable[NonFifoParetoLabel]],
 ) -> tuple[NonFifoParetoLabel, ...]:
@@ -687,6 +771,10 @@ def _pareto_result(
     pareto_pruned: int,
     errors: Iterable[str],
     reason: str | None,
+    *,
+    goal_node: Any | None = None,
+    pareto_pruning: bool = False,
+    search_limits: tuple[int, int, int, int] = (),
 ) -> NonFifoParetoSearchResult:
     goal_list = tuple(goals)
     selected = (
@@ -711,6 +799,9 @@ def _pareto_result(
         pareto_pruned=pareto_pruned,
         evaluator_errors=tuple(errors),
         reason=reason,
+        goal_node=goal_node,
+        pareto_pruning=pareto_pruning,
+        search_limits=search_limits,
     )
 
 

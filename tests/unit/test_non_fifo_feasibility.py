@@ -551,3 +551,97 @@ def test_hard_mask_business_evidence_is_not_a_successful_edge() -> None:
     assert result.status is NonFifoSearchStatus.EVALUATOR_FAILURE
     assert result.label is None
     assert result.evaluator_errors == ("NonFifoEvaluationError:hard_mask",)
+
+
+def test_pareto_frontier_retains_non_dominated_labels_at_one_exact_arrival() -> None:
+    graph = {"start": ("left", "right"), "left": ("goal",), "right": ("goal",), "goal": ()}
+
+    def evaluate(start: str, end: str, arrival: datetime) -> NonFifoParetoTransition:
+        if start == "start":
+            return NonFifoParetoTransition(arrival + timedelta(hours=1), (0.0, 0.0))
+        costs = (1.0, 4.0) if start == "left" else (4.0, 1.0)
+        return NonFifoParetoTransition(T0 + timedelta(hours=2), costs)
+
+    result = search_non_fifo_pareto(
+        start="start",
+        goal="goal",
+        departure_time=T0,
+        neighbors=graph.__getitem__,
+        evaluate_edge=evaluate,
+        objective_count=2,
+        pareto_pruning=True,
+    )
+
+    assert result.status is NonFifoSearchStatus.GOAL_FOUND
+    assert len(result.goal_frontier) == 2
+    assert {label.costs for label in result.goal_frontier} == {(1.0, 4.0), (4.0, 1.0)}
+    assert result.frontier_digest == result.pareto_frontier_digest
+
+
+def test_pareto_frontier_digest_binds_policy_and_search_limits() -> None:
+    def evaluate(_start: str, _end: str, arrival: datetime) -> NonFifoParetoTransition:
+        return NonFifoParetoTransition(arrival + timedelta(hours=1), (1.0, 1.0))
+    common = {
+        "start": "start",
+        "goal": "goal",
+        "departure_time": T0,
+        "neighbors": lambda _node: ("goal",),
+        "evaluate_edge": evaluate,
+        "objective_count": 2,
+    }
+    baseline = search_non_fifo_pareto(**common)
+    pruned_policy = search_non_fifo_pareto(**common, pareto_pruning=True)
+    changed_limit = search_non_fifo_pareto(**common, max_queue=49_999)
+
+    assert baseline.frontier_digest != pruned_policy.frontier_digest
+    assert baseline.frontier_digest != changed_limit.frontier_digest
+    assert baseline.frontier_digest == baseline.pareto_frontier_digest
+
+
+def test_pareto_neighbor_order_is_canonical_for_deterministic_evidence() -> None:
+    graph = {"start": ("right", "left"), "left": ("goal",), "right": ("goal",), "goal": ()}
+
+    def evaluate(start: str, end: str, arrival: datetime) -> NonFifoParetoTransition:
+        if start == "start":
+            return NonFifoParetoTransition(arrival + timedelta(hours=1), (1.0, 1.0))
+        return NonFifoParetoTransition(arrival + timedelta(hours=1), (1.0, 1.0))
+
+    first = search_non_fifo_pareto(
+        start="start",
+        goal="goal",
+        departure_time=T0,
+        neighbors=graph.__getitem__,
+        evaluate_edge=evaluate,
+        objective_count=2,
+    )
+    reversed_graph = {key: tuple(reversed(value)) for key, value in graph.items()}
+    second = search_non_fifo_pareto(
+        start="start",
+        goal="goal",
+        departure_time=T0,
+        neighbors=reversed_graph.__getitem__,
+        evaluate_edge=evaluate,
+        objective_count=2,
+    )
+
+    assert first.semantic_digest == second.semantic_digest
+    assert first.frontier_digest == second.frontier_digest
+    assert first.generated == second.generated
+
+
+def test_pareto_failed_result_has_no_frontier_or_partial_route() -> None:
+    result = search_non_fifo_pareto(
+        start="start",
+        goal="goal",
+        departure_time=T0,
+        neighbors=lambda _node: ("goal",),
+        evaluate_edge=lambda *_args: (_ for _ in ()).throw(RuntimeError("broken evaluator")),
+        objective_count=2,
+    )
+
+    assert result.status is NonFifoSearchStatus.EVALUATOR_FAILURE
+    assert result.goal_labels == ()
+    assert result.goal_frontier == ()
+    assert result.label is None
+    assert result.semantic_digest is None
+    assert result.frontier_digest
