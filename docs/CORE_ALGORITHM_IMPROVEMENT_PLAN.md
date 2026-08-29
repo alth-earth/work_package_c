@@ -9,7 +9,7 @@ Document Role: CANONICAL
 Scope: C 核心算法现状、证据、正确性边界、改进设计与实施计划
 Canonical For: 工作包 C 核心算法改进实现的首要参考
 Branch: research-validation-system
-Last Verified: 2026-08-27
+Last Verified: 2026-08-30
 Related Canonical Docs:
   - "README.md"
   - "ARCHITECTURE_AND_DECISIONS.md"
@@ -35,6 +35,8 @@ Related Canonical Docs:
 - 新增章节必须放在语义正确的位置，并遵守治理标准的分钟级更新时间要求；不能把补丁式内容追加到文档末尾。
 - 仅当跨包正式合同必须改变时，才按 [`CONTRACT_CHANGE_PROPOSAL_TEMPLATE.md`](/root/my_project/arctic_route_governance/standards/CONTRACT_CHANGE_PROPOSAL_TEMPLATE.md) 另行建立和审批提案；提案获批后仍须把链接、影响和实施状态回填本文档。
 - 本文档不改变 B 的风险公式、RiskFrame 身份或 D 的展示职责；研究 sidecar、实验输出和 synthetic fixture 不得静默成为正式生产输入。
+
+**范围外材料（外部展示用对比证据）：** 面向外部评审/比赛的“本文算法与常规算法对比”材料不写入本文档，单独维护在 [`ALGORITHM_COMPARISON_REPORT.md`](/root/my_project/work_package_c/docs/ALGORITHM_COMPARISON_REPORT.md)。该报告只做**科学对比呈现**，不构成晋级证据：它不修改任何冻结门禁、不改变 production planner 默认行为、不写 formal latest / replanning baseline / frozen artifact，其结论不得被解读为“M2 门禁通过”或“生产绩效晋级”。
 
 **成熟度标签：** `NOT_IMPLEMENTED`、`PLANNED`、`IMPLEMENTED`、`UNIT_PASS`、`SMOKE_PASS`、`REAL_E2E_PASS`、`AUTHORITATIVE_PASS`、`FROZEN_BASELINE`。没有对应证据时，不得使用更高等级。
 
