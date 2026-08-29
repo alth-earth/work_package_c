@@ -281,6 +281,7 @@ class NonFifoTemporalParetoResult:
     def incumbent_bound_rejection_reasons(self) -> tuple[tuple[str, int], ...]:
         return self.raw_result.incumbent_bound_rejection_reasons
 
+
 @dataclass(frozen=True, slots=True)
 class NonFifoTemporalParetoCheckpoint:
     """Research checkpoint with a bridge/schema/scope digest fence."""

@@ -283,11 +283,7 @@ def _qualification_worker(args: argparse.Namespace) -> dict[str, Any]:
     except Exception as error:  # pragma: no cover - worker boundary evidence
         errors["worker"] = f"{type(error).__name__}: {error}"
     after = _resource_snapshot(point)
-    rejection_reasons = (
-        tuple(sorted(session.incumbent_bound_rejection_reasons.items()))
-        if session is not None
-        else ()
-    )
+    rejection_reasons = session.incumbent_bound_rejection_reasons if session is not None else ()
     fail_closed = bool(
         not errors
         and certificate is not None
