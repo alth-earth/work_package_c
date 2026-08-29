@@ -6,7 +6,11 @@ import importlib.util
 import sys
 from pathlib import Path
 
-_SCRIPT = Path(__file__).parents[2] / "scripts" / "benchmark_non_fifo_temporal_pareto_state_bound.py"
+_SCRIPT = (
+    Path(__file__).parents[2]
+    / "scripts"
+    / "benchmark_non_fifo_temporal_pareto_state_bound.py"
+)
 _SPEC = importlib.util.spec_from_file_location("c_m16_pareto_state_bound_runner", _SCRIPT)
 if _SPEC is None or _SPEC.loader is None:
     raise RuntimeError("unable to load M16 state-bound runner")
