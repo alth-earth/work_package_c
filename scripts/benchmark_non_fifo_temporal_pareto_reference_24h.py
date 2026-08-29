@@ -446,7 +446,7 @@ def _identity(args: argparse.Namespace, fixture: Any, root: Path) -> dict[str, A
             "commit_id": fixture.commit["commit_id"],
             "content_digest": fixture.commit["content_digest"],
             "frame_count": len(fixture.frames),
-            "frame_digests": [m18.risk_frame_content_digest(frame) for frame in fixture.frames],
+            "frame_digests": [point.risk_frame_content_digest(frame) for frame in fixture.frames],
         },
         "route_plan_set": {
             "path": str(fixture.route_plan_path),
