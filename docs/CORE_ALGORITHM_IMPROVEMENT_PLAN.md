@@ -3155,3 +3155,37 @@ smoke、active/archive `temporal_session` import boundary、`git diff --check` �
 生产资格。已知真实 `FIFO_UNCERTAIN/VIOLATED`、M18 queue resource fail、M19 independent
 24h semantic reference、P3/ARA* 历史结论继续保留；后续才可另立带真实 scope 的 P0.2
 implementation review 或 ETA interval proof 计划。
+
+### 【2026-08-29 | PLANNED】P0.2-M21：real 6h Pareto frontier equivalence
+
+M20 只在有限 fixture 上证明了完整 frontier certificate；M19 的真实 24h 对照则只比较了
+selected route。本轮补齐一个有限、可承受的真实输入证据：在冻结 holdout/development 的
+`executable_0_6h` 上，同一完整 `TemporalScope` 下分别运行不做 Pareto 剪枝的 reference
+sidecar 与只允许同一 `(node, exact_UTC_arrival)` 新 label 组件支配的 candidate sidecar，
+对完整 goal frontier 做精确多重集合比较。它不证明 FIFO，也不启用 production candidate。
+
+**隔离和身份。** 从 M20 clean tip 建立 `research/p02-m21-real-frontier-equivalence-20260829`
+隔离 worktree。新增 runner 只支持完整 145 帧 holdout/development 的
+`executable_0_6h`，三目标 `fastest/low_risk/recommended`，每个 policy/objective/repetition
+独立 worker；每 cell 默认两次重复，顺序交替。manifest/cases/frontier-comparison/resource
+evidence/heartbeat/终止 marker 绑定 implementation commit、实现文件、`uv.lock`、配置树、
+RiskFrame commit/content/frame digests、冻结 route-plan-set、节点/出发时间/ETA policy/scope、
+Pareto policy 和 `50k/100k/50k/400k` limits。启动前要求 clean implementation worktree；
+systemd scope 固定 CPU、`MemoryMax=4G`、`MemorySwapMax=0`，不并行 worker。
+
+**正确性规则。** baseline 使用 `pareto_pruning=False`，candidate 使用显式
+`pareto_pruning=True`；两者均 `TemporalDominancePolicy.disabled()`、无 state-bound、无 heuristic
+和无 `certified_only(...)`。每个 terminal successful session 生成 M20 frontier certificate；
+`compare_non_fifo_pareto_frontiers` 要求 shared input/config/scope digest 完全相同，并逐项比较
+节点、精确 UTC ETA、完整路径、向量成本、transition business evidence 和 source IDs。资源
+超限、取消、evaluator/coverage failure、certificate incomplete、scope/identity drift 或
+frontier mismatch 均 fail-closed；不使用数值容差、不注入 reference route、不删除已扩展 label。
+selected route 另与既有独立 zero-heuristic point oracle 对照，但不把 oracle 当性能基线。
+
+**收口分支。** 所有 policy/objective/repetition 的 certificate complete、frontier exact match、
+point reference match、deterministic 和资源证据通过时，只标记
+`READY_FOR_P0.2-REAL-FRONTIER-IMPLEMENTATION-REVIEW`；任一 frontier/语义/fail-closed 失败为
+`NO_FRONTIER_PROOF/FAIL`；资源或构件不完整为
+`REAL_INPUT_FRONTIER_EQUIVALENCE_INCONCLUSIVE`。本轮不执行 24h/full-voyage、不提高资源上限、
+不写 formal latest/replanning baseline/frozen artifact，不改变 FIFO violation/uncertain、
+candidate/Winter、P3/ARA* 或正式合同状态。
