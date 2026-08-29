@@ -58,6 +58,9 @@ def test_frozen_resource_limit_is_recorded_without_being_a_semantic_pass() -> No
     assert 'case_status = "RESOURCE_LIMIT"' in _SOURCE
     assert 'case_reason = "frozen search limit reached"' in _SOURCE
     assert 'case.get("status") in {"PASS", "RESOURCE_LIMIT", "TIMEOUT"}' in _SOURCE
+    assert '"resources_before": driver_before' in _SOURCE
+    assert '"resources_after": driver_after' in _SOURCE
+    assert "_set_cpu(args.cpu)" in _SOURCE
 
 
 def test_runner_does_not_call_production_planner_or_enable_candidate() -> None:
@@ -109,3 +112,36 @@ def test_reference_match_covers_actual_pareto_business_fields() -> None:
     assert _RUNNER._reference_matches(candidate, reference)
     candidate["steps"][0]["source_risk_ids"] = ["different-risk"]
     assert not _RUNNER._reference_matches(candidate, reference)
+
+
+def test_summary_distinguishes_complete_resource_frontier_from_semantic_failure() -> None:
+    cases = []
+    for objective in ("fastest", "low_risk", "recommended"):
+        for mode in ("one_shot", "slice_restore"):
+            cases.append(
+                {
+                    "objective": objective,
+                    "mode": mode,
+                    "repetition": 1,
+                    "status": "RESOURCE_LIMIT",
+                    "semantic_match": False,
+                    "baseline_reference_match": False,
+                    "candidate_reference_match": False,
+                    "certificate_usable": True,
+                    "arrival_bound_complete": True,
+                    "state_bound_rejected": 0,
+                    "unexpected_pruning": False,
+                    "resource_clean": True,
+                    "resource_evidence_complete": True,
+                    "baseline_semantic_digest": None,
+                    "candidate_semantic_digest": None,
+                    "candidate_frontier_digest": None,
+                    "state_bound_pruned": 0,
+                }
+            )
+    summary = _RUNNER._summary(
+        cases, {"repetitions": 1, "experiment_id": "test-m18"}, 0
+    )
+    assert summary["complete"] is True
+    assert summary["status"] == "REAL_INPUT_24H_STATE_BOUND_RESOURCE_FAIL"
+    assert summary["resource_limited_case_count"] == 6

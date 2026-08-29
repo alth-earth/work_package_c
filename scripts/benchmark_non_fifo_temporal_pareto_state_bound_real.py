@@ -783,6 +783,7 @@ def _run_child(
     env = os.environ.copy()
     root = Path(__file__).resolve().parents[1]
     env["PYTHONPATH"] = str(root / "src") + os.pathsep + env.get("PYTHONPATH", "")
+    driver_before = _resource_snapshot()
     started = time.time()
     try:
         process = subprocess.Popen(
@@ -821,6 +822,7 @@ def _run_child(
         if elapsed > args.worker_timeout_seconds:
             process.kill()
             stdout, stderr = process.communicate()
+            driver_after = _resource_snapshot()
             return {
                 "schema_version": SCHEMA_VERSION,
                 "objective": objective.value,
@@ -830,12 +832,17 @@ def _run_child(
                 "reason": "worker_timeout",
                 "stdout": stdout[-4000:],
                 "stderr": stderr[-4000:],
-                "resource_clean": False,
-                "resource_evidence_complete": False,
+                "resources_before": driver_before,
+                "resources_after": driver_after,
+                "resource_clean": _resource_clean(driver_before, driver_after),
+                "resource_evidence_complete": _resource_evidence_complete(
+                    driver_before, driver_after, args.cpu
+                ),
             }
         time.sleep(1.0)
     stdout, stderr = process.communicate()
     if process.returncode != 0:
+        driver_after = _resource_snapshot()
         return {
             "schema_version": SCHEMA_VERSION,
             "objective": objective.value,
@@ -846,12 +853,17 @@ def _run_child(
             "returncode": process.returncode,
             "stdout": stdout[-4000:],
             "stderr": stderr[-4000:],
-            "resource_clean": False,
-            "resource_evidence_complete": False,
+            "resources_before": driver_before,
+            "resources_after": driver_after,
+            "resource_clean": _resource_clean(driver_before, driver_after),
+            "resource_evidence_complete": _resource_evidence_complete(
+                driver_before, driver_after, args.cpu
+            ),
         }
     try:
         record = json.loads(stdout)
     except json.JSONDecodeError:
+        driver_after = _resource_snapshot()
         return {
             "schema_version": SCHEMA_VERSION,
             "objective": objective.value,
@@ -861,8 +873,12 @@ def _run_child(
             "reason": "worker did not emit one JSON object",
             "stdout": stdout[-4000:],
             "stderr": stderr[-4000:],
-            "resource_clean": False,
-            "resource_evidence_complete": False,
+            "resources_before": driver_before,
+            "resources_after": driver_after,
+            "resource_clean": _resource_clean(driver_before, driver_after),
+            "resource_evidence_complete": _resource_evidence_complete(
+                driver_before, driver_after, args.cpu
+            ),
         }
     if not isinstance(record, dict):
         raise RuntimeError("worker emitted a non-object JSON record")
@@ -1010,6 +1026,7 @@ class _RunnerLock:
 
 def _run(args: argparse.Namespace) -> int:
     root = Path(__file__).resolve().parents[1]
+    _set_cpu(args.cpu)
     point = _point_runner()
     fixture = point._load_fixture(_fixture_args(args))
     identity = _identity(args, fixture, root)
