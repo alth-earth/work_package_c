@@ -3029,3 +3029,56 @@ limit 标记 `REAL_INPUT_24H_REFERENCE_RESOURCE_FAIL`；semantic mismatch、fail
 identity 漂移为 `NO_PERFORMANCE_PROOF/FAIL`；构件不完整为 `INVALID/PENDING`。M18 的
 `REAL_INPUT_24H_STATE_BOUND_RESOURCE_FAIL`、FIFO violation、dominance disabled、P3/ARA* 和
 Winter 历史结论保持不变。完成后只保留本地分支与构件，清理 worktree，不 push、不合并正式分支。
+
+### 【2026-08-29 | COMPLETED】P0.2-M19：real 24h independent semantic reference
+
+本轮在隔离分支 `research/p02-m19-reference-24h-20260829` 完成；计划、实现和修正提交分别为
+`680f14e`、`84c0cc5`、`f3a6bbc`。新增 runner
+`scripts/benchmark_non_fifo_temporal_pareto_reference_24h.py` 是 C 内部研究 sidecar，维护独立
+zero-heuristic exact-arrival Dijkstra 状态 `(node, incoming_heading, exact_UTC_arrival)`。
+它在完整 `TemporalStateBoundCertificate` 通过 scope 和 arrival-envelope identity 后，才对新
+生成 state 调用 `allows_state(...)`；没有调用 `planner.plan()`、`certified_only(...)` 或候选
+路线注入。`TemporalDominancePolicy.disabled()`、candidate/Winter 和所有 B/C、C/D、ingress/service
+边界保持不变，search limits 仍为 `50k/100k/50k/400k`，每条记录立即 fsync。
+
+**输入与身份。** holdout/development 均复用完整 145 帧 committed RiskFrame、冻结
+`rolling_0_24h` route-plan-set 和 M18 topological arrival certificate；manifest 绑定最终
+implementation commit `f3a6bbc01fb6571ef5d932fd69ced1853e424574`、实现文件 hashes、`uv.lock`、
+configs tree、RiskFrame commit/content/frame digests、route-plan-set、三目标 TemporalScope、
+bounded ETA、reference policy、state-bound proof 和固定 limits。权威构件为：
+
+- holdout：`.runtime/experiments/c-p02-m19-reference-24h-holdout-20260829-r1/`，experiment id
+  `c.p0.2-temporal-pareto-reference-24h.v1-a31a67f489f2809b`；
+- development：`.runtime/experiments/c-p02-m19-reference-24h-development-20260829-r1/`，
+  experiment id `c.p0.2-temporal-pareto-reference-24h.v1-33ac6a2800cd5f41`。
+
+两份构件均完成 `fastest/low_risk/recommended × 1`，共 `6/6` case，`ALL_DONE`、manifest、
+cases、reference frontier、summary 和 heartbeat 齐全。每个 case 的 reference 与 actual-Pareto
+candidate 均为 `GOAL_FOUND`，节点、精确 ETA、CostBreakdown、速度、距离、风险、maximum risk、
+confidence 和 source IDs 逐字段一致（`reference_match=true`）。reference 观察到合法的
+arrival-envelope pruning：holdout 三目标均 `68,213`，development 三目标均 `35,641`；candidate
+pruning 分别为 holdout `71,446`、development `38,366/38,382`，certificate rejection 和
+unexpected pruning 均为零。runner 的 `deterministic=true` 是单次完成记录的稳定签名；本轮不是
+重复次数性能门，不据此宣称统计性能收益。
+
+**资源证据与结论。** 全部 6 个 worker 在 systemd scope 固定 CPU 0、`MemoryMax=4G`、
+`MemorySwapMax=0` 下运行；host `/proc/swaps` 和 `free -h` 均为 `Swap: 0B`，scope
+`memory.swap.max/current=0`，memory events 的 OOM/kill/high/low 全为 0，resource evidence
+complete=true。cgroup memory peak 最大约 `192,372,736` bytes（约 183.5 MiB），reference queue
+peak holdout 为 `3,347–3,388`、development 为 `1,836–1,922`，均未触及冻结上限。两输入
+summary 均为 `REAL_INPUT_24H_SEMANTIC_REFERENCE_READY`，表示独立语义 reference 缺口已补齐；
+这不是 candidate 性能通过、continuous FIFO proof、production 资格或 Winter 重启授权。已知
+`REAL_INPUT_FIFO_VIOLATED`、M18 resource-frontier、P3/ARA* 和 Winter 历史结论保持不变。
+
+**验证。** 全 pytest 为 `551 passed, 3 skipped`；跳过项是已知的
+`test_p21_m2j_diagnostic_profile.py`（隔离 worktree 没有 orchestrator `winter_p2_shadow.py`）。
+M19/M18 聚焦 Ruff、CLI help、`uv lock --check`、offline sync、active/archive
+`temporal_session` import boundary 和 `git diff --check` 均通过。全仓 Ruff 仍只有既有无关的
+`scripts/benchmark_bc_coupling.py:721` E501；原样 `UV_OFFLINE=1 make check` 因隔离 worktree
+缺少 `.mamba-env/bin/uv` 返回阻塞，未修改环境。M19 辅助 worktree 已在验证后移除，分支和
+`.runtime/experiments/` 构件保留，未 push、未合并正式 `research-validation-system`。
+
+**后续分支。** M19 只允许制定下一份“带 interval/continuous proof 的真实 dominance 资格”或
+“非 FIFO label-correcting/Pareto 实现”计划；不得自动启用 candidate、提高资源上限、进入
+full-voyage/Winter、写 formal latest/replanning baseline/frozen artifact，或把本轮
+`SEMANTIC_REFERENCE_READY` 解读为性能晋级。
