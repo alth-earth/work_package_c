@@ -2562,3 +2562,42 @@ queue/expansion，但在冻结资源和非 FIFO 语义下仍不能使所有目�
 full-voyage/Winter，也不启用 candidate。下一步应另立“带完整 baseline/reference 证据的
 24h 资源限界”或 proof-carrying corridor/state envelope 计划，继续默认关闭并保持当前资源上限。
 完成验证后移除本轮辅助 worktree，保留研究分支和实验构件，不 push。
+
+### 【2026-08-29 | COMPLETED】P0.2-M13：actual temporal session resumability and evidence audit
+
+本轮在隔离分支 `research/p02-m13-actual-session-20260829` 完成，计划提交为
+`1c94d8c`，runner 实现与测试提交为 `50786fc`、`5335ec2`、`0ade39f`。新增的
+`scripts/benchmark_non_fifo_temporal_session.py` 只调用实际
+`non_fifo_temporal_adapter` 的 zero-heuristic、dominance-disabled、state-bound-absent 路径；
+不改变正式 planner、默认行为、B/C 或 C/D 合同，也未接入 ingress/service、candidate 或
+Winter。首次 r1 构件因 worker 命令漏传 `--output-dir` 被参数解析拒绝，已保留为
+`INVALID/PENDING` 工具诊断，不纳入算法证据；修复后所有权威构件均重新绑定最终实现 commit。
+
+**权威真实 6h 矩阵。** holdout 使用完整 145 帧 commit
+`risk-window-sha256-115ad3ab6d7034fabc9428f91c14099b02dff8bb2443569a8d3947187fbb5ff9`、
+目标 `(7,6)`，development 使用
+`risk-window-sha256-bdfd7964df96ffcad7dd78d9830394a0a91d7fbbfde16c0649d2ba2fb68a00ab`、
+目标 `(7,7)`；两者均为 `executable_0_6h`、`fastest/low_risk/recommended`、两次重复、固定
+CPU 0。权威目录分别为
+`.runtime/experiments/c-p02-m13-actual-session-holdout-6h-20260829-r4/` 和
+`.runtime/experiments/c-p02-m13-actual-session-development-6h-20260829-r3/`，实验
+identity 均绑定最终实现、`uv.lock`、配置树、route-plan-set、RiskFrame frame digest、
+scope/request、ETA/search limits 和 evaluator。
+
+**结果。** 每个输入 18/18 cases 完成（3 objective × 2 repetitions ×
+`one_shot/slice_restore/cancelled`），摘要均为
+`READY_FOR_P0.2-REAL-SESSION-RECOVERY-REVIEW`。两组均
+`all_pairs_equivalent=true`、`deterministic=true`、6 个 pair 全部通过；one-shot 与
+slice→restore 的路线节点、exact UTC ETA、速度、风险、成本、confidence、source IDs 和
+semantic digest 一致，独立 zero-heuristic reference 的成功路线 12/12 匹配。6/6 cancelled
+case 均返回 `CANCELLED`，没有 route/frontier；所有 case 的 dominance/state-bound
+checks/pruned 均为 0，session identity 与 restored session ID 一致，checkpoint digest 均有
+记录。资源快照显示固定 CPU、`resource_clean=true`、无 swap/OOM；cgroup memory events
+完整，但宿主 scope 的 memory/swap 上限为 `max`，因此这不是 4 GiB 隔离或性能门证据。
+
+**结论与边界。** M13 只证明实际 exact-arrival session 在冻结真实 6h 输入上的 one-shot、
+分片恢复和取消语义可复现、可审计、fail-closed；它不证明连续非 FIFO 海洋模型的全局最优性，
+不把 `REAL_INPUT_FIFO_VIOLATED` 转为 dominance 资格，也不覆盖真实 24h 资源前沿。状态标记
+为 `READY_FOR_P0.2-REAL-SESSION-RECOVERY-REVIEW`，candidate/Winter 仍关闭；下一步另立
+带强制 cgroup/24h 预算的 session 资源计划或 P0.2 非 FIFO label-correcting 实现计划，
+不得自动启动。
