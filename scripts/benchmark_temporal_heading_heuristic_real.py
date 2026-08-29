@@ -184,11 +184,11 @@ def _case(base: Any, fixture: Any, objective_name: str, cpu: int) -> dict[str, A
         objective=objective.value,
         expected_scope=scope,
     )
-    candidate = base._load_base()._build_planner(fixture, objective)
+    candidate = dominance._build_planner(fixture, objective)
     candidate.state_bound_certificate = corridor.certificate
     candidate.heading_heuristic_certificate = heading_certificate
     started = time.perf_counter()
-    before = base._resource_snapshot()
+    before = dominance._resource_snapshot()
     errors: dict[str, str] = {}
     baseline_result = candidate_result = repeat_result = reference = None
     try:
@@ -212,26 +212,28 @@ def _case(base: Any, fixture: Any, objective_name: str, cpu: int) -> dict[str, A
             repeat_result = repeat.plan(request)
         except Exception as error:
             errors["candidate_repeat"] = f"{type(error).__name__}: {error}"
-    after = base._resource_snapshot()
-    baseline_semantic = None if baseline_result is None else base._route_semantic(baseline_result)
-    candidate_semantic = (
-        None if candidate_result is None else base._route_semantic(candidate_result)
+    after = dominance._resource_snapshot()
+    baseline_semantic = (
+        None if baseline_result is None else dominance._route_semantic(baseline_result)
     )
-    repeat_semantic = None if repeat_result is None else base._route_semantic(repeat_result)
+    candidate_semantic = (
+        None if candidate_result is None else dominance._route_semantic(candidate_result)
+    )
+    repeat_semantic = None if repeat_result is None else dominance._route_semantic(repeat_result)
     baseline_match = (
         baseline_semantic is not None
         and reference is not None
-        and base._reference_matches(baseline_semantic, reference)
+        and dominance._reference_matches(baseline_semantic, reference)
     )
     candidate_match = (
         candidate_semantic is not None
         and reference is not None
-        and base._reference_matches(candidate_semantic, reference)
+        and dominance._reference_matches(candidate_semantic, reference)
     )
     deterministic = candidate_semantic is not None and candidate_semantic == repeat_semantic
     candidate_diag = None if candidate_result is None else candidate_result.diagnostics
     diagnostics = None if candidate_diag is None else _jsonable(candidate_diag)
-    resource_clean = base._resource_clean(before, after)
+    resource_clean = dominance._resource_clean(before, after)
     semantic_match = baseline_match and candidate_match and deterministic
     heading_authorized = bool(
         heading_certificate.usable
