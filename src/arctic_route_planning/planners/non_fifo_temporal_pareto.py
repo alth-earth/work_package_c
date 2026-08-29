@@ -1,0 +1,603 @@
+"""Actual temporal-edge bridge for the finite non-FIFO Pareto sidecar.
+
+This module is an explicit C-internal research path.  It adapts the real
+``TemporalLabelAStar`` edge evaluator to the finite exact-arrival Pareto
+session without changing the production planner, its default policies, or
+any route contract.  The bridge keeps the incoming heading in the state and
+therefore does not accidentally erase turn-dependent future behaviour.
+
+The vector is additive and objective-scoped.  Its first component is the
+ordinary equivalent-hours total, followed by the raw business cost
+components.  The first component makes the selected label comparable to the
+scalar objective while the remaining components make trade-offs and safe
+same-exact-state pruning auditable.  Different exact arrival times are never
+compared by this module except through the finite sidecar's exact-state rule.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from dataclasses import dataclass, fields, is_dataclass
+from datetime import UTC, datetime
+from enum import StrEnum
+from math import isfinite
+from typing import Any
+
+from arctic_route_planning.cost import CostBreakdown
+from arctic_route_planning.domain.models import ObjectiveMode
+
+from .non_fifo_feasibility import (
+    NonFifoBusinessEvidence,
+    NonFifoParetoCheckpoint,
+    NonFifoParetoLabel,
+    NonFifoParetoSearchResult,
+    NonFifoParetoSession,
+    NonFifoParetoSessionIdentity,
+    NonFifoParetoTransition,
+    NonFifoSearchStatus,
+    create_non_fifo_pareto_session,
+    restore_non_fifo_pareto_session,
+)
+from .temporal_label_astar import TemporalLabelAStar
+from .temporal_qualification import TemporalScope
+from .time_dependent_astar import PlanningRequest, _EdgeTraversal
+
+
+class NonFifoTemporalParetoError(ValueError):
+    """The actual Pareto bridge was invoked outside its research fence."""
+
+
+class TemporalParetoComponent(StrEnum):
+    """Stable names for the additive research vector components."""
+
+    TOTAL_EQUIVALENT_HOURS = "total_equivalent_hours"
+    TRAVEL_HOURS = "travel_hours"
+    RISK_EXPOSURE_HOURS = "risk_exposure_hours"
+    DISTANCE_EQUIVALENT_HOURS = "distance_equivalent_hours"
+    TURN_EQUIVALENT_HOURS = "turn_equivalent_hours"
+    DEVIATION_EQUIVALENT_HOURS = "deviation_equivalent_hours"
+    LOW_CONFIDENCE_HOURS = "low_confidence_hours"
+
+
+TEMPORAL_PARETO_COMPONENTS = tuple(TemporalParetoComponent)
+TEMPORAL_PARETO_SCHEMA = "c.p0.2-temporal-pareto-bridge.v1"
+_HEADING_NONE: tuple[int, int] | None = None
+type TemporalParetoState = tuple[tuple[int, int], tuple[int, int] | None]
+
+
+def _jsonable(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.astimezone(UTC).isoformat(timespec="microseconds")
+    if isinstance(value, StrEnum):
+        return value.value
+    if is_dataclass(value):
+        return {field.name: _jsonable(getattr(value, field.name)) for field in fields(value)}
+    if isinstance(value, dict):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (tuple, list)):
+        return [_jsonable(item) for item in value]
+    if isinstance(value, (set, frozenset)):
+        return sorted((_jsonable(item) for item in value), key=repr)
+    if isinstance(value, float) and not isfinite(value):
+        raise ValueError("temporal Pareto evidence contains a non-finite float")
+    return value
+
+
+def _digest(value: Any) -> str:
+    encoded = json.dumps(
+        _jsonable(value), ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class TemporalParetoStepEvidence:
+    """Business evidence for one accepted actual temporal edge."""
+
+    start: tuple[int, int]
+    end: tuple[int, int]
+    eta: datetime
+    heading_degrees: float
+    speed_knots: float
+    distance_km: float
+    risk_score: float
+    maximum_risk: float
+    confidence: float
+    cost: CostBreakdown
+    source_risk_ids: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if self.eta.tzinfo is None or self.eta.utcoffset() is None:
+            raise ValueError("Pareto step ETA must be timezone-aware")
+        object.__setattr__(self, "eta", self.eta.astimezone(UTC))
+        for name in (
+            "heading_degrees",
+            "speed_knots",
+            "distance_km",
+            "risk_score",
+            "maximum_risk",
+            "confidence",
+        ):
+            value = getattr(self, name)
+            if not isfinite(value) or value < 0:
+                raise ValueError(f"{name} must be finite and non-negative")
+        if self.risk_score > 1 or self.maximum_risk > 1 or self.confidence > 1:
+            raise ValueError("risk and confidence values must be at most one")
+        object.__setattr__(self, "source_risk_ids", tuple(self.source_risk_ids))
+
+    @classmethod
+    def from_traversal(cls, traversal: _EdgeTraversal) -> TemporalParetoStepEvidence:
+        return cls(
+            start=traversal.start,
+            end=traversal.end,
+            eta=traversal.arrival_time,
+            heading_degrees=traversal.heading_degrees,
+            speed_knots=traversal.speed_knots,
+            distance_km=traversal.distance_km,
+            risk_score=traversal.risk_score,
+            maximum_risk=traversal.maximum_risk,
+            confidence=traversal.confidence,
+            cost=traversal.cost,
+            source_risk_ids=traversal.source_risk_ids,
+        )
+
+    @property
+    def business(self) -> NonFifoBusinessEvidence:
+        return NonFifoBusinessEvidence(
+            speed_knots=self.speed_knots,
+            risk_score=self.risk_score,
+            maximum_risk=self.maximum_risk,
+            confidence=self.confidence,
+            source_ids=self.source_risk_ids,
+        )
+
+    @property
+    def vector(self) -> tuple[float, ...]:
+        cost = self.cost
+        return (
+            cost.total_equivalent_hours,
+            cost.travel_hours,
+            cost.risk_exposure_hours,
+            cost.distance_equivalent_hours,
+            cost.turn_equivalent_hours,
+            cost.deviation_equivalent_hours,
+            cost.low_confidence_hours,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class TemporalParetoRoute:
+    """Research-only route reconstructed from an exact-arrival label."""
+
+    states: tuple[TemporalParetoState, ...]
+    arrival_times: tuple[datetime, ...]
+    costs: tuple[float, ...]
+    steps: tuple[TemporalParetoStepEvidence, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "states", tuple(self.states))
+        object.__setattr__(self, "arrival_times", tuple(self.arrival_times))
+        object.__setattr__(self, "costs", tuple(self.costs))
+        object.__setattr__(self, "steps", tuple(self.steps))
+        if len(self.states) != len(self.steps) + 1:
+            raise ValueError("Pareto route state/step lengths do not match")
+        if len(self.arrival_times) != len(self.states):
+            raise ValueError("Pareto route state/arrival lengths do not match")
+        if not self.costs or any(not isfinite(value) or value < 0 for value in self.costs):
+            raise ValueError("Pareto route costs must be finite and non-negative")
+        for value in self.arrival_times:
+            if value.tzinfo is None or value.utcoffset() is None:
+                raise ValueError("Pareto route arrivals must be timezone-aware")
+        object.__setattr__(
+            self,
+            "arrival_times",
+            tuple(value.astimezone(UTC) for value in self.arrival_times),
+        )
+
+    @property
+    def nodes(self) -> tuple[tuple[int, int], ...]:
+        return tuple(state[0] for state in self.states)
+
+    @property
+    def semantic_digest(self) -> str:
+        return _digest(
+            {
+                "schema": TEMPORAL_PARETO_SCHEMA,
+                "states": self.states,
+                "arrival_times": self.arrival_times,
+                "costs": self.costs,
+                "steps": self.steps,
+            }
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class NonFifoTemporalParetoResult:
+    """Actual-edge Pareto result without pretending to be a PlanningResult."""
+
+    status: NonFifoSearchStatus
+    selected: TemporalParetoRoute | None
+    frontier: tuple[TemporalParetoRoute, ...]
+    raw_result: NonFifoParetoSearchResult
+    scope_digest: str
+    session_identity: str
+    diagnostics: Any = None
+
+    @property
+    def session_id(self) -> str:
+        return self.session_identity
+
+    @property
+    def semantic_digest(self) -> str | None:
+        return self.selected.semantic_digest if self.selected is not None else None
+
+    @property
+    def frontier_digest(self) -> str:
+        return _digest(
+            {
+                "schema": TEMPORAL_PARETO_SCHEMA,
+                "status": self.status,
+                "scope_digest": self.scope_digest,
+                "frontier": self.frontier,
+                "raw_frontier_digest": self.raw_result.frontier_digest,
+            }
+        )
+
+    @property
+    def pareto_pruned(self) -> int:
+        return self.raw_result.pareto_pruned
+
+    @property
+    def evaluator_errors(self) -> tuple[str, ...]:
+        return self.raw_result.evaluator_errors
+
+    @property
+    def reason(self) -> str | None:
+        return self.raw_result.reason
+
+
+@dataclass(frozen=True, slots=True)
+class NonFifoTemporalParetoCheckpoint:
+    """Research checkpoint with a bridge/schema/scope digest fence."""
+
+    pareto_checkpoint: NonFifoParetoCheckpoint
+    scope_digest: str
+    component_digest: str
+    schema_version: str = TEMPORAL_PARETO_SCHEMA
+    state_digest: str = ""
+
+    def __post_init__(self) -> None:
+        if self.schema_version != TEMPORAL_PARETO_SCHEMA:
+            raise NonFifoTemporalParetoError("unsupported actual Pareto checkpoint schema")
+        expected = self._calculated_state_digest()
+        if self.state_digest and self.state_digest != expected:
+            raise NonFifoTemporalParetoError("actual Pareto checkpoint digest mismatch")
+        object.__setattr__(self, "state_digest", expected)
+
+    def _calculated_state_digest(self) -> str:
+        return _digest(
+            {
+                "schema_version": self.schema_version,
+                "scope_digest": self.scope_digest,
+                "component_digest": self.component_digest,
+                "pareto_checkpoint": self.pareto_checkpoint.digest,
+            }
+        )
+
+    def assert_valid(self) -> None:
+        self.pareto_checkpoint.assert_valid()
+        if self.state_digest != self._calculated_state_digest():
+            raise NonFifoTemporalParetoError("actual Pareto checkpoint digest mismatch")
+
+    @property
+    def digest(self) -> str:
+        return self.state_digest
+
+
+class NonFifoTemporalParetoResearchSession:
+    """Resumable actual-edge Pareto session under an explicit research fence."""
+
+    __slots__ = (
+        "component_digest",
+        "context",
+        "planner",
+        "request",
+        "scope",
+        "session",
+    )
+
+    def __init__(
+        self,
+        planner: TemporalLabelAStar,
+        request: PlanningRequest,
+        session: NonFifoParetoSession,
+        context: Any,
+        scope: TemporalScope,
+        component_digest: str,
+    ) -> None:
+        self.planner = planner
+        self.request = request
+        self.session = session
+        self.context = context
+        self.scope = scope
+        self.component_digest = component_digest
+
+    @property
+    def state(self) -> str:
+        return self.session.state.value
+
+    @property
+    def session_id(self) -> str:
+        return self.session.session_id
+
+    @property
+    def identity(self) -> NonFifoParetoSessionIdentity:
+        return self.session.identity
+
+    def advance(self, expansion_slice: int | None = None) -> NonFifoTemporalParetoResult | None:
+        raw = self.session.advance(expansion_slice=expansion_slice)
+        if raw is None:
+            return None
+        return _wrap_result(
+            raw, self.scope.digest, self.session.session_id, self.context, self.request
+        )
+
+    def run(self) -> NonFifoTemporalParetoResult:
+        raw = self.session.run()
+        return _wrap_result(
+            raw, self.scope.digest, self.session.session_id, self.context, self.request
+        )
+
+    def checkpoint(self) -> NonFifoTemporalParetoCheckpoint:
+        return NonFifoTemporalParetoCheckpoint(
+            pareto_checkpoint=self.session.checkpoint(),
+            scope_digest=self.scope.digest,
+            component_digest=self.component_digest,
+        )
+
+
+def create_non_fifo_temporal_pareto_session(
+    planner: TemporalLabelAStar,
+    request: PlanningRequest,
+    *,
+    pareto_pruning: bool = False,
+    identity: NonFifoParetoSessionIdentity | None = None,
+) -> NonFifoTemporalParetoResearchSession:
+    """Create an actual-edge Pareto session for explicit research only."""
+
+    scope = _validate_bridge(planner, request)
+    callbacks, context, component_digest = _callbacks(planner, request, scope)
+    session = create_non_fifo_pareto_session(
+        start=(request.start, _HEADING_NONE),
+        goal=(request.goal, _HEADING_NONE),
+        departure_time=request.departure_time,
+        neighbors=callbacks.neighbors,
+        evaluate_edge=callbacks.evaluate_edge,
+        objective_count=len(TEMPORAL_PARETO_COMPONENTS),
+        pareto_pruning=pareto_pruning,
+        max_expansions=planner.limits.max_expansions,
+        max_labels=planner.limits.max_labels,
+        max_queue=planner.limits.max_queue,
+        max_edge_evaluations=planner.limits.max_edge_evaluations,
+        maximum_elapsed=request.maximum_elapsed,
+        cancel_check=request.cancel_check,
+        fixture_digest=f"temporal-scope:{scope.digest}",
+        config_digest=component_digest,
+        identity=identity,
+    )
+    return NonFifoTemporalParetoResearchSession(
+        planner, request, session, context, scope, component_digest
+    )
+
+
+def restore_non_fifo_temporal_pareto_session(
+    planner: TemporalLabelAStar,
+    request: PlanningRequest,
+    checkpoint: NonFifoTemporalParetoCheckpoint,
+    *,
+    cancel_check: Any = None,
+) -> NonFifoTemporalParetoResearchSession:
+    """Restore an actual-edge Pareto session after all bridge fences."""
+
+    if not isinstance(checkpoint, NonFifoTemporalParetoCheckpoint):
+        raise NonFifoTemporalParetoError("checkpoint type is invalid")
+    checkpoint.assert_valid()
+    scope = _validate_bridge(planner, request)
+    callbacks, context, component_digest = _callbacks(planner, request, scope)
+    if checkpoint.scope_digest != scope.digest:
+        raise NonFifoTemporalParetoError("actual Pareto checkpoint scope mismatch")
+    if checkpoint.component_digest != component_digest:
+        raise NonFifoTemporalParetoError("actual Pareto checkpoint component mismatch")
+    session = restore_non_fifo_pareto_session(
+        checkpoint.pareto_checkpoint,
+        neighbors=callbacks.neighbors,
+        evaluate_edge=callbacks.evaluate_edge,
+        cancel_check=request.cancel_check if cancel_check is None else cancel_check,
+    )
+    return NonFifoTemporalParetoResearchSession(
+        planner, request, session, context, scope, component_digest
+    )
+
+
+def run_non_fifo_temporal_pareto_search(
+    planner: TemporalLabelAStar,
+    request: PlanningRequest,
+    *,
+    pareto_pruning: bool = False,
+) -> NonFifoTemporalParetoResult:
+    """Run the actual-edge Pareto sidecar to a terminal state."""
+
+    return create_non_fifo_temporal_pareto_session(
+        planner,
+        request,
+        pareto_pruning=pareto_pruning,
+    ).run()
+
+
+@dataclass(frozen=True, slots=True)
+class _Callbacks:
+    neighbors: Any
+    evaluate_edge: Any
+
+
+def _validate_bridge(planner: TemporalLabelAStar, request: PlanningRequest) -> TemporalScope:
+    if not isinstance(planner, TemporalLabelAStar):
+        raise NonFifoTemporalParetoError("actual Pareto bridge requires TemporalLabelAStar")
+    if request.use_heuristic:
+        raise NonFifoTemporalParetoError("actual Pareto bridge requires use_heuristic=False")
+    if planner.dominance_policy.enabled:
+        raise NonFifoTemporalParetoError(
+            "actual Pareto bridge requires TemporalDominancePolicy.disabled()"
+        )
+    if planner.state_bound_certificate is not None:
+        raise NonFifoTemporalParetoError("actual Pareto bridge rejects state-bound certificates")
+    if planner.heuristic_certificate is not None:
+        raise NonFifoTemporalParetoError("actual Pareto bridge rejects heuristic certificates")
+    scope = planner.temporal_scope(request)
+    if not scope.evaluator_identity_known:
+        raise NonFifoTemporalParetoError("actual Pareto bridge requires known evaluator identity")
+    return scope
+
+
+def _callbacks(
+    planner: TemporalLabelAStar,
+    request: PlanningRequest,
+    scope: TemporalScope,
+) -> tuple[_Callbacks, Any, str]:
+    component_digest = _digest(
+        {
+            "schema": TEMPORAL_PARETO_SCHEMA,
+            "components": TEMPORAL_PARETO_COMPONENTS,
+            "objective": ObjectiveMode(request.objective),
+            "scope": scope.digest,
+        }
+    )
+    context = planner._new_execution_context()
+    cost_model = planner._cost_model(ObjectiveMode(request.objective))
+    token = f"{TEMPORAL_PARETO_SCHEMA}:{scope.digest}:{component_digest}"
+
+    def neighbors(state: TemporalParetoState) -> tuple[TemporalParetoState, ...]:
+        node, _heading = _state_parts(state)
+        return tuple(
+            (
+                neighbor,
+                _HEADING_NONE
+                if neighbor == request.goal
+                else (neighbor[0] - node[0], neighbor[1] - node[1]),
+            )
+            for neighbor in planner.grid.neighbors(node)
+        )
+
+    def evaluate_edge(
+        state: TemporalParetoState,
+        next_state: TemporalParetoState,
+        arrival_time: datetime,
+    ) -> NonFifoParetoTransition:
+        node, incoming_code = _state_parts(state)
+        next_node, _next_heading = _state_parts(next_state)
+        previous_heading = planner._previous_heading(node, incoming_code)
+        traversal = planner._evaluate_edge(
+            node,
+            next_node,
+            arrival_time,
+            previous_heading,
+            request,
+            cost_model,
+            context=context,
+        )
+        if not isinstance(traversal, _EdgeTraversal):
+            raise NonFifoTemporalParetoError("actual edge evaluator returned an invalid traversal")
+        step = TemporalParetoStepEvidence.from_traversal(traversal)
+        return NonFifoParetoTransition(
+            arrival_time=traversal.arrival_time,
+            costs=step.vector,
+            payload={"step": step},
+            business=step.business,
+        )
+
+    neighbors.__non_fifo_identity__ = f"neighbors:{token}"
+    evaluate_edge.__non_fifo_identity__ = f"evaluator:{token}"
+    return _Callbacks(neighbors, evaluate_edge), context, component_digest
+
+
+def _state_parts(state: TemporalParetoState) -> tuple[tuple[int, int], tuple[int, int] | None]:
+    if not isinstance(state, tuple) or len(state) != 2:
+        raise NonFifoTemporalParetoError("invalid temporal Pareto state")
+    node, heading = state
+    if (
+        not isinstance(node, tuple)
+        or len(node) != 2
+        or not all(isinstance(value, int) for value in node)
+    ):
+        raise NonFifoTemporalParetoError("invalid temporal Pareto node")
+    if heading is not None and (
+        not isinstance(heading, tuple)
+        or len(heading) != 2
+        or not all(isinstance(value, int) for value in heading)
+    ):
+        raise NonFifoTemporalParetoError("invalid temporal Pareto heading")
+    return node, heading
+
+
+def _route(label: NonFifoParetoLabel, departure_time: datetime) -> TemporalParetoRoute:
+    steps: list[TemporalParetoStepEvidence] = []
+    for transition in label.transitions:
+        payload = transition.payload or {}
+        step = payload.get("step")
+        if not isinstance(step, TemporalParetoStepEvidence):
+            raise NonFifoTemporalParetoError("Pareto label is missing actual step evidence")
+        steps.append(step)
+    arrivals = (departure_time.astimezone(UTC), *(step.eta for step in steps))
+    return TemporalParetoRoute(
+        states=tuple(label.path),
+        arrival_times=arrivals,
+        costs=label.costs,
+        steps=tuple(steps),
+    )
+
+
+def _wrap_result(
+    raw: NonFifoParetoSearchResult,
+    scope_digest: str,
+    session_identity: str,
+    context: Any,
+    request: PlanningRequest,
+) -> NonFifoTemporalParetoResult:
+    # ``goal_frontier`` is empty for every failed/cancelled/resource result;
+    # this preserves the finite sidecar's no-partial-route rule.
+    frontier = tuple(
+        sorted(
+            (_route(label, request.departure_time) for label in raw.goal_frontier),
+            key=lambda route: (route.costs, route.arrival_times[-1], route.nodes),
+        )
+    )
+    selected = (
+        _route(raw.label, request.departure_time)
+        if raw.label is not None
+        else None
+    )
+    return NonFifoTemporalParetoResult(
+        status=raw.status,
+        selected=selected,
+        frontier=frontier,
+        raw_result=raw,
+        scope_digest=scope_digest,
+        session_identity=session_identity,
+        diagnostics=context.diagnostics.freeze(),
+    )
+
+
+__all__ = [
+    "TEMPORAL_PARETO_COMPONENTS",
+    "NonFifoTemporalParetoCheckpoint",
+    "NonFifoTemporalParetoError",
+    "NonFifoTemporalParetoResearchSession",
+    "NonFifoTemporalParetoResult",
+    "TemporalParetoComponent",
+    "TemporalParetoRoute",
+    "TemporalParetoStepEvidence",
+    "create_non_fifo_temporal_pareto_session",
+    "restore_non_fifo_temporal_pareto_session",
+    "run_non_fifo_temporal_pareto_search",
+]
