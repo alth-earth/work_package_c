@@ -566,9 +566,9 @@ def _identity(args: argparse.Namespace, root: Path) -> dict[str, Any]:
                 "failure": "no_partial_route",
             }
         ),
-        "objectives": OBJECTIVES,
-        "policies": POLICIES,
-        "fixtures": FIXTURES,
+        "objectives": list(OBJECTIVES),
+        "policies": list(POLICIES),
+        "fixtures": list(FIXTURES),
         "repetitions": args.repetitions,
         "worker_timeout_seconds": args.worker_timeout_seconds,
         "cpu": args.cpu,
