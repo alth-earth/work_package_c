@@ -4243,3 +4243,32 @@ format/check、compile/import boundary、`uv lock --check`、offline sync、CLI 
 `git diff --check` 随后完成。原样 `UV_OFFLINE=1 make check` 若仍受隔离 worktree 缺少
 `.mamba-env/bin/uv` 阻塞，仅记录该环境限制，不修改环境或 lock。实验产物仅留在
 `.runtime/experiments/`，本分支不 push、不合并正式树。
+
+### 【2026-08-30 | PLANNED】P0.2-M34：组合 edge/state-bound 与 actual Pareto 转移 pre-gate
+
+M33 的 environmental speed envelope 已在真实 6h 减少 edge evaluator 调用，但没有降低
+exact-arrival 的 label/queue frontier；M22 的 actual Pareto state-bound 已在有限图和真实
+24h 诊断中保持路线/业务语义等价，却仍需在昂贵 edge evaluator 之前尽早拒绝已被完整
+arrival upper envelope 证明不可能的**新生成**转移。本轮将两条已审计的 C 内部路径组合为
+一个更窄的 transition pre-gate，不引入新的近似算法或生产接口。
+
+组合规则固定为：显式、scope 完全匹配且 evaluator/coverage/proof 有效的 partial
+`TemporalStateBoundCertificate` 才可在 `evaluate_edge` 前执行 downward-rounded 严格不等式；
+证书缺失、scope/partition/coverage/evaluator 不匹配或 destination upper envelope 不完整
+时保持 edge live。pre-gate 只抑制新生成且已证明不可能的转移，不删除已扩展 label、
+predecessor、exact arrival、goal evidence 或 reference route；`TemporalDominancePolicy`
+仍 disabled，正式 `plan()`、contracts、ingress/service、candidate 和 Winter 均不改变。
+
+先完成 synthetic finite Pareto matrix（certified partial、scope mismatch、coverage
+incomplete、disabled、checkpoint/policy drift、cancel/restore），对照独立 zero-heuristic
+exact-arrival oracle，要求 certified 场景至少一次真实 transition pre-pruning，其他场景
+pruning 为零，路线/ETA/cost/失败语义/determinism 完全一致。随后在冻结 145 帧 holdout/
+development 上复用已审计 M22 actual Pareto frontier harness 做 dominance-disabled 6h 和
+条件性 24h 诊断，只记录 edge pre-gate 计数、label/queue/expansion/resource 证据；不提高
+`50k/100k/50k/400k` 上限，不把 Dijkstra 当性能基线，不自动重开 Winter。
+
+若 synthetic 或 fail-closed 矩阵失败，状态为 `INVALID/NO_PERFORMANCE_PROOF`，停止真实长跑；
+若语义等价但真实 frontier 仍在 queue 上限失败，记录 `REAL_INPUT_RESOURCE_BOUND_INSUFFICIENT`，
+转向独立 corridor/envelope 或 test-only P0.2 label-correcting 设计；若出现可审计的真实
+资源改善，仅标记 `READY_FOR_SEPARATE_REAL_FRONTIER_PLAN`，不启用 candidate。所有实验构件
+留在 `.runtime/experiments/`，本分支只做本地提交。
