@@ -76,6 +76,7 @@ TEMPORAL_PARETO_SCHEMA = "c.p0.2-temporal-pareto-bridge.v1"
 _STATE_BOUND_DISABLED_DIGEST = "temporal-state-bound-disabled"
 _INCUMBENT_BOUND_DISABLED_DIGEST = "non-fifo-pareto-incumbent-bound-disabled"
 _HEURISTIC_DISABLED_DIGEST = "non-fifo-pareto-heuristic-disabled"
+_HEURISTIC_ORDERING_MODES = ("always", "after_goal")
 _HEADING_NONE: tuple[int, int] | None = None
 type TemporalParetoState = tuple[tuple[int, int], tuple[int, int] | None]
 
@@ -555,6 +556,7 @@ def create_non_fifo_temporal_pareto_session(
         | None
     ) = None,
     heuristic_certificate: TemporalHeuristicCertificate | None = None,
+    heuristic_ordering: str = "always",
     identity: NonFifoParetoSessionIdentity | None = None,
 ) -> NonFifoTemporalParetoResearchSession:
     """Create an actual-edge Pareto session for explicit research only."""
@@ -565,6 +567,7 @@ def create_non_fifo_temporal_pareto_session(
         state_bound_certificate,
         incumbent_bound_certificate,
         heuristic_certificate,
+        heuristic_ordering,
     )
     callbacks, context, component_digest = _callbacks(
         planner,
@@ -574,6 +577,7 @@ def create_non_fifo_temporal_pareto_session(
         state_bound_certificate=state_bound_certificate,
         incumbent_bound_certificate=incumbent_bound_certificate,
         heuristic_certificate=heuristic_certificate,
+        heuristic_ordering=heuristic_ordering,
     )
     session = create_non_fifo_pareto_session(
         start=(request.start, _HEADING_NONE),
@@ -594,7 +598,10 @@ def create_non_fifo_temporal_pareto_session(
         scope_digest=scope.digest,
         incumbent_bound_certificate=incumbent_bound_certificate,
         priority=callbacks.priority,
-        priority_policy_digest=_heuristic_digest(heuristic_certificate),
+        priority_after_goal=callbacks.priority_after_goal,
+        priority_policy_digest=_heuristic_policy_digest(
+            heuristic_certificate, heuristic_ordering
+        ),
         identity=identity,
     )
     return NonFifoTemporalParetoResearchSession(
@@ -616,6 +623,7 @@ def restore_non_fifo_temporal_pareto_session(
         | None
     ) = None,
     heuristic_certificate: TemporalHeuristicCertificate | None = None,
+    heuristic_ordering: str = "always",
 ) -> NonFifoTemporalParetoResearchSession:
     """Restore an actual-edge Pareto session after all bridge fences."""
 
@@ -628,6 +636,7 @@ def restore_non_fifo_temporal_pareto_session(
         state_bound_certificate,
         incumbent_bound_certificate,
         heuristic_certificate,
+        heuristic_ordering,
     )
     callbacks, context, component_digest = _callbacks(
         planner,
@@ -637,6 +646,7 @@ def restore_non_fifo_temporal_pareto_session(
         state_bound_certificate=state_bound_certificate,
         incumbent_bound_certificate=incumbent_bound_certificate,
         heuristic_certificate=heuristic_certificate,
+        heuristic_ordering=heuristic_ordering,
     )
     if checkpoint.scope_digest != scope.digest:
         raise NonFifoTemporalParetoError("actual Pareto checkpoint scope mismatch")
@@ -648,7 +658,9 @@ def restore_non_fifo_temporal_pareto_session(
         raise NonFifoTemporalParetoError(
             "actual Pareto checkpoint incumbent-bound digest mismatch"
         )
-    expected_heuristic_digest = _heuristic_digest(heuristic_certificate)
+    expected_heuristic_digest = _heuristic_policy_digest(
+        heuristic_certificate, heuristic_ordering
+    )
     if checkpoint.pareto_checkpoint.identity.priority_policy_digest != expected_heuristic_digest:
         raise NonFifoTemporalParetoError(
             "actual Pareto checkpoint heuristic policy digest mismatch"
@@ -669,6 +681,7 @@ def restore_non_fifo_temporal_pareto_session(
         cancel_check=request.cancel_check if cancel_check is None else cancel_check,
         incumbent_bound_certificate=incumbent_bound_certificate,
         priority=callbacks.priority,
+        priority_after_goal=callbacks.priority_after_goal,
     )
     return NonFifoTemporalParetoResearchSession(
         planner, request, session, context, scope, component_digest
@@ -688,6 +701,7 @@ def run_non_fifo_temporal_pareto_search(
         | None
     ) = None,
     heuristic_certificate: TemporalHeuristicCertificate | None = None,
+    heuristic_ordering: str = "always",
 ) -> NonFifoTemporalParetoResult:
     """Run the actual-edge Pareto sidecar to a terminal state."""
 
@@ -699,6 +713,7 @@ def run_non_fifo_temporal_pareto_search(
         state_bound_certificate=state_bound_certificate,
         incumbent_bound_certificate=incumbent_bound_certificate,
         heuristic_certificate=heuristic_certificate,
+        heuristic_ordering=heuristic_ordering,
     ).run()
 
 
@@ -707,6 +722,7 @@ class _Callbacks:
     neighbors: Any
     evaluate_edge: Any
     priority: Any = None
+    priority_after_goal: Any = None
 
 
 def _state_bound_digest(certificate: TemporalStateBoundCertificate | None) -> str:
@@ -733,6 +749,26 @@ def _heuristic_digest(certificate: TemporalHeuristicCertificate | None) -> str:
     return certificate.digest if certificate is not None else _HEURISTIC_DISABLED_DIGEST
 
 
+def _heuristic_policy_digest(
+    certificate: TemporalHeuristicCertificate | None, ordering: str
+) -> str:
+    """Bind the certificate to the phase in which its ordering is active."""
+
+    if certificate is None:
+        return _HEURISTIC_DISABLED_DIGEST
+    if ordering == "always":
+        # Preserve M27's stable identity for the historical mode.
+        return certificate.digest
+    return _digest(
+        {
+            "schema": TEMPORAL_PARETO_SCHEMA,
+            "policy": "certified-goal-gated-priority-v1",
+            "ordering": ordering,
+            "certificate_digest": certificate.digest,
+        }
+    )
+
+
 def _validate_bridge(
     planner: TemporalLabelAStar,
     request: PlanningRequest,
@@ -743,9 +779,14 @@ def _validate_bridge(
         | None
     ) = None,
     heuristic_certificate: TemporalHeuristicCertificate | None = None,
+    heuristic_ordering: str = "always",
 ) -> TemporalScope:
     if not isinstance(planner, TemporalLabelAStar):
         raise NonFifoTemporalParetoError("actual Pareto bridge requires TemporalLabelAStar")
+    if heuristic_ordering not in _HEURISTIC_ORDERING_MODES:
+        raise NonFifoTemporalParetoError(
+            f"unsupported heuristic ordering mode: {heuristic_ordering}"
+        )
     if request.use_heuristic:
         raise NonFifoTemporalParetoError("actual Pareto bridge requires use_heuristic=False")
     if planner.dominance_policy.enabled:
@@ -771,6 +812,10 @@ def _validate_bridge(
         heuristic_certificate, TemporalHeuristicCertificate
     ):
         raise NonFifoTemporalParetoError("heuristic certificate type is invalid")
+    if heuristic_certificate is None and heuristic_ordering != "always":
+        raise NonFifoTemporalParetoError(
+            "goal-gated heuristic ordering requires a certificate"
+        )
     scope = planner.temporal_scope(request)
     if not scope.evaluator_identity_known:
         raise NonFifoTemporalParetoError("actual Pareto bridge requires known evaluator identity")
@@ -799,6 +844,7 @@ def _callbacks(
         | None
     ),
     heuristic_certificate: TemporalHeuristicCertificate | None,
+    heuristic_ordering: str,
 ) -> tuple[_Callbacks, Any, str]:
     component_digest = _digest(
         {
@@ -809,16 +855,22 @@ def _callbacks(
             "skip_expected_rejections": skip_expected_rejections,
             "state_bound_digest": _state_bound_digest(state_bound_certificate),
             "incumbent_bound_digest": _incumbent_bound_digest(incumbent_bound_certificate),
-            "heuristic_policy_digest": _heuristic_digest(heuristic_certificate),
+            "heuristic_policy_digest": _heuristic_policy_digest(
+                heuristic_certificate, heuristic_ordering
+            ),
+            "heuristic_ordering": heuristic_ordering,
         }
     )
     context = planner._new_execution_context()
     context.state_bound_certificate = state_bound_certificate
     priority = None
+    priority_after_goal = None
     if heuristic_certificate is not None:
         context.heuristic_certificate = heuristic_certificate
         context.heuristic_authorized = True
-        context.diagnostics.heuristic_policy = "certified"
+        context.diagnostics.heuristic_policy = (
+            "certified" if heuristic_ordering == "always" else "certified-after-goal"
+        )
         context.diagnostics.heuristic_certificate_digest = heuristic_certificate.digest
         context.diagnostics.heuristic_scope_match = True
     cost_model = planner._cost_model(ObjectiveMode(request.objective))
@@ -904,10 +956,15 @@ def _callbacks(
         priority.__non_fifo_identity__ = (
             f"priority:{token}:{heuristic_certificate.digest}"
         )
+        if heuristic_ordering == "after_goal":
+            priority_after_goal = priority
+            priority = None
 
     neighbors.__non_fifo_identity__ = f"neighbors:{token}"
     evaluate_edge.__non_fifo_identity__ = f"evaluator:{token}"
-    return _Callbacks(neighbors, evaluate_edge, priority), context, component_digest
+    return _Callbacks(
+        neighbors, evaluate_edge, priority, priority_after_goal
+    ), context, component_digest
 
 
 def _expected_rejection_reason(error: Exception, context: Any) -> str | None:

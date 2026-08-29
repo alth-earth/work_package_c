@@ -23,6 +23,7 @@ from typing import Any
 
 _INCUMBENT_BOUND_DISABLED_DIGEST = "non-fifo-pareto-incumbent-bound-disabled"
 _PARETO_PRIORITY_DEFAULT_DIGEST = "non-fifo-pareto-priority-cost-vector-v1"
+_PARETO_PRIORITY_AFTER_GOAL_NONE_DIGEST = "non-fifo-pareto-priority-after-goal-none"
 
 
 def _digest(value: Any) -> str:
@@ -1169,6 +1170,7 @@ class NonFifoParetoSessionIdentity:
     scope_digest: str = "unspecified-scope"
     incumbent_bound_digest: str = _INCUMBENT_BOUND_DISABLED_DIGEST
     priority_callback_digest: str = "non-fifo-pareto-priority-none"
+    priority_after_goal_callback_digest: str = _PARETO_PRIORITY_AFTER_GOAL_NONE_DIGEST
     priority_policy_digest: str = _PARETO_PRIORITY_DEFAULT_DIGEST
     schema_version: str = "c.p0.2-nonfifo-pareto-session.v1"
 
@@ -1195,6 +1197,7 @@ class NonFifoParetoSessionIdentity:
         scope_digest: str = "unspecified-scope",
         incumbent_bound_digest: str = _INCUMBENT_BOUND_DISABLED_DIGEST,
         priority: Callable[[NonFifoParetoLabel], float] | None = None,
+        priority_after_goal: Callable[[NonFifoParetoLabel], float] | None = None,
         priority_policy_digest: str = _PARETO_PRIORITY_DEFAULT_DIGEST,
     ) -> NonFifoParetoSessionIdentity:
         return cls(
@@ -1217,6 +1220,9 @@ class NonFifoParetoSessionIdentity:
             scope_digest=scope_digest,
             incumbent_bound_digest=incumbent_bound_digest,
             priority_callback_digest=_priority_callback_digest(priority),
+            priority_after_goal_callback_digest=_priority_after_goal_callback_digest(
+                priority_after_goal
+            ),
             priority_policy_digest=priority_policy_digest,
         )
 
@@ -1242,6 +1248,7 @@ class NonFifoParetoSessionIdentity:
                 "scope_digest": self.scope_digest,
                 "incumbent_bound_digest": self.incumbent_bound_digest,
                 "priority_callback_digest": self.priority_callback_digest,
+                "priority_after_goal_callback_digest": self.priority_after_goal_callback_digest,
                 "priority_policy_digest": self.priority_policy_digest,
             }
         )
@@ -1259,6 +1266,8 @@ class NonFifoParetoSessionIdentity:
                 "maximum_elapsed_seconds": self.maximum_elapsed_seconds,
                 "scope_digest": self.scope_digest,
                 "incumbent_bound_digest": self.incumbent_bound_digest,
+                "priority_callback_digest": self.priority_callback_digest,
+                "priority_after_goal_callback_digest": self.priority_after_goal_callback_digest,
                 "priority_policy_digest": self.priority_policy_digest,
             }
         )
@@ -1332,6 +1341,7 @@ class NonFifoParetoSessionIdentity:
                 self.scope_digest,
                 self.incumbent_bound_digest,
                 self.priority_callback_digest,
+                self.priority_after_goal_callback_digest,
                 self.priority_policy_digest,
             )
         ):
@@ -1358,6 +1368,7 @@ class NonFifoParetoCheckpoint:
     incumbent_bound_pruned: int = 0
     incumbent_bound_rejected: int = 0
     incumbent_bound_rejection_reasons: tuple[tuple[str, int], ...] = ()
+    priority_phase: str = "pre_goal"
     state_digest: str = ""
 
     def __post_init__(self) -> None:
@@ -1368,6 +1379,16 @@ class NonFifoParetoCheckpoint:
         ):
             raise NonFifoParetoSessionRestoreError(
                 "only READY or PAUSED sessions can be checkpointed"
+            )
+        if self.priority_phase not in {"pre_goal", "post_goal"}:
+            raise NonFifoParetoSessionRestoreError("checkpoint priority phase is invalid")
+        if self.priority_phase == "post_goal" and not self.goals:
+            raise NonFifoParetoSessionRestoreError(
+                "post-goal checkpoint is missing its goal evidence"
+            )
+        if self.priority_phase == "pre_goal" and self.goals:
+            raise NonFifoParetoSessionRestoreError(
+                "pre-goal checkpoint already contains goal evidence"
             )
         expected = self._calculated_state_digest()
         if self.state_digest and self.state_digest != expected:
@@ -1418,6 +1439,7 @@ class NonFifoParetoCheckpoint:
                 "incumbent_bound_pruned": self.incumbent_bound_pruned,
                 "incumbent_bound_rejected": self.incumbent_bound_rejected,
                 "incumbent_bound_rejection_reasons": self.incumbent_bound_rejection_reasons,
+                "priority_phase": self.priority_phase,
             }
         )
 
@@ -1831,6 +1853,14 @@ def _priority_callback_digest(callback: Any) -> str:
     return _callback_digest(callback)
 
 
+def _priority_after_goal_callback_digest(callback: Any) -> str:
+    """Fingerprint the optional post-goal queue-priority callback."""
+
+    if callback is None:
+        return _PARETO_PRIORITY_AFTER_GOAL_NONE_DIGEST
+    return _callback_digest(callback)
+
+
 class NonFifoParetoSession:
     """A resumable finite exact-arrival Pareto research session.
 
@@ -1860,6 +1890,8 @@ class NonFifoParetoSession:
         "neighbors",
         "pareto_pruned",
         "priority",
+        "priority_after_goal",
+        "priority_phase",
         "queue",
         "queue_peak",
         "result",
@@ -1890,6 +1922,7 @@ class NonFifoParetoSession:
         scope_digest: str = "unspecified-scope",
         incumbent_bound_certificate: NonFifoParetoBoundCertificate | None = None,
         priority: Callable[[NonFifoParetoLabel], float] | None = None,
+        priority_after_goal: Callable[[NonFifoParetoLabel], float] | None = None,
         priority_policy_digest: str = _PARETO_PRIORITY_DEFAULT_DIGEST,
         cancel_check: Callable[[], bool] | None = None,
         identity: NonFifoParetoSessionIdentity | None = None,
@@ -1916,6 +1949,7 @@ class NonFifoParetoSession:
                 else _INCUMBENT_BOUND_DISABLED_DIGEST
             ),
             priority=priority,
+            priority_after_goal=priority_after_goal,
             priority_policy_digest=priority_policy_digest,
         )
         expected_identity = candidate_identity if identity is None else identity
@@ -1938,6 +1972,7 @@ class NonFifoParetoSession:
         )
         self.neighbors = neighbors
         self.priority = priority
+        self.priority_after_goal = priority_after_goal
         self.evaluate_edge = evaluate_edge
         self.cancel_check = cancel_check
         self.maximum_elapsed = (
@@ -1956,6 +1991,7 @@ class NonFifoParetoSession:
             (self.identity.start,),
         )
         self.state = NonFifoParetoSessionState.READY
+        self.priority_phase = "pre_goal"
         self.labels_by_key = {initial.exact_key: [initial]}
         self.queue = [self._queue_entry(initial, 0)]
         self.serial = 0
@@ -1985,6 +2021,7 @@ class NonFifoParetoSession:
         cancel_check: Callable[[], bool] | None,
         incumbent_bound_certificate: NonFifoParetoBoundCertificate | None,
         priority: Callable[[NonFifoParetoLabel], float] | None,
+        priority_after_goal: Callable[[NonFifoParetoLabel], float] | None,
     ) -> NonFifoParetoSession:
         checkpoint.assert_valid()
         identity = checkpoint.identity
@@ -1994,6 +2031,13 @@ class NonFifoParetoSession:
             raise NonFifoParetoSessionIdentityMismatch("evaluator callback digest mismatch")
         if _priority_callback_digest(priority) != identity.priority_callback_digest:
             raise NonFifoParetoSessionIdentityMismatch("priority callback digest mismatch")
+        if (
+            _priority_after_goal_callback_digest(priority_after_goal)
+            != identity.priority_after_goal_callback_digest
+        ):
+            raise NonFifoParetoSessionIdentityMismatch(
+                "post-goal priority callback digest mismatch"
+            )
         session = cls.__new__(cls)
         session.identity = identity
         if incumbent_bound_certificate is not None and not isinstance(
@@ -2018,6 +2062,7 @@ class NonFifoParetoSession:
         )
         session.neighbors = neighbors
         session.priority = priority
+        session.priority_after_goal = priority_after_goal
         session.evaluate_edge = evaluate_edge
         session.cancel_check = cancel_check
         session.maximum_elapsed = (
@@ -2026,6 +2071,7 @@ class NonFifoParetoSession:
             else None
         )
         session.state = checkpoint.state
+        session.priority_phase = checkpoint.priority_phase
         session.labels_by_key = {}
         for label in checkpoint.labels:
             session.labels_by_key.setdefault(label.exact_key, []).append(label)
@@ -2052,9 +2098,14 @@ class NonFifoParetoSession:
     def _queue_key(self, label: NonFifoParetoLabel) -> tuple[float, ...]:
         """Return a deterministic ordering key without changing label semantics."""
 
-        if self.priority is None:
+        callback = (
+            self.priority_after_goal
+            if self.priority_phase == "post_goal"
+            else self.priority
+        )
+        if callback is None:
             return label.costs
-        value = float(self.priority(label))
+        value = float(callback(label))
         if not isfinite(value) or value < 0.0:
             raise NonFifoParetoSessionError("priority callback returned an invalid value")
         # Keep the original vector after the scalar ordering value so ties are
@@ -2065,6 +2116,30 @@ class NonFifoParetoSession:
         self, label: NonFifoParetoLabel, serial: int
     ) -> tuple[tuple[float, ...], datetime, int, NonFifoParetoLabel]:
         return (self._queue_key(label), label.arrival_time, serial, label)
+
+    def _activate_post_goal_priority(self) -> None:
+        """Re-key queued labels once, after the first terminal label appears.
+
+        Re-keying is an ordering-only operation.  Every queued label retains
+        its original object, exact arrival, and insertion serial; only the
+        heap key changes.  If the callback fails, the phase is rolled back so
+        callers cannot continue with a partially re-keyed queue.
+        """
+
+        if self.priority_after_goal is None or self.priority_phase == "post_goal":
+            return
+        previous_phase = self.priority_phase
+        self.priority_phase = "post_goal"
+        try:
+            rebuilt = [
+                self._queue_entry(label, serial)
+                for _key, _arrival, serial, label in self.queue
+            ]
+            heapify(rebuilt)
+        except Exception:
+            self.priority_phase = previous_phase
+            raise
+        self.queue = rebuilt
 
     def _record_incumbent_bound_rejection(self, reason: str) -> None:
         self.incumbent_bound_rejected += 1
@@ -2245,6 +2320,7 @@ class NonFifoParetoSession:
                 return self._finish(NonFifoSearchStatus.RESOURCE_LIMIT, "search_limit_exceeded")
             if label.node == limits.goal:
                 self.goals.append(label)
+                self._activate_post_goal_priority()
                 continue
             try:
                 neighbours = _ordered_neighbors(self.neighbors(label.node))
@@ -2354,6 +2430,7 @@ class NonFifoParetoSession:
             incumbent_bound_rejection_reasons=tuple(
                 sorted(self.incumbent_bound_rejection_reasons.items())
             ),
+            priority_phase=self.priority_phase,
         )
 
 
@@ -2376,6 +2453,7 @@ def restore_non_fifo_pareto_session(
     identity: NonFifoParetoSessionIdentity | None = None,
     incumbent_bound_certificate: NonFifoParetoBoundCertificate | None = None,
     priority: Callable[[NonFifoParetoLabel], float] | None = None,
+    priority_after_goal: Callable[[NonFifoParetoLabel], float] | None = None,
 ) -> NonFifoParetoSession:
     """Restore a paused finite session after all identity fences."""
 
@@ -2391,6 +2469,7 @@ def restore_non_fifo_pareto_session(
         cancel_check=cancel_check,
         incumbent_bound_certificate=incumbent_bound_certificate,
         priority=priority,
+        priority_after_goal=priority_after_goal,
     )
 
 
@@ -2414,6 +2493,7 @@ def search_non_fifo_pareto(
     scope_digest: str = "unspecified-scope",
     incumbent_bound_certificate: NonFifoParetoBoundCertificate | None = None,
     priority: Callable[[NonFifoParetoLabel], float] | None = None,
+    priority_after_goal: Callable[[NonFifoParetoLabel], float] | None = None,
     priority_policy_digest: str = _PARETO_PRIORITY_DEFAULT_DIGEST,
 ) -> NonFifoParetoSearchResult:
     """Run one finite session to completion with the historical API."""
@@ -2437,6 +2517,7 @@ def search_non_fifo_pareto(
         scope_digest=scope_digest,
         incumbent_bound_certificate=incumbent_bound_certificate,
         priority=priority,
+        priority_after_goal=priority_after_goal,
         priority_policy_digest=priority_policy_digest,
     ).run()
 

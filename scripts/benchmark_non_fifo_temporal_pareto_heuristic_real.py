@@ -27,13 +27,17 @@ from typing import Any
 from arctic_route_planning.domain.models import ObjectiveMode
 from arctic_route_planning.planners.non_fifo_feasibility import NonFifoSearchStatus
 from arctic_route_planning.planners.non_fifo_temporal_pareto import (
+    _heuristic_policy_digest,
     run_non_fifo_temporal_pareto_search,
 )
 from arctic_route_planning.planners.temporal_heuristic_bounds import (
     qualify_temporal_heuristic,
 )
 
-SCHEMA_VERSION = "c.p0.2-nonfifo-pareto-heuristic-real.v1"
+SCHEMA_VERSION = os.environ.get(
+    "C_PARETO_SCHEMA_VERSION", "c.p0.2-nonfifo-pareto-heuristic-real.v1"
+)
+MILESTONE = os.environ.get("C_PARETO_MILESTONE", "P0.2-M27")
 OBJECTIVES = tuple(ObjectiveMode)
 LIMITS = {
     "max_expansions": 50_000,
@@ -234,6 +238,7 @@ def _worker_record(args: argparse.Namespace) -> dict[str, Any]:
             state_bound_certificate=state_certificate,
             incumbent_bound_certificate=terminal_certificate,
         )
+        heuristic_ordering = getattr(args, "heuristic_ordering", "always")
         ordered = run_non_fifo_temporal_pareto_search(
             planner,
             request,
@@ -242,6 +247,7 @@ def _worker_record(args: argparse.Namespace) -> dict[str, Any]:
             state_bound_certificate=state_certificate,
             incumbent_bound_certificate=terminal_certificate,
             heuristic_certificate=heuristic,
+            heuristic_ordering=heuristic_ordering,
         )
     except Exception as error:  # pragma: no cover - child boundary evidence
         errors["worker"] = f"{type(error).__name__}: {error}"
@@ -269,7 +275,8 @@ def _worker_record(args: argparse.Namespace) -> dict[str, Any]:
         and ordered_diagnostics.get("heuristic_policy") == "certified"
         and ordered_diagnostics.get("heuristic_scope_match") is True
         and ordered is not None
-        and ordered.raw_result.priority_policy_digest == heuristic.digest
+        and ordered.raw_result.priority_policy_digest
+        == _heuristic_policy_digest(heuristic, heuristic_ordering)
     )
     terminal_pruned = ordered.incumbent_bound_pruned if ordered is not None else 0
     terminal_rejected = ordered.incumbent_bound_rejected if ordered is not None else 0
@@ -319,6 +326,7 @@ def _worker_record(args: argparse.Namespace) -> dict[str, Any]:
             state_certificate.digest if state_certificate is not None else None
         ),
         "heuristic_certificate_digest": heuristic.digest if heuristic is not None else None,
+        "heuristic_ordering": getattr(args, "heuristic_ordering", "always"),
         "terminal_bound_certificate": terminal_record,
         "topology_digest": topology.proof_digest if topology is not None else None,
         "errors": errors,
@@ -346,7 +354,11 @@ def _worker_record(args: argparse.Namespace) -> dict[str, Any]:
         "dominance_policy": "disabled",
         "state_bound_policy": "graph-topological-arrival-envelope-v1",
         "terminal_bound_policy": "selected-route-terminal-lexicographic-v1",
-        "priority_policy": "certified-total-equivalent-hours-lower-bound-v1",
+        "priority_policy": (
+            "certified-total-equivalent-hours-lower-bound-v1"
+            if getattr(args, "heuristic_ordering", "always") == "always"
+            else "certified-goal-gated-total-equivalent-hours-lower-bound-v1"
+        ),
         "production_candidate_enabled": False,
         "winter_enabled": False,
     }
@@ -394,7 +406,7 @@ def _identity(
         )[0].digest
     return {
         "schema_version": SCHEMA_VERSION,
-        "milestone": "P0.2-M27",
+        "milestone": MILESTONE,
         "mode": args.mode,
         "git": _git_identity(root),
         "implementation": {"files": files, "sha256": _digest(files)},
@@ -437,7 +449,12 @@ def _identity(
         "dominance_policy": "disabled",
         "state_bound_policy": "graph-topological-arrival-envelope-v1",
         "terminal_bound_policy": "selected-route-terminal-lexicographic-v1",
-        "priority_policy": "certified-total-equivalent-hours-lower-bound-v1",
+        "priority_policy": (
+            "certified-total-equivalent-hours-lower-bound-v1"
+            if getattr(args, "heuristic_ordering", "always") == "always"
+            else "certified-goal-gated-total-equivalent-hours-lower-bound-v1"
+        ),
+        "heuristic_ordering": getattr(args, "heuristic_ordering", "always"),
         "selection_only": True,
         "search_limits": LIMITS,
         "production_candidate_enabled": False,
@@ -516,6 +533,8 @@ def _child_command(
         str(args.worker_timeout_seconds),
         "--cpu",
         str(args.cpu),
+        "--heuristic-ordering",
+        getattr(args, "heuristic_ordering", "always"),
     ]
 
 
@@ -785,6 +804,12 @@ def main() -> int:
     parser.add_argument("--repetitions", type=int, default=1)
     parser.add_argument("--worker-timeout-seconds", type=float, default=900.0)
     parser.add_argument("--cpu", type=int, default=0)
+    parser.add_argument(
+        "--heuristic-ordering",
+        choices=("always", "after_goal"),
+        default="always",
+        help="apply the certified queue priority always or only after the first goal",
+    )
     args = parser.parse_args()
     if args.worker:
         if args.objective is None:
