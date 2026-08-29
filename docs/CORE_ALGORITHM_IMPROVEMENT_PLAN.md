@@ -2297,6 +2297,44 @@ limit 和周期零成本 cycle 均返回明确 `EVALUATOR_FAILURE`、`CANCELLED`
 `READY_FOR_P0.2-NONFIFO-IMPLEMENTATION-REVIEW`，candidate 继续默认关闭。后续若继续，
 须另立有限非 FIFO 实现/真实资源计划，并保留本轮原始构件和历史结论。
 
+### 【2026-08-29 | PLANNED】P0.2-M12：finite non-FIFO Pareto session/checkpoint review
+
+M11 已在有限 fixture 上证明 exact-arrival Pareto frontier、严格同 exact 新 label
+pruning、取消和资源失败语义，但入口仍是一次性函数，无法独立审计长任务的切片、暂停和
+恢复。本轮把该 sidecar 封装为显式 C 内部 session，不连接真实输入、正式 planner、
+ingress/service 或公共 API；`pareto_pruning=False` 和正式 C 默认路径保持不变。
+
+**Session 与身份围栏。** 新增 `NonFifoParetoSession`、`NonFifoParetoCheckpoint` 和
+`NonFifoParetoSessionIdentity`（或等价内部类型），identity 必须绑定 schema、start/goal、
+UTC departure、objective dimension、Pareto policy、四项冻结 limits、neighbor/evaluator
+digest、fixture/config digest。session 只能在 `READY/PAUSED` 状态 checkpoint；checkpoint
+保存 exact-arrival labels、frontier、queue、serial、diagnostics 和 lifecycle state，并在
+restore 前重新校验 identity/state digest。回调不序列化；恢复必须显式提供与 digest 匹配的
+当前 callbacks。identity/policy/limit/evaluator 漂移、篡改 digest 或非法 lifecycle 一律
+fail-closed。
+
+**执行语义。** `advance(expansion_slice)` 在未终止时返回暂停标记/空值，只有完整
+`GOAL_FOUND`、`EXHAUSTED`、`RESOURCE_LIMIT`、`CANCELLED` 或 `EVALUATOR_FAILURE` 才返回
+terminal result；任何非成功 terminal 都不暴露 partial route/frontier。恢复后的完整运行必须
+与未切片运行在 selected label、完整 goal frontier、semantic/frontier digest、计数和失败
+原因上一致。Pareto pruning 仍只允许同一 `(node, exact UTC arrival)` 的新生成 label 被严格
+component-wise 支配时丢弃；不同 arrival、equal-cost 和已扩展 label 永不删除。
+
+**独立证据。** 新 runner 使用 schema `c.p0.2-nonfifo-pareto-session.v1`，在 M11
+adversarial fixtures 上交替比较 one-shot、slice-only、slice→checkpoint→restore 和
+cancelled runs，至少 10 次重复；每 case 保存 identity/checkpoint digest、selected/frontier
+payload、semantic/business evidence、queue/label/edge counters 和资源快照。独立 exhaustive
+oracle 继续只作正确性证据，不注入候选答案；必须覆盖成功 frontier、周期/零成本、hard-mask、
+evaluator failure、resource limit、cancellation、callback/policy/limit/checkpoint digest
+mismatch，并验证 resume 不重复追加 case。
+
+**收口门。** 所有成功 fixture 的 one-shot 与 restored frontier/route/业务字段完全一致且
+deterministic；所有失败/cancelled/resource/mismatch 场景无 partial route；恢复身份篡改全部
+拒绝；pruning 仅出现在明确同 exact 新 label。全门通过只标记
+`READY_FOR_P0.2-NONFIFO-REAL-SESSION-REVIEW`，不启动真实输入、不提高
+`50k/100k/50k/400k`、不重开 Winter、不启用 candidate。任一 restore 漂移、跨 arrival 误剪枝、
+失败泄漏或资源证据缺失标记 `NO_PERFORMANCE_PROOF/FAIL`，保留 M11 结论不覆盖。
+
 ### 【2026-08-29 | PLANNED】P0.2-M9：certified heuristic long-horizon resource audit
 
 M8 在完整 holdout `executable_0_6h` 上证明了证书化反向图 objective lower bound 可以只改变
