@@ -4060,3 +4060,35 @@ replanning baseline 或 frozen artifact。
 不是 candidate 晋级。继续保持 candidate、Winter、P2.1、P3、ARA* 和 temporal
 dominance 默认关闭；下一步另立带更强独立 corridor/state-envelope 证明的资源
 研究，或转入 P0.2 非 FIFO feasibility 计划，不调高资源上限。
+
+### 【2026-08-30 | PLANNED】P0.2-M32：proof-carrying heading-aware objective envelope
+
+M31 的 edge lower-time envelope 能在 6h 安全减少昂贵 edge evaluation，但 24h 仍在
+冻结 queue 上限处触及 exact-arrival 资源边界。现有启发式只按 node 计算
+`travel + distance` 下界，忽略 exact state 中的 incoming heading 与不可避免的 turn
+penalty；这使低风险和推荐目标的队列仍保留大量仅由转向成本区分的 labels。本轮研究
+有限 heading-expanded graph 上的 objective lower-bound envelope，作为显式、默认关闭的
+C 内部排序/incumbent 剪枝证书。
+
+证书必须枚举完整 finite `(node, incoming_heading)` 状态域，并在反向图上以
+`(travel_weight + distance_weight) * distance / vmax + turn_weight * turn_angle`
+作为每条转移的保守下界；risk、uncertainty、deviation 等非负项下界为零。所有
+heading geometry、cost model、grid adjacency、scope、evaluator、ETA/search limits
+和 proof digest 均进入证书与 session/checkpoint identity。只有完整状态覆盖、非负边权、
+反向 shortest-path consistency、scope 完全匹配且 evaluator 身份已知时，才允许使用
+该 heuristic；未知/缺失/非有限/heading outside domain 一律退回安全默认 heuristic，
+记录拒绝原因，不删除任何 label。
+
+先在 finite synthetic small/medium/stress 图使用独立 zero-heuristic exact-arrival
+oracle，对比无 heading envelope 的路线、精确 ETA、所有业务字段、失败语义、确定性、
+checkpoint/restore、cancel 和资源限制；certified 至少观察一次 expansion/queue
+改善，scope mismatch/incomplete/negative/malformed 证书不得生效。随后只对冻结
+145 帧 holdout/development 的 `executable_0_6h` 三目标做单 worker 诊断；24h 仅在
+6h 语义完整且 heading certificate 证据可解释时选择性运行，仍保持
+`50k/100k/50k/400k` 上限、dominance disabled、candidate/Winter 关闭，reference
+Dijkstra 只作正确性证据。
+
+本轮不改变正式 `plan()` 默认行为、不新增合同、不接入 ingress/service，也不将
+heading heuristic 误称为 FIFO/dominance 证明。若仅改善排序而 24h 仍资源失败，记录
+`SAFE_HEADING_HEURISTIC_NO_24H_PROOF`，停止 priority 调参；若语义、身份或 fail-closed
+失败，记录 `INVALID/FAIL` 并回滚研究调用，不影响 M31/M30 历史结论。
