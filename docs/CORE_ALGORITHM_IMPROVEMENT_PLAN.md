@@ -2335,6 +2335,54 @@ deterministic；所有失败/cancelled/resource/mismatch 场景无 partial route
 `50k/100k/50k/400k`、不重开 Winter、不启用 candidate。任一 restore 漂移、跨 arrival 误剪枝、
 失败泄漏或资源证据缺失标记 `NO_PERFORMANCE_PROOF/FAIL`，保留 M11 结论不覆盖。
 
+### 【2026-08-29 | COMPLETED】P0.2-M12：finite non-FIFO Pareto session/checkpoint review
+
+本轮在隔离分支 `research/p02-m12-nonfifo-session-20260829` 完成；计划提交为
+`ee949e1`，clean implementation 为 `e0b47ab`。改动仅限 C 内部
+`NonFifoParetoSession`/`NonFifoParetoCheckpoint`/`NonFifoParetoSessionIdentity`、独立
+session runner 与测试；未修改 B/C、C/D 合同、ingress/service、正式 planner 默认路径或
+公共 API，`pareto_pruning=False` 和 candidate/Winter 继续关闭。
+
+**Session 与恢复语义。** one-shot `search_non_fifo_pareto(...)` 现在通过显式 session
+完成，保留历史调用形状；`advance(expansion_slice)` 只在 `READY/PAUSED` 间切片，完整运行
+才返回 `GOAL_FOUND`、`EXHAUSTED`、`RESOURCE_LIMIT`、`CANCELLED` 或
+`EVALUATOR_FAILURE`。identity 绑定 schema、start/goal、UTC departure、objective
+dimension、Pareto policy、冻结 `50k/100k/50k/400k` limits、neighbor/evaluator callback
+digest 和 fixture digest；checkpoint 保存 exact-arrival labels、goal frontier、queue、
+serial/counters/diagnostics，并以 state digest 和 callback/identity fence 保护 restore。
+只有同一 exact `(node, arrival)` 的新生成且严格 component-wise 被支配 label 才能 pruning；
+不同 arrival、equal-cost 或已扩展 label 均保留。所有失败、取消和资源终止均不暴露 partial
+route/frontier。
+
+**Synthetic matrix。** runner `scripts/benchmark_non_fifo_pareto_session.py` 使用 schema
+`c.p0.2-nonfifo-pareto-session.v1`，在 M11 adversarial fixtures 上对
+`one_shot`、`slice_only`、`slice_restore` × 三 objective × 10 次重复完成 `900/900`
+cases。权威构件位于
+`.runtime/experiments/c-p02-m12-nonfifo-session-synthetic-20260829-r1/`，包含
+`manifest.json`、`cases.jsonl`、`comparison-summary.json`、`heartbeat.json` 和 `ALL_DONE`；
+manifest 绑定 clean implementation、runner/sidecar file digests、commit、`uv.lock`、配置
+和 fixture/mode/policy digest。resume 复跑保持 `900 -> 900` 行，无重复追加。
+
+| evidence gate | result |
+| --- | --- |
+| expected cases / expected statuses | `900/900` / PASS |
+| one-shot vs slice-only/slice-restore route/frontier/semantic digest/counters | PASS |
+| deterministic / checkpoint digest | `true` / PASS |
+| fail-closed cancellation/resource/evaluator/mismatch | PASS；无 partial route/frontier |
+| resource evidence / process swap | complete / clean；固定 CPU=0 |
+| strict same-exact newly generated pruning | `90`（非授权场景为 `0`） |
+
+成功 frontier、later-arrival、same-exact dominance 与业务 evidence 均和独立 exhaustive
+oracle 一致；周期/资源、evaluator failure、取消以及 callback/policy/checkpoint drift
+均返回明确失败或拒绝状态。汇总状态为
+`TEMPORAL_NONFIFO_PARETO_SESSION_MATRIX_PASS`，仅证明有限非 FIFO sidecar 的可恢复切片、
+身份围栏、终止/取消/资源失败和安全 pruning 语义通过研究审计，不证明连续海洋模型的全局
+最优性，也不代表真实输入性能或 candidate 晋级。
+
+**边界与后续。** 本轮不启动真实 runner、不提高冻结资源上限、不重跑 24h/Winter，保留
+M10 已知 `REAL_INPUT_FIFO_VIOLATED` 和 M11 结论；P0.2 非 FIFO 真实实现仍需另立计划，
+candidate、formal latest、replanning baseline 和 frozen artifact 均不变。
+
 ### 【2026-08-29 | PLANNED】P0.2-M9：certified heuristic long-horizon resource audit
 
 M8 在完整 holdout `executable_0_6h` 上证明了证书化反向图 objective lower bound 可以只改变
