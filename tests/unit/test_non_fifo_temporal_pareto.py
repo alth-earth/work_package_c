@@ -24,6 +24,7 @@ from arctic_route_planning.planners.non_fifo_temporal_pareto import (
     run_non_fifo_temporal_pareto_search,
 )
 from arctic_route_planning.planners.temporal_bounds import TemporalStateBoundCertificate
+from arctic_route_planning.planners.temporal_heuristic_bounds import TemporalHeuristicCertificate
 from arctic_route_planning.planners.temporal_label_astar import TemporalSearchLimits, _RejectedEdge
 from arctic_route_planning.planners.time_dependent_astar import _EdgeTraversal
 
@@ -81,6 +82,25 @@ def _configured_planner(**kwargs):
     planner = _planner(**kwargs)
     planner._injected_edge_evaluator = _pareto_edge(planner)
     return planner
+
+
+def _zero_heuristic_certificate(planner, request):
+    scope = planner.temporal_scope(request)
+    rows, columns = planner.grid.shape
+    nodes = tuple((row, column) for row in range(rows) for column in range(columns))
+    bounds = tuple((node, 0.0) for node in nodes)
+    return TemporalHeuristicCertificate(
+        scope=scope,
+        objective=request.objective.value,
+        universe_nodes=nodes,
+        reverse_travel_lower_hours=bounds,
+        objective_lower_hours=bounds,
+        cost_model_digest="pareto-heuristic-cost-model-v1",
+        proof_digest="pareto-heuristic-proof-v1",
+        admissible=True,
+        consistent=True,
+        coverage_complete=True,
+    )
 
 
 def test_actual_bridge_preserves_business_route_and_prunes_same_goal_arrival() -> None:
@@ -303,6 +323,67 @@ def test_actual_bridge_accepts_explicit_state_bound_and_prunes_new_labels_only()
     assert bounded.diagnostics.state_bound_rejected == 0
     assert bounded.diagnostics.state_bound_checks > 0
     assert bounded.diagnostics.state_bound_pruned > 0
+
+
+def test_actual_bridge_accepts_explicit_heuristic_ordering_without_pruning() -> None:
+    planner = _configured_planner()
+    request = _research_request()
+    certificate = _zero_heuristic_certificate(planner, request)
+
+    baseline = run_non_fifo_temporal_pareto_search(
+        _configured_planner(), request, pareto_pruning=True
+    )
+    ordered = run_non_fifo_temporal_pareto_search(
+        planner,
+        request,
+        pareto_pruning=True,
+        heuristic_certificate=certificate,
+    )
+
+    assert baseline.status is NonFifoSearchStatus.GOAL_FOUND
+    assert ordered.status is NonFifoSearchStatus.GOAL_FOUND
+    assert ordered.frontier == baseline.frontier
+    assert ordered.semantic_digest == baseline.semantic_digest
+    assert ordered.diagnostics.heuristic_policy == "certified"
+    assert ordered.diagnostics.heuristic_scope_match is True
+    assert ordered.diagnostics.heuristic_rejected == 0
+    assert ordered.diagnostics.dominance_pruned == 0
+    assert ordered.diagnostics.state_bound_pruned == 0
+    assert ordered.raw_result.priority_policy_digest == certificate.digest
+
+
+def test_actual_bridge_heuristic_checkpoint_and_scope_drift_fail_closed() -> None:
+    planner = _configured_planner()
+    request = _research_request()
+    certificate = _zero_heuristic_certificate(planner, request)
+    session = create_non_fifo_temporal_pareto_session(
+        planner,
+        request,
+        heuristic_certificate=certificate,
+    )
+    assert session.advance(expansion_slice=1) is None
+    checkpoint = session.checkpoint()
+    assert checkpoint.pareto_checkpoint.identity.priority_policy_digest == certificate.digest
+
+    restored = restore_non_fifo_temporal_pareto_session(
+        planner,
+        request,
+        checkpoint,
+        heuristic_certificate=certificate,
+    )
+    while (result := restored.advance(expansion_slice=1)) is None:
+        pass
+    assert result.status is NonFifoSearchStatus.GOAL_FOUND
+    assert result.raw_result.priority_policy_digest == certificate.digest
+
+    drifted = replace(certificate, proof_digest="pareto-heuristic-proof-drift-v1")
+    with pytest.raises(NonFifoTemporalParetoError, match="heuristic"):
+        restore_non_fifo_temporal_pareto_session(
+            planner,
+            request,
+            checkpoint,
+            heuristic_certificate=drifted,
+        )
 
 
 def test_actual_pareto_state_bound_scope_and_checkpoint_drift_fail_closed() -> None:

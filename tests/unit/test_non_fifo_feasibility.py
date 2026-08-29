@@ -15,6 +15,7 @@ from arctic_route_planning.planners.non_fifo_feasibility import (
     NonFifoFrontierCertificateError,
     NonFifoFrontierComparisonStatus,
     NonFifoParetoFrontierCertificate,
+    NonFifoParetoLabel,
     NonFifoParetoSessionIdentityMismatch,
     NonFifoParetoSessionRestoreError,
     NonFifoParetoSessionState,
@@ -638,6 +639,99 @@ def test_pareto_neighbor_order_is_canonical_for_deterministic_evidence() -> None
     assert first.semantic_digest == second.semantic_digest
     assert first.frontier_digest == second.frontier_digest
     assert first.generated == second.generated
+
+
+def test_pareto_priority_ordering_preserves_complete_frontier() -> None:
+    graph = {
+        "start": ("left", "right"),
+        "left": ("goal",),
+        "right": ("goal",),
+        "goal": (),
+    }
+
+    def evaluate(start: str, _end: str, arrival: datetime) -> NonFifoParetoTransition:
+        if start == "start":
+            return NonFifoParetoTransition(arrival + timedelta(hours=1), (0.0, 0.0))
+        costs = (1.0, 4.0) if start == "left" else (4.0, 1.0)
+        return NonFifoParetoTransition(arrival + timedelta(hours=1), costs)
+
+    def priority(label: NonFifoParetoLabel) -> float:
+        # Ordering evidence only: the graph's lower bound is zero at the
+        # source and one hour at every intermediate node.
+        return label.costs[0] + (1.0 if label.node != "goal" else 0.0)
+
+    baseline = search_non_fifo_pareto(
+        start="start",
+        goal="goal",
+        departure_time=T0,
+        neighbors=graph.__getitem__,
+        evaluate_edge=evaluate,
+        objective_count=2,
+        pareto_pruning=True,
+    )
+    ordered = search_non_fifo_pareto(
+        start="start",
+        goal="goal",
+        departure_time=T0,
+        neighbors=graph.__getitem__,
+        evaluate_edge=evaluate,
+        objective_count=2,
+        pareto_pruning=True,
+        priority=priority,
+        priority_policy_digest="fixture-certified-priority-v1",
+    )
+
+    assert baseline.status is NonFifoSearchStatus.GOAL_FOUND
+    assert ordered.status is NonFifoSearchStatus.GOAL_FOUND
+    assert ordered.goal_frontier == baseline.goal_frontier
+    assert ordered.frontier_digest != baseline.frontier_digest
+    assert ordered.priority_policy_digest == "fixture-certified-priority-v1"
+    assert ordered.expanded == baseline.expanded
+    assert ordered.generated == baseline.generated
+
+
+def test_pareto_priority_checkpoint_binds_callback_and_policy() -> None:
+    graph = {"start": ("goal",), "goal": ()}
+
+    def evaluate(_start: str, _end: str, arrival: datetime) -> NonFifoParetoTransition:
+        return NonFifoParetoTransition(arrival + timedelta(hours=1), (1.0, 1.0))
+
+    def priority(label: NonFifoParetoLabel) -> float:
+        return label.costs[0]
+
+    session = create_non_fifo_pareto_session(
+        start="start",
+        goal="goal",
+        departure_time=T0,
+        neighbors=graph.__getitem__,
+        evaluate_edge=evaluate,
+        objective_count=2,
+        priority=priority,
+        priority_policy_digest="fixture-priority-v1",
+        fixture_digest="priority-checkpoint-fixture",
+    )
+    assert session.advance(expansion_slice=1) is None
+    checkpoint = session.checkpoint()
+    restored = restore_non_fifo_pareto_session(
+        checkpoint,
+        neighbors=graph.__getitem__,
+        evaluate_edge=evaluate,
+        priority=priority,
+    )
+    result = restored.run()
+    assert result.status is NonFifoSearchStatus.GOAL_FOUND
+    assert result.priority_policy_digest == "fixture-priority-v1"
+
+    def changed_priority(label: NonFifoParetoLabel) -> float:
+        return label.costs[0] + 1.0
+
+    with pytest.raises(NonFifoParetoSessionIdentityMismatch, match="priority callback"):
+        restore_non_fifo_pareto_session(
+            checkpoint,
+            neighbors=graph.__getitem__,
+            evaluate_edge=evaluate,
+            priority=changed_priority,
+        )
 
 
 def test_pareto_failed_result_has_no_frontier_or_partial_route() -> None:
