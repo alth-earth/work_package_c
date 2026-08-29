@@ -3082,3 +3082,30 @@ M19/M18 聚焦 Ruff、CLI help、`uv lock --check`、offline sync、active/archi
 “非 FIFO label-correcting/Pareto 实现”计划；不得自动启用 candidate、提高资源上限、进入
 full-voyage/Winter、写 formal latest/replanning baseline/frozen artifact，或把本轮
 `SEMANTIC_REFERENCE_READY` 解读为性能晋级。
+
+### 【2026-08-29 | PLANNED】P0.2-M20：complete non-FIFO Pareto frontier proof
+
+M19 已经用独立 exact-arrival Dijkstra 对真实 24h 的**选中路线**完成逐字段语义对照，但
+仍未把“完整 goal Pareto frontier 是否一致”做成可复核的研究证书。本轮只补齐这一正确性
+证据缺口，不改变非 FIFO 搜索规则，不把任何结果包装成 production planner 或性能门。
+
+**研究边界。** 从 M19 clean tip 建立隔离分支和 worktree；新增的 frontier certificate/
+verifier 只能位于 C 内部 `non_fifo_feasibility` sidecar。证书绑定 session identity、scope、
+policy、evaluator/config、fixture、冻结四项资源上限和 frontier digest；只有完整耗尽且
+`GOAL_FOUND`、无 evaluator error/cancel/resource limit 的结果才可标记 complete。不同精确
+到达时刻永远不互相支配；只允许在同一 `(node, exact_UTC_arrival)` 状态丢弃新生成的向量支配
+label，已扩展 label 不删除。
+
+**验收矩阵。** 增加独立的完整 frontier 比较器和 test-only runner，逐个比较 candidate/reference
+的所有 goal labels（节点、精确 ETA、路径、向量成本、转移业务 evidence/source IDs），而不
+只比较 selected route。覆盖同桶不同 ETA、同一 exact state 的可安全支配/不可支配标签、非 FIFO
+后缀反例、邻接顺序变化、checkpoint identity/policy/limit/evaluator drift、取消、evaluator
+failure、资源上限、hard-mask 和重复运行 deterministic。任何不完整结果、scope/identity
+漂移或 frontier mismatch 均 fail-closed；不得使用容差、beam、候选路线注入或 Dijkstra 结果
+替换 candidate。
+
+**收口。** synthetic finite fixtures 全部通过时，只标记
+`READY_FOR_P0.2-IMPLEMENTATION-REVIEW`；任一 frontier 缺失、误剪枝、语义不一致或资源证据
+不完整则标记 `NO_FRONTIER_PROOF/FAIL`。本轮不执行真实 24h 重跑、不提高
+`50k/100k/50k/400k` 上限、不调用 `certified_only(...)`，不启用 candidate/Winter；M19
+真实 reference、M18 queue resource fail、FIFO violation、P3/ARA* 历史结论全部保留。
