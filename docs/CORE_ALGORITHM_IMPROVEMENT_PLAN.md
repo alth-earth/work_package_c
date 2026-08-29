@@ -2717,8 +2717,10 @@ candidate 或 Winter。完成后仅本地集成并移除辅助 worktree，保留
 本轮从 clean `3056fb3` 建立隔离分支
 `research/p02-m15-real-pareto-20260829` 与 worktree
 `/root/my_project/.runtime/worktrees/c-p02-m15-real-pareto`。提交序列为计划
-`5232bce`、实际 bridge 边拒绝围栏 `d6fb5ca`、真实 runner `dfab593` 和测试
-`a220aed`；最终 evidence 均绑定 `a220aed`，worktree 在启动时 clean。没有修改
+`5232bce`、实际 bridge 边拒绝围栏 `d6fb5ca`、真实 runner `dfab593`、测试
+`a220aed`，以及将显式 ETA method 纳入 identity 的 `cca094e`；权威 r2 evidence 均绑定
+clean implementation commit `cca094e1f21933056ca442434e9e36ca33bbcc46`。早期 r1 构件因
+manifest identity 未包含 `eta_method` 保留为诊断，不纳入结论。没有修改
 B/C、C/D 合同、ingress/service、公共 planner、formal latest、replanning baseline 或
 frozen artifact，也没有 push。
 
@@ -2736,10 +2738,10 @@ diagnostics，未知 evaluator 异常仍进入 `EVALUATOR_FAILURE`；该开关�
 callback/component/checkpoint digest，默认值保持关闭，因此既有 synthetic bridge 语义不变。
 
 **权威真实 6h 构件。** holdout 输出为
-`.runtime/experiments/c-p02-m15-real-pareto-holdout-6h-20260829-r1/`，experiment id
-`c.p0.2-temporal-pareto-real.v1-d56c690b43c0e19b`；development 输出为
-`.runtime/experiments/c-p02-m15-real-pareto-development-6h-20260829-r1/`，experiment id
-`c.p0.2-temporal-pareto-real.v1-064c058a948c694b`。两组均为
+`.runtime/experiments/c-p02-m15-real-pareto-holdout-6h-20260829-r2/`，experiment id
+`c.p0.2-temporal-pareto-real.v1-d4b0818f302c36d1`；development 输出为
+`.runtime/experiments/c-p02-m15-real-pareto-development-6h-20260829-r2/`，experiment id
+`c.p0.2-temporal-pareto-real.v1-984dd011b4045963`。两组均为
 `executable_0_6h`、`fastest/low_risk/recommended`、`one_shot/slice_restore/cancelled`、
 两次重复，共 `18/18` case，manifest/cases/resource-frontier/summary/heartbeat 和
 `ALL_DONE` 齐全；resume 以完全一致 identity 重读成功。
