@@ -363,14 +363,19 @@ def _git_identity(root: Path) -> dict[str, Any]:
     }
 
 
-def _identity(args: argparse.Namespace, fixture: Any, root: Path) -> dict[str, Any]:
+def _identity(
+    args: argparse.Namespace,
+    fixture: Any,
+    root: Path,
+    objectives: tuple[ObjectiveMode, ...],
+) -> dict[str, Any]:
     point = _m26()._m25()._load_point_runner()
     files = {relative: _sha256(root / relative) for relative in IMPLEMENTATION_FILES}
     scopes: dict[str, str] = {}
     state_certificates: dict[str, str] = {}
     heuristic_certificates: dict[str, str] = {}
     terminal_certificates: dict[str, str] = {}
-    for objective in OBJECTIVES:
+    for objective in objectives:
         (
             _point,
             _fixture,
@@ -424,7 +429,7 @@ def _identity(args: argparse.Namespace, fixture: Any, root: Path) -> dict[str, A
         "state_bound_certificate_digests": state_certificates,
         "heuristic_certificate_digests": heuristic_certificates,
         "terminal_bound_certificate_digests": terminal_certificates,
-        "objectives": [objective.value for objective in OBJECTIVES],
+        "objectives": [objective.value for objective in objectives],
         "repetitions": args.repetitions,
         "worker_timeout_seconds": args.worker_timeout_seconds,
         "cpu": args.cpu,
@@ -471,6 +476,19 @@ def _case_key(record: Mapping[str, Any]) -> tuple[str, int] | None:
     if not isinstance(repetition, int) or repetition < 1:
         return None
     return objective, repetition
+
+
+def _selected_objectives(raw: str) -> tuple[ObjectiveMode, ...]:
+    values = tuple(item.strip() for item in raw.split(",") if item.strip())
+    if not values:
+        raise SystemExit("--objectives must name at least one objective")
+    try:
+        selected = tuple(ObjectiveMode(value) for value in values)
+    except ValueError as error:
+        raise SystemExit(f"invalid --objectives value: {raw}") from error
+    if len(set(selected)) != len(selected):
+        raise SystemExit("--objectives must not contain duplicates")
+    return selected
 
 
 def _child_command(
@@ -582,7 +600,7 @@ def _run_child(
 def _summary(
     cases: list[dict[str, Any]], identity: Mapping[str, Any], malformed: int
 ) -> dict[str, Any]:
-    expected = len(OBJECTIVES) * int(identity["repetitions"])
+    expected = len(identity["objectives"]) * int(identity["repetitions"])
     keys = [_case_key(case) for case in cases]
     complete = (
         len(cases) == expected
@@ -643,10 +661,11 @@ def _run_parent(args: argparse.Namespace) -> int:
         raise SystemExit("--output-dir is required")
     if args.repetitions < 1 or args.worker_timeout_seconds <= 0:
         raise SystemExit("repetitions and worker timeout must be positive")
+    objectives = _selected_objectives(args.objectives)
     root = Path(__file__).resolve().parents[1]
     point = _m26()._m25()._load_point_runner()
     fixture = point._load_fixture(_fixture_args(args))
-    identity = _identity(args, fixture, root)
+    identity = _identity(args, fixture, root, objectives)
     if identity["git"]["dirty"]:
         raise RuntimeError("M27 real evidence requires a clean implementation worktree")
     identity["experiment_id"] = f"{SCHEMA_VERSION}-{_digest(identity)[:16]}"
@@ -692,7 +711,7 @@ def _run_parent(args: argparse.Namespace) -> int:
                     malformed += 1
         completed = {_case_key(case) for case in cases}
         completed.discard(None)
-        expected = len(OBJECTIVES) * args.repetitions
+        expected = len(objectives) * args.repetitions
         heartbeat = output / "heartbeat.json"
         _atomic_json(
             heartbeat,
@@ -706,7 +725,7 @@ def _run_parent(args: argparse.Namespace) -> int:
         )
         try:
             for repetition in range(1, args.repetitions + 1):
-                order = OBJECTIVES if repetition % 2 else tuple(reversed(OBJECTIVES))
+                order = objectives if repetition % 2 else tuple(reversed(objectives))
                 for objective in order:
                     key = (objective.value, repetition)
                     if key in completed:
@@ -761,6 +780,7 @@ def main() -> int:
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--objective", choices=[item.value for item in OBJECTIVES])
+    parser.add_argument("--objectives", default=",".join(item.value for item in OBJECTIVES))
     parser.add_argument("--repetition", type=int, default=1)
     parser.add_argument("--repetitions", type=int, default=1)
     parser.add_argument("--worker-timeout-seconds", type=float, default=900.0)
