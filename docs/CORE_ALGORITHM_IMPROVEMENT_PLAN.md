@@ -3287,3 +3287,69 @@ smoke、active/archive import boundary 和 `git diff --check` 将在本地收口
 `UV_OFFLINE=1 make check` 若仍因隔离 worktree 缺少 `.mamba-env/bin/uv` 阻塞，使用正式 C 的
 `.mamba-env/bin/uv` 执行等价离线检查并如实记录。完成验证后删除 M21 辅助 worktree，保留分支
 和 `.runtime/experiments/` 构件，不 push、不合并正式 `research-validation-system`。
+
+### 【2026-08-29 | COMPLETED】P0.2-M22：real 24h state-bound Pareto frontier equivalence
+
+本轮在隔离分支 `research/p02-m22-real-frontier-state-bound-20260829` 完成，实验启动时
+worktree clean；实现与修正提交为 `32a2137`、`fad1264`、`d25e643`、`ece5b0e`、
+`954259d`。新增 `scripts/benchmark_non_fifo_temporal_pareto_frontier_state_bound_real.py`
+仍为 C 内部研究 sidecar，使用同一完整 `TemporalScope` 和
+`graph-topological-arrival-envelope-v1` `TemporalStateBoundCertificate`，对照
+`pareto_pruning=False` certified reference 与 `pareto_pruning=True` candidate 的完整 goal
+frontier；独立 zero-heuristic Dijkstra 只作 selected-route 业务语义证据。正式
+`TemporalDominancePolicy.disabled()`、candidate/Winter、B/C 与 C/D 合同、ingress/service、
+formal latest/replanning baseline/frozen artifact 均未改变。
+
+**身份、输入和执行。** holdout 与 development 均只运行冻结 `rolling_0_24h`，三目标
+`fastest/low_risk/recommended`，各执行 `one_shot` 与 `slice_restore`，每输入 `6/6` 独立
+worker，重复数为 1，CPU 固定为 0，worker timeout 1800 秒，cgroup 为
+`MemoryMax=4G`、`MemorySwapMax=0`。两份权威目录为：
+
+- holdout：`.runtime/experiments/c-p02-m22-real-frontier-state-bound-holdout-20260829-r2/`，
+  experiment id `c.p0.2-temporal-pareto-state-bound-frontier-real.v1-630374134b7c225d`，
+  start `[5,7]`、goal `[14,5]`、departure `2026-02-22T00:00:00Z`、145 帧；
+- development：`.runtime/experiments/c-p02-m22-real-frontier-state-bound-development-20260829-r1/`，
+  experiment id `c.p0.2-temporal-pareto-state-bound-frontier-real.v1-d034cfd7b289cdb3`，
+  start `[5,7]`、goal `[14,6]`、departure `2026-03-22T00:00:00Z`、145 帧。
+
+两输入均绑定 implementation commit `954259d5a01ecb37c9eb13258189a1afdd4a6c7e`、实现
+tree digest `dfdd93a45c71ed75df0e0c320745576eb4eff47e2943805b01483f293bed0143`、`uv.lock`
+digest `8893cb8387825ca4890ed808f4a98b02ba938337752971dacc3e77f859164f22`、configs digest
+`537e1a1d1ef3f8015402e9b57556518b92a2524993074b4ecc1ccf58143cded4`、各自 RiskFrame
+commit/content/frame digest、route-plan-set digest、scope digest 和三目标 state-bound
+certificate digest。manifest 中 `dirty=false`、`production_candidate_enabled=false`、
+`winter_enabled=false`；已知真实 FIFO 状态继续记录为 `REAL_INPUT_FIFO_VIOLATED`。
+
+**正确性结果。** holdout 与 development summary 均为
+`READY_FOR_P0.2-REAL-24H-FRONTIER-IMPLEMENTATION-REVIEW`，各 `6/6` case 为 `PASS`，
+`complete=true`、`all_case_gates=true`、`certificate_usable=true`、`fail_closed=true`、
+`deterministic=true`、`frontier_equivalence=true`、`semantic_match=true`、
+`all_resource_clean=true`、`resource_evidence_complete=true`。12 个 frontier pair 全部为
+严格 `MATCH`：baseline/candidate 均 `GOAL_FOUND`，完整 frontier 数量、节点、exact UTC
+arrival、路径、7 维成本、速度、风险、confidence、source IDs、CostBreakdown、scope 和
+comparison identity 均一致；selected-route 与独立 Dijkstra 对照全部通过。计划允许的
+仅去除派生 `semantic_digest` 的 `SEMANTIC_MATCH` 诊断层未被实际使用，未采用数值容差或
+忽略业务字段。
+
+**资源与剪枝。** holdout 每个 candidate case 的 `state_bound_pruned=71,446`、baseline
+`71,521`，candidate Pareto pruning 为 5；6 个 case 合计 candidate state-bound pruning
+`428,676`。baseline/candidate expanded 分别为 `10,487/10,477`，queue peak 约
+`3,358–3,400/3,358–3,398`，edge evaluations `83,336/83,256`，最大 RSS 约
+`120,192/153,596 KiB`。development 每个 candidate case 的 state-bound pruning 为
+`38,366–38,382`，baseline 为 `38,552`，6 个 case 合计 candidate 为 `230,260`；
+expanded 分别为 `5,681/5,657–5,659`，queue peak `1,911–1,997`，edge evaluations
+`45,368/45,176–45,192`，最大 RSS 约 `120,392/130,188 KiB`。两输入 cgroup memory
+events 的 high/low/max/oom/kill 均为 0，`memory_swap_max/current=0`，每条记录 CPU
+affinity 为 `[0]`，process swap 为 0，主机 `free -h` 与 `/proc/swaps` 均为 `Swap: 0B`；
+未提高 `50k/100k/50k/400k` 搜索上限，未发生 queue/label/expansion/edge limit、
+timeout、OOM 或 swap。
+
+**运行记录与结论。** 早期 holdout `r1` 的 6 个超时是父进程 PIPE 读取造成的 worker 大型
+frontier JSON 管道死锁，保留为诊断构件，不纳入结论；`954259d` 改为临时文件收集 stdout/
+stderr 后，holdout `r2` 和 development `r1` 均完整收口。M22 因此仅证明冻结真实 24h
+有限状态域中，带同一 proof-carrying state bound 的 Pareto sidecar 与未剪枝 reference
+具有可审计的完整 frontier 等价，并观察到真实安全 pruning；状态为
+`READY_FOR_P0.2-REAL-24H-FRONTIER-IMPLEMENTATION-REVIEW`。这不是 continuous FIFO、
+interval proof、性能回归门、生产资格或 candidate/Winter 授权；真实 FIFO violation、
+M18 queue resource fail、M19 reference、M20/M21、P2.1/P3/ARA* 历史结论保持不变。后续
+只能另立实现审查、corridor/envelope 或非 FIFO 计划，不自动启用 candidate 或重开 Winter。
