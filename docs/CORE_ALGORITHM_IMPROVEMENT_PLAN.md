@@ -3997,3 +3997,66 @@ hard-mask/coverage/evaluator 未知、scope/policy/checkpoint 漂移均保持原
 `dominance=disabled`、`50k/100k/50k/400k` 上限、candidate/Winter 关闭，reference
 Dijkstra 只作正确性证据。该诊断不构成性能资格；若 edge envelope 没有净收益或
 资源证据不完整，停止继续调参，转向更强 corridor/state envelope 证明。
+
+### 【2026-08-30 | COMPLETED（edge pre-gating；6h semantic pass，24h resource boundary）】P0.2-M31：proof-carrying edge corridor envelope
+
+**实现与隔离。** M31 从 M30 clean research commit `48980d2` 建立隔离分支
+`research/p02-m31-corridor-envelope-20260830`，先提交本段计划
+`783588e`，再提交 edge-envelope 核心实现与 synthetic proof runner
+`5adde69`，以及冻结真实输入诊断 runner `5c0c929`。新增的 transition-level
+lower-time envelope 只在完整 finite universe、完整 directed edge map、完整
+destination arrival upper envelope、scope/evaluator/proof digest 全部匹配时授权；
+在调用 edge evaluator 前只拒绝“已证明不可能在 horizon 内到达”的新转移。已扩展
+`TemporalStateBoundCertificate`/`TemporalCorridorEvidence` 的 edge digest 和
+diagnostics，并将 edge checks/pruned 纳入结果。缺边、时间戳异常、coverage 或
+scope 不匹配时保留 exact search；不删除已扩展 label、predecessor、不同 exact
+arrival 或 goal evidence。`TemporalDominancePolicy` 仍为 disabled，正式 planner、
+合同、ingress/service、candidate 和 Winter 均未改变。
+
+**Synthetic proof matrix.** 新 schema `c.p0.2-temporal-edge-envelope.v1` 覆盖
+small/medium/stress 三 profile、三 objective 和 certified、coverage-incomplete、
+scope-mismatch 三类证书，共 `27/27` cases。9 个 certified cases 均与独立有限图
+穷举 oracle 的路线、到达时间和 cost 一致，并各观察到 1 次真实 edge pruning；18
+个拒绝证书全部 `certificate_usable=false` 且 pruning 为零。结果为
+`TEMPORAL_EDGE_ENVELOPE_MATRIX_PASS`，dominance 始终 disabled。
+
+**真实 6h 诊断。** 使用完整 145 帧 holdout/development、冻结 route-plan-set、
+config、lock 和单 CPU 0；两个输入均为 `executable_0_6h` 三 objective。holdout
+三目标均 `PASS`、与无 envelope baseline 及独立 zero-heuristic exact-arrival
+reference 的路线/ETA/速度/风险/cost/confidence/source IDs semantic digest 一致，
+candidate deterministic；baseline/candidate edge evaluations 为 `32→19`（每目标），
+共观察 `39` 次 edge pre-pruning。development 三目标同样 semantic/deterministic
+一致；edge evaluations 分别为 `16→11`、`48→19`、`16→11`，共观察 `23` 次
+pre-pruning。两份 summary 均为 `REAL_EDGE_ENVELOPE_SEMANTIC_PASS`，但
+`resource_evidence_complete=false`：进程/主机 swap 为零、无 OOM/timeout，CPU
+affinity 为 `[0]`，而运行环境 cgroup 仍是 `/init.scope` 的 `memory.max=max`、
+`memory.swap.max=max`，故不宣称资源门通过。
+
+**真实 24h 诊断。** 在 6h 语义条件满足后选择性运行 holdout/development
+`rolling_0_24h` 三 objective。edge pre-pruning 继续发生（holdout
+`18,499/51,020/38,687`，development `12,577/26,474/22,879`），但完整
+baseline/reference frontier 无法在冻结 `queue=50,000` 内完成：holdout 的
+`fastest` reference 触顶，`low_risk/recommended` baseline 触顶；development
+同样是 `fastest` reference、`low_risk/recommended` baseline 触顶。四份构件因此
+归类为 `EXACT_LABEL_RESOURCE_FAIL`/`NO_PERFORMANCE_PROOF` 诊断，而不是语义或
+algorithm PASS；未提高 `50k/100k/50k/400k` 上限、未择优重跑。24h 仍观察到
+swap=0、无 OOM/timeout，但 cgroup boundary 仍不完整。`fifo-scan.jsonl` 与
+`eta-interval.jsonl` 按设计标记 `NOT_RUN_BY_DESIGN`，真实 FIFO/dominance 未被
+本轮授权。
+
+**验证与边界。** M31 分支完整 C 测试为 `620 passed, 3 skipped`；skip 仅是隔离
+worktree 缺少已退休 orchestrator archive fixture。聚焦 edge/corridor/topology/
+label/qualification/runner 为 `98 passed`；Ruff（变更文件和 `src/tests`）、
+`uv lock --check`、offline sync、CLI smoke、compileall、active/archive
+`temporal_session` import boundary 与 `git diff --check` 通过。原样
+`UV_OFFLINE=1 make check` 仅因 worktree 没有 `.mamba-env/bin/uv` 被阻塞，未修改
+环境或 lock。真实实验构件保留在 `.runtime/experiments/`，未写 formal latest、
+replanning baseline 或 frozen artifact。
+
+**结论。** M31 证明 edge pre-gating 规则在 finite synthetic 和真实 6h 上保持
+语义、确定性与 fail-closed，并能减少昂贵 edge evaluation；24h 的冻结 queue
+上限仍是资源边界，不能形成性能资格。状态为
+`REAL_6H_EDGE_ENVELOPE_SEMANTIC_PASS / REAL_24H_EXACT_LABEL_RESOURCE_FAIL`，
+不是 candidate 晋级。继续保持 candidate、Winter、P2.1、P3、ARA* 和 temporal
+dominance 默认关闭；下一步另立带更强独立 corridor/state-envelope 证明的资源
+研究，或转入 P0.2 非 FIFO feasibility 计划，不调高资源上限。
