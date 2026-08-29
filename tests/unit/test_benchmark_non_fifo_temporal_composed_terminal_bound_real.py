@@ -66,7 +66,10 @@ def test_summary_never_authorizes_candidate_or_winter() -> None:
         "state_bound_pruned": 1,
         "terminal_bound_pruned": 0,
     }
-    cases = [dict(case, objective=objective) for objective in ("fastest", "low_risk", "recommended")]
+    cases = [
+        dict(case, objective=objective)
+        for objective in ("fastest", "low_risk", "recommended")
+    ]
     summary = _RUNNER._summary(cases, identity, 0)
     assert summary["status"] == "NO_ADDITIONAL_TERMINAL_PRUNING"
     assert summary["candidate_authorized"] is False

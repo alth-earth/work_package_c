@@ -29,10 +29,8 @@ from pathlib import Path
 from typing import Any
 
 from arctic_route_planning.domain.models import ObjectiveMode
-from arctic_route_planning.planners.eta_refinement import EtaRefinementPolicy
 from arctic_route_planning.planners.non_fifo_feasibility import NonFifoSearchStatus
 from arctic_route_planning.planners.non_fifo_temporal_pareto import (
-    TEMPORAL_PARETO_COMPONENTS,
     run_non_fifo_temporal_pareto_search,
 )
 
@@ -181,7 +179,11 @@ def _context(
 def _diagnostic_int(diagnostics: Any, name: str) -> int:
     if diagnostics is None:
         return 0
-    value = diagnostics.get(name, 0) if isinstance(diagnostics, Mapping) else getattr(diagnostics, name, 0)
+    value = (
+        diagnostics.get(name, 0)
+        if isinstance(diagnostics, Mapping)
+        else getattr(diagnostics, name, 0)
+    )
     try:
         return int(value or 0)
     except (TypeError, ValueError):
@@ -633,7 +635,8 @@ def _summary(
         "malformed_records": malformed,
         "complete": complete,
         "identity_clean": identity_clean,
-        "semantic_all_match": bool(cases) and all(case.get("semantic_match") is True for case in cases),
+        "semantic_all_match": bool(cases)
+        and all(case.get("semantic_match") is True for case in cases),
         "state_bound_pruned_total": sum(
             int(case.get("state_bound_pruned", 0) or 0) for case in cases
         ),
