@@ -42,6 +42,8 @@ SCENARIOS = (
     "cancelled",
     "callback_drift",
     "policy_drift",
+    "limit_drift",
+    "config_drift",
     "checkpoint_tamper",
 )
 LIMITS = {
@@ -182,7 +184,13 @@ def _fixture(name: str) -> _Fixture:
             expected_status=NonFifoSearchStatus.CANCELLED.value,
         )
 
-    if name in {"callback_drift", "policy_drift", "checkpoint_tamper"}:
+    if name in {
+        "callback_drift",
+        "policy_drift",
+        "limit_drift",
+        "config_drift",
+        "checkpoint_tamper",
+    }:
         graph = {"start": ("middle",), "middle": ("goal",), "goal": ()}
 
         def evaluate(_start: str, _end: str, arrival: datetime) -> NonFifoParetoTransition:
@@ -330,6 +338,11 @@ def _resource_snapshot() -> dict[str, Any]:
     }
 
 
+def _config_digest() -> str:
+    root = Path(__file__).resolve().parents[1]
+    return hashlib.sha256((root / "pyproject.toml").read_bytes()).hexdigest()
+
+
 def _base_kwargs(fixture: _Fixture, neighbours: Callable[[str], Iterable[str]]) -> dict[str, Any]:
     return {
         "start": "start",
@@ -340,6 +353,7 @@ def _base_kwargs(fixture: _Fixture, neighbours: Callable[[str], Iterable[str]]) 
         "objective_count": 3,
         "pareto_pruning": True,
         "fixture_digest": f"m12:{fixture.name}",
+        "config_digest": _config_digest(),
         "maximum_elapsed": fixture.maximum_elapsed,
         **fixture.limits,
     }
@@ -354,6 +368,9 @@ def _run_session_mode(fixture: _Fixture, mode: str) -> dict[str, Any]:
     kwargs = _base_kwargs(fixture, neighbours)
     started = perf_counter()
     checkpoint_digest = None
+    identity_digest = None
+    policy_digest = None
+    config_digest = None
     pause_count = 0
     restore_match = None
     mismatch_rejected = False
@@ -361,8 +378,17 @@ def _run_session_mode(fixture: _Fixture, mode: str) -> dict[str, Any]:
     if fixture.name == "cancelled":
         kwargs["cancel_check"] = lambda: True
     try:
-        if fixture.name in {"callback_drift", "policy_drift", "checkpoint_tamper"}:
+        if fixture.name in {
+            "callback_drift",
+            "policy_drift",
+            "limit_drift",
+            "config_drift",
+            "checkpoint_tamper",
+        }:
             session = create_non_fifo_pareto_session(**kwargs)
+            identity_digest = session.session_id
+            policy_digest = session.policy_digest
+            config_digest = session.identity.config_digest
             checkpoint = session.checkpoint()
             checkpoint_digest = checkpoint.digest
             if fixture.name == "callback_drift":
@@ -384,13 +410,42 @@ def _run_session_mode(fixture: _Fixture, mode: str) -> dict[str, Any]:
                     evaluate_edge=fixture.evaluate,
                     identity=drifted,
                 )
+            elif fixture.name == "limit_drift":
+                drifted = replace(
+                    checkpoint.identity,
+                    max_queue=checkpoint.identity.max_queue + 1,
+                )
+                restore_non_fifo_pareto_session(
+                    checkpoint,
+                    neighbors=neighbours,
+                    evaluate_edge=fixture.evaluate,
+                    identity=drifted,
+                )
+            elif fixture.name == "config_drift":
+                drifted = replace(
+                    checkpoint.identity,
+                    config_digest="m12-session-config-drift",
+                )
+                restore_non_fifo_pareto_session(
+                    checkpoint,
+                    neighbors=neighbours,
+                    evaluate_edge=fixture.evaluate,
+                    identity=drifted,
+                )
             else:
                 replace(checkpoint, expanded=checkpoint.expanded + 1)
             raise AssertionError("identity mismatch was not rejected")
         if mode == "one_shot":
+            identity_probe = create_non_fifo_pareto_session(**kwargs)
+            identity_digest = identity_probe.session_id
+            policy_digest = identity_probe.policy_digest
+            config_digest = identity_probe.identity.config_digest
             result = search_non_fifo_pareto(**kwargs)
         else:
             session = create_non_fifo_pareto_session(**kwargs)
+            identity_digest = session.session_id
+            policy_digest = session.policy_digest
+            config_digest = session.identity.config_digest
             result = None
             while result is None:
                 result = session.advance(expansion_slice=1)
@@ -474,6 +529,9 @@ def _run_session_mode(fixture: _Fixture, mode: str) -> dict[str, Any]:
     record.update(
         {
             "checkpoint_digest": checkpoint_digest,
+            "identity_digest": identity_digest,
+            "policy_digest": policy_digest,
+            "config_digest": config_digest,
             "pause_count": pause_count,
             "restore_match": restore_match,
             "mismatch_rejected": mismatch_rejected,
@@ -626,6 +684,8 @@ def _summary(cases: list[dict[str, Any]], args: argparse.Namespace) -> dict[str,
                     "semantic_digest": value.get("semantic_digest"),
                     "frontier_digest": value.get("frontier_digest"),
                     "checkpoint_digest": value.get("checkpoint_digest"),
+                    "identity_digest": value.get("identity_digest"),
+                    "policy_digest": value.get("policy_digest"),
                     "restore_match": value.get("restore_match"),
                     "mismatch_rejected": value.get("mismatch_rejected"),
                     "pareto_pruned": value.get("pareto_pruned"),
@@ -648,7 +708,13 @@ def _summary(cases: list[dict[str, Any]], args: argparse.Namespace) -> dict[str,
             else:
                 resource_clean &= int(resource.get("process_swap_kib") or 0) == 0
             fixture = _fixture(scenario)
-            if scenario not in {"callback_drift", "policy_drift", "checkpoint_tamper"}:
+            if scenario not in {
+                "callback_drift",
+                "policy_drift",
+                "limit_drift",
+                "config_drift",
+                "checkpoint_tamper",
+            }:
                 expected_statuses &= value.get("status") == fixture.expected_status
             else:
                 mismatch_safe &= value.get("status") == "MISMATCH_REJECTED"

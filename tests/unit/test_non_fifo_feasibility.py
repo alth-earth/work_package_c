@@ -773,6 +773,24 @@ def test_pareto_session_restore_rejects_identity_and_callback_drift() -> None:
             evaluate_edge=changed_evaluate,
         )
 
+    changed_limit = replace(checkpoint.identity, max_queue=checkpoint.identity.max_queue + 1)
+    with pytest.raises(NonFifoParetoSessionIdentityMismatch, match="identity mismatch"):
+        restore_non_fifo_pareto_session(
+            checkpoint,
+            neighbors=neighbours,
+            evaluate_edge=evaluate,
+            identity=changed_limit,
+        )
+
+    changed_config = replace(checkpoint.identity, config_digest="m12-config-drift")
+    with pytest.raises(NonFifoParetoSessionIdentityMismatch, match="identity mismatch"):
+        restore_non_fifo_pareto_session(
+            checkpoint,
+            neighbors=neighbours,
+            evaluate_edge=evaluate,
+            identity=changed_config,
+        )
+
 
 def test_pareto_session_checkpoint_and_terminal_restore_are_fail_closed() -> None:
     def evaluate(_start: str, _end: str, arrival: datetime) -> NonFifoParetoTransition:

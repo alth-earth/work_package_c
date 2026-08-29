@@ -29,6 +29,8 @@ def test_runner_schema_modes_scenarios_and_frozen_limits() -> None:
         "cancelled",
         "callback_drift",
         "policy_drift",
+        "limit_drift",
+        "config_drift",
         "checkpoint_tamper",
     } <= set(_RUNNER.SCENARIOS)
     assert _RUNNER.LIMITS == {
@@ -47,6 +49,7 @@ def test_runner_identity_binds_code_lock_config_and_fixture() -> None:
     assert identity["lock_sha256"]
     assert identity["config_sha256"]
     assert identity["fixture_digest"]
+    assert identity["config_sha256"]
     assert identity["worker_timeout_seconds"] == 30.0
 
 
@@ -56,6 +59,16 @@ def test_runner_records_mismatch_as_rejected_not_success() -> None:
     assert record["mismatch_rejected"] is True
     assert record["label"] is None
     assert record["semantic_digest"] is None
+
+
+def test_runner_rejects_limit_and_config_drift() -> None:
+    for scenario in ("limit_drift", "config_drift"):
+        record = _RUNNER._worker_record(scenario, "fastest", "slice_restore", 1, 0)
+        assert record["status"] == "MISMATCH_REJECTED"
+        assert record["mismatch_rejected"] is True
+        assert record["identity_digest"]
+        assert record["policy_digest"]
+        assert record["config_digest"]
 
 
 def test_runner_summary_requires_resume_equivalence_and_pruning() -> None:

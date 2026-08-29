@@ -362,6 +362,7 @@ class NonFifoParetoSessionIdentity:
     neighbor_digest: str
     evaluator_digest: str
     fixture_digest: str
+    config_digest: str = "unspecified-config"
     schema_version: str = "c.p0.2-nonfifo-pareto-session.v1"
 
     @classmethod
@@ -383,6 +384,7 @@ class NonFifoParetoSessionIdentity:
             [Any, Any, datetime], NonFifoTransition | NonFifoParetoTransition
         ],
         fixture_digest: str,
+        config_digest: str = "unspecified-config",
     ) -> NonFifoParetoSessionIdentity:
         return cls(
             start=start,
@@ -400,6 +402,7 @@ class NonFifoParetoSessionIdentity:
             neighbor_digest=_callback_digest(neighbors),
             evaluator_digest=_callback_digest(evaluate_edge),
             fixture_digest=fixture_digest,
+            config_digest=config_digest,
         )
 
     @property
@@ -420,6 +423,7 @@ class NonFifoParetoSessionIdentity:
                 "neighbor_digest": self.neighbor_digest,
                 "evaluator_digest": self.evaluator_digest,
                 "fixture_digest": self.fixture_digest,
+                "config_digest": self.config_digest,
             }
         )
 
@@ -467,7 +471,12 @@ class NonFifoParetoSessionIdentity:
             raise NonFifoParetoSessionIdentityMismatch("maximum_elapsed must be positive")
         if any(
             not isinstance(value, str) or not value
-            for value in (self.neighbor_digest, self.evaluator_digest, self.fixture_digest)
+            for value in (
+                self.neighbor_digest,
+                self.evaluator_digest,
+                self.fixture_digest,
+                self.config_digest,
+            )
         ):
             raise NonFifoParetoSessionIdentityMismatch("session identity digests are incomplete")
 
@@ -976,6 +985,7 @@ class NonFifoParetoSession:
         max_edge_evaluations: int = 400_000,
         maximum_elapsed: timedelta | None = None,
         fixture_digest: str = "unspecified-fixture",
+        config_digest: str = "unspecified-config",
         cancel_check: Callable[[], bool] | None = None,
         identity: NonFifoParetoSessionIdentity | None = None,
     ) -> None:
@@ -993,6 +1003,7 @@ class NonFifoParetoSession:
             neighbors=neighbors,
             evaluate_edge=evaluate_edge,
             fixture_digest=fixture_digest,
+            config_digest=config_digest,
         )
         expected_identity = candidate_identity if identity is None else identity
         expected_identity.assert_valid()
@@ -1296,6 +1307,7 @@ def search_non_fifo_pareto(
     cancel_check: Callable[[], bool] | None = None,
     maximum_elapsed: timedelta | None = None,
     fixture_digest: str = "one-shot-fixture",
+    config_digest: str = "one-shot-config",
 ) -> NonFifoParetoSearchResult:
     """Run one finite session to completion with the historical API."""
 
@@ -1314,6 +1326,7 @@ def search_non_fifo_pareto(
         cancel_check=cancel_check,
         maximum_elapsed=maximum_elapsed,
         fixture_digest=fixture_digest,
+        config_digest=config_digest,
     ).run()
 
 
