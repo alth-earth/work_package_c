@@ -2215,6 +2215,44 @@ bounded reference 的路线、精确 ETA、速度、风险、成本、confidence
 证明或带证明的 corridor/state bound；本轮实验构件不写 formal latest、replanning
 baseline 或 frozen artifact，不 push。
 
+### 【2026-08-29 | PLANNED】P0.2-M11：non-FIFO exact-arrival Pareto frontier audit
+
+M10 在 holdout/development 的真实 24h 组合 bound 诊断中保持了路线与独立 reference
+一致，并确认真实输入存在 `REAL_INPUT_FIFO_VIOLATED`。下一步只收紧 C 内部 finite
+non-FIFO 研究 sidecar 的多目标语义：让 exact-arrival Pareto frontier、终止/取消/资源
+失败和 deterministic evidence 可独立复核。该轮不接入真实 runner、正式 planner、ingress
+或公共 API，不把 finite fixture 结果解释为连续海洋模型的全局最优性。
+
+**研究边界。** 使用 `non_fifo_feasibility.search_non_fifo_pareto` 的显式研究调用；
+`pareto_pruning=False` 仍是默认，启用时只能丢弃“新生成”、同一
+`(node, exact UTC arrival)` 状态上被 component-wise 严格支配的 label。不同精确到达、等价
+成本或已扩展 label 一律保留。每条边必须严格推进到达时间、成本有限且非负；hard-mask、
+evaluator failure、未知结果、取消和任一冻结资源上限均 fail-closed，不返回 partial route。
+
+**证据接口。** 补充可审计的完整 goal/frontier 视图和 canonical frontier digest；结果必须
+区分 `GOAL_FOUND`、`EXHAUSTED`、`RESOURCE_LIMIT`、`CANCELLED` 与 `EVALUATOR_FAILURE`，
+并保留 route business evidence（speed/risk/confidence/source IDs/hard-mask）。digest 绑定
+精确到达、成本向量、路径、transition payload/business evidence 和搜索规则；相同输入即使
+邻居以不同可迭代顺序提供，也要通过稳定 canonical tie-break 得到同一证据。此能力只在
+C 内部 sidecar 使用，不改变 C→D 合同或正式 `plan()` 默认行为。
+
+**Adversarial matrix。** 独立 test-only runner 使用 schema
+`c.p0.2-nonfifo-pareto-frontier.v1`，覆盖 2×2 later-arrival shortcut、同桶不同 exact ETA、
+周期/零成本 cycle、相同精确状态的严格支配与 equal-cost 保留、hard-mask、evaluator failure、
+取消、expansion/label/queue/edge-evaluation limits、maximum horizon、scope/policy digest
+漂移和 business evidence。每个 fixture 与独立 zero-heuristic exact-arrival oracle 对照，
+保存 `manifest.json`、`cases.jsonl`、`comparison-summary.json`、`heartbeat.json` 以及
+`ALL_DONE`/`STOPPED_HARD`；每个 case 记录 frontier digest、label/expansion/queue counters
+和失败语义。
+
+**收口门。** 所有成功 fixture 的 Pareto frontier、选中 route、精确 ETA、成本向量和业务
+字段必须与独立 oracle 一致，10 次重复 deterministic；所有 fail-closed fixture 的结果不
+得带有成功 label，且 pruning 计数只出现在明确授权的同精确状态新 label 上。任一跨到达误
+剪枝、partial-route 泄漏、digest 漂移或邻居顺序依赖标记 `NO_PERFORMANCE_PROOF/FAIL`，不
+进入真实输入；全部通过只标记 `READY_FOR_P0.2-NONFIFO-IMPLEMENTATION-REVIEW`，不启用
+candidate/Winter。资源上限继续冻结为 `50k/100k/50k/400k`，M4/M9/M10 真实资源和 FIFO
+violation 历史不覆盖。
+
 ### 【2026-08-29 | PLANNED】P0.2-M9：certified heuristic long-horizon resource audit
 
 M8 在完整 holdout `executable_0_6h` 上证明了证书化反向图 objective lower bound 可以只改变
