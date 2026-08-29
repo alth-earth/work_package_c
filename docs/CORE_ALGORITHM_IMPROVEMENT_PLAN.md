@@ -3834,3 +3834,25 @@ boundary、compileall 与 `git diff --check` 通过；全仓 Ruff 仅保留既�
 `scripts/benchmark_bc_coupling.py:721` E501。下一步应优先研究带独立证明的 queue compaction
 或 corridor/envelope，而不是继续调节 priority 权重；M27/M28 均不得触发 candidate 或
 Winter。M26、M25、M16 及更早历史结论保持不变。
+
+### 【2026-08-30 | PLANNED】P0.2-M29：heuristic incumbent seed then baseline queue
+
+M27 的 always-priority 能减少部分扩展并触发 terminal pruning，但真实 queue peak 明显
+膨胀；M28 的 goal-gated 模式消除了膨胀，却完全回到 baseline，未产生 terminal pruning。
+M29 研究两者之间的确定性两阶段策略：首个 goal 前使用认证 heuristic 尽快建立
+incumbent；首个 goal 出现后一次性重排到历史 cost-vector 顺序，降低剩余 queue 压力，同时
+让 terminal bound 只作用于此后的新 label。两阶段都只改变扩展顺序，保留所有 exact-arrival
+labels、已扩展 label、serial 和 tie-break，不改变 Pareto 或 temporal dominance 语义。
+
+新增 `heuristic_ordering="until_goal"` 研究模式。它要求完整可用的
+`TemporalHeuristicCertificate`，将 pre-goal/post-goal callback digest、priority phase 和
+checkpoint digest 纳入 identity；缺失、scope/evaluator/proof 漂移、非有限值和恢复 phase
+不一致均 fail-closed。M27 `always`、M28 `after_goal` 以及默认无 callback 行为保持兼容。
+
+先补 synthetic finite Pareto oracle、checkpoint/restore、cancel、resource-limit、phase
+reheapify 和完整 frontier 语义测试，再在冻结 state-bound + selected-route terminal bound
+的真实 `rolling_0_24h` 上对 holdout/development 各运行 `fastest × 1`，比较 baseline、
+always、after-goal 和 until-goal 的 expanded、edge evaluation、queue peak、terminal
+pruning、semantic digest 及资源观察。诊断结果不构成完整 frontier、dominance、candidate
+或 Winter 资格；搜索上限 `50k/100k/50k/400k` 不变。若 until-goal 仍无净收益，停止继续
+调 priority，转向独立证明的 queue compaction/corridor envelope。
