@@ -2769,3 +2769,36 @@ resource-clean 与 cgroup memory events 证据完整；当前宿主 `/init.scope
 fail-closed 边拒绝具备另立 review 的证据，但不代表连续海洋模型全局最优性、真实 Pareto
 性能通过或生产资格。下一步另立带强制 cgroup/更大真实输入的 Pareto 资源计划，或在
 明确非 FIFO label-correcting 终止/资源语义后制定 P0.2 implementation plan；保持默认关闭。
+
+### 【2026-08-29 | PLANNED】P0.2-M16：proof-carrying state-bound actual Pareto bridge
+
+M15 已在真实 6h 输入上证明 actual-edge Pareto bridge 的路线语义、恢复、取消和失败围栏，
+但实际 `pareto_pruned_total=0`，M9 的真实 24h frozen queue 上限失败仍未解决。本轮只推进
+一个可审计的核心算法增量：把已有 `TemporalStateBoundCertificate`/corridor 证书接入
+actual Pareto bridge 的新 label 生成点，研究证明不能到达的状态可以在加入 Pareto session
+前被丢弃；不改变正式 `TemporalLabelAStar`、合同、ingress/service、默认策略、candidate
+或 Winter。
+
+**实现围栏。** `create/restore/run_non_fifo_temporal_pareto_*` 保持默认无证书行为不变；
+显式传入证书时，bridge 必须要求 `TemporalDominancePolicy.disabled()`、zero-heuristic、
+已知 evaluator、完整 `TemporalScope`，并将证书 digest 纳入 callback/component/session
+checkpoint identity。state-bound 只在实际 traversal 已得到 exact arrival 后检查，且只拒绝
+“新生成”的 label；已扩展 label、不同 exact arrival、evaluator/hard-mask/coverage 失败和
+资源/取消状态均不得被删除或伪装成成功。scope、proof、coverage、evaluator 或 checkpoint
+不匹配时 fail-closed：拒绝授权并保持 pruning=0，记录稳定 rejection reason。不能把
+reference Dijkstra 路线注入候选，也不能使用 beam/近似剪枝。
+
+**验证。** 扩展 actual bridge synthetic oracle 矩阵：证书有效时至少观察一次合法
+state-bound pruning，路线/ETA/7 维 cost/source IDs 与无证书 exhaustive reference 一致；
+证书 rejected、scope drift、arrival envelope 不完整、非 FIFO/later-arrival、hard-mask、
+evaluator failure、cancel、resource limit 和 checkpoint digest drift 场景 pruning 必须为
+零且无 partial route/frontier。验证 one-shot 与 slice→restore 等价、重复 deterministic，
+并确认正式默认路径回归不变。实验构件只写入新的 `.runtime/experiments/` 目录并绑定 clean
+implementation/lock/config/scope identity；不启动真实 24h，真实输入仍保持
+`dominance-disabled`。
+
+**收口。** synthetic 全部通过时仅标记
+`READY_FOR_P0.2-REAL-STATE-BOUND-RESOURCE-PLAN`，再另立带强制 cgroup 的真实资源计划；
+任一语义、fail-closed、恢复或 identity 失败标记 `NO_PERFORMANCE_PROOF/FAIL`；构件不完整
+标记 `INVALID/PENDING`。M9 的 `REAL_INPUT_24H_RESOURCE_FAIL`、M10 的组合证书边界、M13--M15
+历史结论保持不变。完成后只本地集成、保留研究分支和构件、清理辅助 worktree，不 push。
