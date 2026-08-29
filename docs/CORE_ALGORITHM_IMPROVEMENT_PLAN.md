@@ -4174,3 +4174,72 @@ upper envelope 不低估、路线/ETA/业务字段/失败语义/确定性不变�
 `dominance=disabled`、`50k/100k/50k/400k` 上限、candidate/Winter 关闭，reference
 Dijkstra 只作正确性证据。若速度 envelope 无净收益或资源证据不完整，记录诊断边界并
 停止继续调参，转向更强 corridor/state bound 或 test-only P0.2 non-FIFO 设计。
+
+### 【2026-08-30 | COMPLETED（environmental envelope；6h semantic pass，24h 未启动）】P0.2-M33：proof-carrying environmental speed envelope
+
+**实现与隔离。** M33 从 M32 研究线建立隔离分支
+`research/p02-m33-environment-envelope-20260830`，计划段提交为 `c3fc350`，环境
+速度包络核心提交为 `c56d058`，synthetic/real runner 提交为 `0b33872`，随后修正真实
+fixture loader 的提交为 `88942a9`。新增 C 内部
+`TemporalEnvironmentalSpeedEnvelope` 与 `qualify_environmental_speed_envelope`：对
+RiskSampler 的完整时间区间和 edge spatial sample points 取保守
+`environment_speed_factor` upper envelope，经单调 `VesselPerformanceModel` 转换为
+每条有向边的 travel-hour lower bound。证据绑定 `TemporalScope`、interval evaluator
+digest、vessel/grid geometry、partition/frame/hard-mask/navigability、search limits 和
+proof digest；完整边域与 partial edge map 采用显式模式，缺失/coverage/hard-mask/非有限
+边保持 live。`TemporalStateBoundCertificate`/`TemporalCorridorEvidence` 新增
+`edge_bound_partial`，只允许在 destination arrival envelope 完整且向下取整后的
+`elapsed + edge_lower > arrival_upper` 严格成立时拒绝新生成转移；不删除已扩展 label、
+predecessor、exact arrival 或 goal evidence。正式 `plan()`、contracts、ingress/service、
+`TemporalDominancePolicy.disabled()`、candidate 和 Winter 均未改变。
+
+**Synthetic proof matrix.** schema 为
+`c.p0.2-temporal-environment-speed-envelope.v1`，覆盖 small/medium/stress 三 profile、
+fastest/low_risk/recommended 三 objective 和 certified、partial、hard-mask、missing-speed、
+scope-mismatch 五类证据，共 `45/45` cases。9 个 certified cases 均观察到真实 edge
+pre-pruning（合计 `9`），路线/到达时间/cost 与独立有限图穷举 oracle 一致；partial、
+hard-mask、missing-speed、scope-mismatch 的 pruning 均为 `0`，`fail_closed=true`，
+`semantic_match=true`。构件位于
+`.runtime/experiments/c-p02-m33-environment-envelope-matrix-20260830-r1/`，含 manifest、
+cases、resource-frontier、summary、heartbeat 和 `ALL_DONE`；dominance 始终 disabled，
+production candidate 始终 false。
+
+**真实 6h 诊断。** 使用冻结完整 145 帧 RiskFrame、route-plan-set、配置和 lock，单 CPU
+`[0]`，`executable_0_6h` 三目标；真实搜索仍为 dominance-disabled，环境证书只用于
+edge/state-bound 诊断，reference Dijkstra 只作正确性证据。
+
+* holdout 构件为
+  `.runtime/experiments/c-p02-m33-environment-envelope-real-holdout-6h-20260830-r1/`。
+  环境包络覆盖 `1362/2480` 边（`PARTIAL`），每目标 baseline/candidate edge evaluations
+  均 `19→14`，每目标 `18` 次 edge pre-pruning，合计 `54`。fastest、low_risk、recommended
+  的 baseline、candidate 与 reference 路线、精确 ETA、速度、风险、cost、confidence、
+  source IDs 和失败语义 digest 一致，`deterministic=true`。
+* development 构件为
+  `.runtime/experiments/c-p02-m33-environment-envelope-real-development-6h-20260830-r1/`。
+  环境包络覆盖 `1520/2480` 边（`PARTIAL`）；fastest `11→7`（9 次 pruning）、low_risk
+  `19→13`（19 次）、recommended `11→7`（9 次），合计 `37`。三目标同样与 baseline/
+  reference 语义一致且 deterministic。
+
+两份 summary 均为 `REAL_ENVIRONMENT_SPEED_ENVELOPE_SEMANTIC_PASS`，但
+`resource_evidence_complete=false`：进程/主机 swap 为零、无 OOM/timeout、CPU affinity
+为 `[0]`，RSS 约 `118596 KiB`（holdout）和 `118372 KiB`（development）；运行环境仍为
+`/init.scope` 且 `memory.max=max`、`memory.swap.max=max`，因此只保留为 semantic/resource
+诊断，不宣称资源门或 candidate 资格。环境包络整体 coverage 尚未完整，故真实 FIFO
+仍不能由本轮升级为 certified。
+
+**24h 与结论。** 本轮不启动 `rolling_0_24h`：M33 的 6h 收益是可解释的 edge evaluation
+减少，但没有形成新的 label/queue 资源证明；M30/M31 已记录冻结 `queue=50,000` 的
+24h 边界，且当前 cgroup 资源证据不完整。避免在同一边界上重复长跑，不提高
+`50k/100k/50k/400k` 上限、不择优重跑、不写 formal latest/replanning baseline/frozen
+artifact。M33 状态固定为
+`REAL_6H_ENVIRONMENT_ENVELOPE_SEMANTIC_PASS / REAL_24H_NOT_RUN`，不是性能资格。下一步
+转向更强独立 corridor/state-bound 证明或 test-only P0.2 non-FIFO 设计；candidate、
+Winter、P2.1、P3、ARA* 与 dominance 继续默认关闭。
+
+**验证。** M33 分支全量 C 测试为 `638 passed, 3 skipped`；skip 仅因隔离 worktree
+缺少已退休的 orchestrator archive fixture。环境包络、corridor、bounds、label、
+qualification、reference 和两个 runner 的聚焦测试共 `100 passed`；变更文件 Ruff
+format/check、compile/import boundary、`uv lock --check`、offline sync、CLI smoke 和
+`git diff --check` 随后完成。原样 `UV_OFFLINE=1 make check` 若仍受隔离 worktree 缺少
+`.mamba-env/bin/uv` 阻塞，仅记录该环境限制，不修改环境或 lock。实验产物仅留在
+`.runtime/experiments/`，本分支不 push、不合并正式树。
