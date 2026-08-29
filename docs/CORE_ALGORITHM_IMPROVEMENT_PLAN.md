@@ -2383,6 +2383,31 @@ oracle 一致；周期/资源、evaluator failure、取消以及 callback/policy
 M10 已知 `REAL_INPUT_FIFO_VIOLATED` 和 M11 结论；P0.2 非 FIFO 真实实现仍需另立计划，
 candidate、formal latest、replanning baseline 和 frozen artifact 均不变。
 
+### 【2026-08-29 | PLANNED】P0.2-M12.1：session identity fence completeness audit
+
+M12 的 session/checkpoint 语义矩阵已通过，但审计发现原计划要求的 `limit` identity drift
+没有独立 adversarial case，session identity 也只通过 runner manifest 间接绑定 config digest。
+本轮只补齐这两个身份围栏，不改变非 FIFO 搜索规则、默认关闭策略或正式路径；仍不接入真实
+runner、正式 planner、ingress/service、公共合同或 candidate/Winter。
+
+**围栏补强。** 为 `NonFifoParetoSessionIdentity` 增加显式 `config_digest`，保留旧 one-shot
+调用的默认兼容值，并将其纳入 session/policy/checkpoint digest。restore 必须同时拒绝
+config、四项冻结 limit、Pareto policy、callback 或 fixture identity 漂移；checkpoint
+state digest 篡改和 terminal/非法 lifecycle 仍 fail-closed。冻结
+`50k/100k/50k/400k` 上限不变，exact-arrival pruning 仍仅允许同一精确到达状态的新生成
+严格支配 label。
+
+**证据矩阵。** 扩展 M12 runner 的 `limit_drift` 场景并覆盖 config drift；在既有 adversarial
+fixtures 上继续比较 one-shot、slice-only、slice→restore，三 objective、至少 10 次重复，
+恢复身份拒绝必须不产生 route/frontier/pruning。manifest、case、summary、heartbeat 和
+resume identity 继续独立 fsync 保存，实验产物只写 `.runtime/experiments/`。
+
+**收口门。** 原 900 cases 加上新增 drift 场景后全部完成，成功/恢复语义与独立 exhaustive
+oracle 一致，确定性、资源证据、fail-closed 和合法 pruning 全通过，才追加 COMPLETED；任一
+身份漂移被接受、失败泄漏或资源证据缺失则 `NO_PERFORMANCE_PROOF/FAIL`，保留 M12 结论且不
+进入真实非 FIFO 实现。完成后在 clean local commit 上 fast-forward 正式分支并移除辅助
+worktree，不 push。
+
 ### 【2026-08-29 | PLANNED】P0.2-M9：certified heuristic long-horizon resource audit
 
 M8 在完整 holdout `executable_0_6h` 上证明了证书化反向图 objective lower bound 可以只改变
