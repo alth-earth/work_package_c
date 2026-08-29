@@ -14,7 +14,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-
 SCHEMA_VERSION = "c.p0.2-nonfifo-pareto-goal-gated-real.v1"
 
 # The child worker is the audited M27 implementation.  Environment-bound
