@@ -3697,3 +3697,65 @@ terminal pruning、semantic digest、RSS/swap/OOM/timeout。排序若无收益�
 boundary 和 `git diff --check`；实验构件仅写入新的 `.runtime/experiments/` 目录。最终
 本地提交并删除辅助 worktree，保留研究分支，不 push；P2.1、P3、ARA* 和所有 production
 candidate 状态保持原结论。
+
+### 【2026-08-30 | COMPLETED（selected-objective real diagnostic；not a qualification）】P0.2-M27：Pareto certified heuristic ordering
+
+**实现、隔离与身份。** M27 在 M26 clean research commit 上建立隔离分支
+`research/p02-m27-pareto-heuristic-20260830`，依次提交计划 `63e1581`、Pareto priority
+实现 `7eada33`、测试 `3b50819` 和真实诊断 runner `a3169fd`。代码只增加
+`NonFifoParetoSession` 的显式 priority callback/digest、actual Pareto bridge 的
+`TemporalHeuristicCertificate` 排序接线及研究 runner；不改变 label 保留集合、正式
+`plan()`、`TemporalDominancePolicy.disabled()` 默认值、合同、ingress/service、candidate
+或 Winter。checkpoint/session identity 会校验 priority callback/policy digest；证书缺失、
+scope/目标/覆盖/evaluator/proof 不匹配或非有限下界均拒绝，已扩展 label 不删除。
+
+实验只运行 M26 已审计的 state-bound 与 selected-route terminal bound 组合路径，保持
+`selection_only=true`、Pareto pruning、bounded ETA 和冻结搜索上限
+`50k/100k/50k/400k`。为控制无人值守资源，本轮按计划的诊断性放宽仅选取每个输入的
+`fastest` 目标、一次重复；这不是三目标、重复性能或正式资格门。两份 manifest 均
+`dirty=false`，identity 绑定实现 commit `a3169fdadfe1fb8f85cceb1f8afcd2b060630339`、
+implementation tree digest `8ffc563af00396ea0155ff96c8e4ffbd4d6dbc08767bec45ba46fc112e18996c`、
+configs digest `537e1a1d1ef3f8015402e9b57556518b92a2524993074b4ecc1ccf58143cded4`、
+`uv.lock` digest `8893cb8387825ca4890ed808f4a98b02ba938337752971dacc3e77f859164f22`、
+完整 145 帧 RiskFrame、route-plan-set、scope、certificate 和 CPU 0。
+
+**真实 selected-objective 结果。** holdout 使用 goal `[14,5]`、departure
+`2026-02-22T00:00:00.000000+00:00`，实验目录
+`.runtime/experiments/c-p02-m27-pareto-heuristic-holdout-20260830-r1/`，experiment id
+`c.p0.2-nonfifo-pareto-heuristic-real.v1-27dda6caf56053da`；development 使用 goal
+`[14,6]`、departure `2026-03-22T00:00:00.000000+00:00`，目录
+`.runtime/experiments/c-p02-m27-pareto-heuristic-development-20260830-r1/`，experiment id
+`c.p0.2-nonfifo-pareto-heuristic-real.v1-06938d098281efb2`。两个 case 均有完整
+`manifest/cases/summary/heartbeat/ALL_DONE` 构件、`GOAL_FOUND`，baseline 与 ordered 的
+route、exact arrival、业务字段和 semantic digest 一致，heuristic certificate scope match
+和 fail-closed 检查通过。
+
+| 输入 | baseline expanded / edge eval / queue peak | ordered expanded / edge eval / queue peak | state-bound pruning | terminal pruning | compute/wall |
+|---|---:|---:|---:|---:|---:|
+| holdout `fastest` | `10,477 / 83,256 / 3,369` | `9,732 / 77,560 / 6,114` | `65,751` | `745` | `582,910.7 ms / 582.9 s` |
+| development `fastest` | `5,659 / 45,192 / 1,997` | `5,623 / 44,912 / 3,347` | `38,102` | `40` | `327,516.7 ms / 327.5 s` |
+
+ordered path 的 semantic digest 与 baseline 完全相同，terminal bound 没有 rejected
+label；两输入均观察到真实 terminal pruning（holdout `745`、development `40`）。在本次
+单目标单重复诊断中，expanded 分别下降约 `7.1%` 与 `0.6%`，但 queue peak 分别增加
+约 `81.5%` 与 `67.6%`，说明排序可能更早形成 incumbent，却有明显队列空间代价。两份
+summary 都为 `READY_FOR_SEPARATE_HEURISTIC_REVIEW`，`complete=true`、`identity_clean=true`；
+由于 runner 未置于 4 GiB systemd cgroup，资源分类为 `INCONCLUSIVE_CGROUP_BOUNDARY`，
+`resource_evidence_complete=false`，因此不宣称 RSS/资源门或性能门通过。frontier 仍是
+`frontier_complete=false` 的 selection-only 诊断，不能解释为完整 Pareto frontier 或真实
+dominance 资格。
+
+**验证与边界。** M27 变更后的聚焦测试为 `51 passed`，全量 C 测试为
+`598 passed, 3 skipped`；skip 仍仅因隔离 worktree 缺少 orchestrator archive fixture。
+变更文件 targeted Ruff、compileall、`git diff --check` 均通过；全量 Ruff 仅命中已有无关
+`scripts/benchmark_bc_coupling.py:721` 的 E501，未修改该文件。正式默认路径、checkpoint
+digest fence、scope mismatch、非有限 heuristic 和无 callback 兼容性测试均通过。
+本轮不启动 24h 额外目标、不提高资源上限、不重开 Winter/P2.1/P3/ARA*，也不启用
+candidate；M27 结论仅为“selected-objective real diagnostic complete，具备独立
+heuristic review 证据”，不是晋级结论。
+
+**后续。** 若继续推进，须另立带 cgroup 资源证据、三目标/重复覆盖和完整 frontier
+语义门的 heuristic review 计划；优先评估 queue 增长与 terminal pruning 的净收益。若
+资源或完整 frontier 门失败，保持 `NO_HEURISTIC_TERMINAL_GAIN`/`REAL_HEURISTIC_RESOURCE_FAIL`
+或 `INVALID/PENDING`，不得通过放宽资源上限、选择性报告或把 selection-only 结果包装成
+dominance 性能证明。M26、M25 及更早 M0/M1/M2J/M2K、P3、ARA* 历史记录保持不变。
