@@ -281,6 +281,12 @@ class NonFifoTemporalParetoResult:
     def incumbent_bound_rejection_reasons(self) -> tuple[tuple[str, int], ...]:
         return self.raw_result.incumbent_bound_rejection_reasons
 
+    @property
+    def incumbent_bound_authorized(self) -> bool:
+        """Whether the supplied incumbent certificate remains authorized."""
+
+        return self.session.incumbent_bound_authorized
+
 
 @dataclass(frozen=True, slots=True)
 class NonFifoTemporalParetoCheckpoint:
