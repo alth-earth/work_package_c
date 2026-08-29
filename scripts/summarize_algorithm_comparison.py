@@ -205,7 +205,7 @@ def _efficiency_section(
                     baseline_expanded=base_exp,
                     expansion_gap=base_exp - ours_exp,
                     expansion_reduction_pct=(
-                        round(reduction, 2) if reduction is not None else None
+                        round(reduction, 4) if reduction is not None else None
                     ),
                     ours_wall_ms=round(ours["wall_ms_median"], 2),
                     baseline_wall_ms=round(base["wall_ms_median"], 2),
@@ -259,10 +259,10 @@ def _quality_section(
                     baseline_wall_ms=round(base["wall_ms_median"], 2),
                     ours_avg_risk=ours["average_edge_risk_median"],
                     baseline_avg_risk=base["average_edge_risk_median"],
-                    avg_risk_delta_pct=(round(avg_delta, 2) if avg_delta is not None else None),
+                    avg_risk_delta_pct=(round(avg_delta, 4) if avg_delta is not None else None),
                     ours_max_risk=ours["maximum_edge_risk_median"],
                     baseline_max_risk=base["maximum_edge_risk_median"],
-                    max_risk_delta_pct=(round(max_delta, 2) if max_delta is not None else None),
+                    max_risk_delta_pct=(round(max_delta, 4) if max_delta is not None else None),
                     ours_distance_km=ours["distance_km_median"],
                     baseline_distance_km=base["distance_km_median"],
                     ours_travel_hours=ours["travel_hours_median"],
