@@ -2174,6 +2174,47 @@ pruning counters、queue/label/expansion、RSS/swap/OOM/timeout；任一目标�
 默认关闭状态保持不变。完成后追加 SSOT 证据、运行正式 checks、fast-forward 集成并移除辅助
 worktree，保留研究分支和实验构件，不 push。
 
+### 【2026-08-29 | COMPLETED】P0.2-M10：composed arrival envelope and heuristic ordering
+
+本轮已在隔离分支 `research/p02-m10-composed-bound-20260829` 的 clean
+implementation `1f35a6a` 上完成 synthetic 与真实 24h 诊断。组合路径仍是 C 内部研究
+sidecar：arrival envelope 只对新生成 label 做证书化安全拒绝，objective lower-bound
+heuristic 只改变队列顺序；`dominance_policy=disabled`，`production_candidate_enabled=false`。
+未修改 B/C、C/D 合同、ingress/service 或正式 planner 默认路径。
+
+**Synthetic gate。** `c.p0.2-temporal-composed-bound.v1` 矩阵输出于
+`.runtime/experiments/c-p02-m10-composed-bound-synthetic-20260829-r2/`：72/72 cases
+完成，完整证书 profile 通过，`deterministic=true`、`fail_closed=true`，观察到
+`arrival_bound_pruning=81` 和 `state_bound_pruning=8`；incomplete、scope mismatch、
+unknown evaluator、non-admissible、cancelled 与 resource-limit profile 均未授权静默
+剪枝。路线、ETA、业务字段、失败语义和 independent exact-arrival oracle 对照通过。
+
+**真实 24h identity 与资源边界。** holdout 和 development 均使用完整 145 帧、冻结
+route-plan-set、相同 search limits（`50k/100k/50k/400k`），每个 objective 独立运行
+baseline/candidate/reference phase；experiment identity、实现/配置/lock/RiskFrame/route
+digest 均记录在 manifest。每个 phase 均运行于 `MemoryMax=4GiB`、`MemorySwapMax=0`、
+固定 CPU 0 的 systemd cgroup，resource evidence complete，未发生 swap、OOM 或 timeout。
+
+| input | experiment id | cases | semantic/reference | deterministic | state-bound pruning | status |
+| --- | --- | ---: | --- | --- | ---: | --- |
+| holdout | `c.p0.2-temporal-composed-bound-real-24h.v1-450f8264acef916a` | 3/3 | PASS/PASS | true | 131,897 | `READY_FOR_P0.2-COMPOSED-BOUND-REAL-REVIEW` |
+| development | `c.p0.2-temporal-composed-bound-real-24h.v1-a330a279208919ac` | 3/3 | PASS/PASS | true | 78,268 | `READY_FOR_P0.2-COMPOSED-BOUND-REAL-REVIEW` |
+
+每个 objective 的 candidate heuristic rejection 均为 0（heuristic 不执行剪枝），而
+arrival/state certificate 的新 label pruning 可复现；baseline、candidate 和独立
+bounded reference 的路线、精确 ETA、速度、风险、成本、confidence、source IDs、失败
+语义及 semantic digest 一致。逐 case evidence 保存在对应实验目录的
+`manifest.json`、`cases.jsonl`、`resource-frontier.jsonl`、`comparison-summary.json`、
+`heartbeat.json` 与 `ALL_DONE` 中。
+
+**收口与边界。** 两个真实输入均独立完成三目标 phase，故组合 bound 达到真实 review
+资格，但这不是 performance promotion 或 candidate 晋级。两份 summary 同时记录
+`known_fifo_status=REAL_INPUT_FIFO_VIOLATED`；该事实要求另立 P0.2 非 FIFO 计划，不能由
+本轮 envelope/heuristic 结果覆盖。M4/M9 的 24h 资源边界历史保持不变；不提高队列/label
+上限，不重跑 Winter，不启用 candidate。后续仅可在独立计划中评估非 FIFO 语义、interval
+证明或带证明的 corridor/state bound；本轮实验构件不写 formal latest、replanning
+baseline 或 frozen artifact，不 push。
+
 ### 【2026-08-29 | PLANNED】P0.2-M9：certified heuristic long-horizon resource audit
 
 M8 在完整 holdout `executable_0_6h` 上证明了证书化反向图 objective lower bound 可以只改变
