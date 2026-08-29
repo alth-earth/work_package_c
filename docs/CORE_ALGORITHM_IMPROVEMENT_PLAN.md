@@ -2875,3 +2875,47 @@ confidence/source IDs 和失败语义与 reference 一致，恢复 deterministic
 失败标记 `NO_PERFORMANCE_PROOF/FAIL`，构件不完整标记 `INVALID/PENDING`。任何状态都不授权
 dominance/candidate/Winter；M9 的真实 24h resource fail、FIFO violation、M14--M16 历史
 结论保持不变。完成后仅本地集成、保留构件、清理辅助 worktree，不 push。
+
+### 【2026-08-29 | COMPLETED】P0.2-M17：real actual-Pareto topological state-bound qualification
+
+本轮按 `f5cb9bb` 的计划在隔离分支
+`research/p02-m17-real-pareto-state-bound-20260829` 完成；权威实现为 clean commit
+`bc458f913ef3c27f5be5ff71a85c2324deddda55`。新增独立 runner
+`scripts/benchmark_non_fifo_temporal_pareto_state_bound_real.py`，未修改 B/C、C/D 合同、
+ingress/service 或正式 planner 默认路径。较早未使用强 cgroup 的 r1/r2 构件保留为诊断；本节
+只引用 systemd transient scope 下的 r3 构件。
+
+**输入与身份。** holdout 与 development 均复用完整 145 帧 committed RiskFrame、冻结
+four-layer route plan set 的 `executable_0_6h` 目标、共同起点 `(5, 7)` 和自动解析终点；
+实现、`uv.lock`、configs tree、RiskFrame content/frame digests、route-plan-set、三目标
+`TemporalScope.digest`、bounded ETA policy、evaluator 和冻结
+`50k/100k/50k/400k` limits 均写入 manifest。holdout 构件为
+`.runtime/experiments/c-p02-m17-real-pareto-state-bound-holdout-6h-20260829-r3/`，experiment
+id `c.p0.2-temporal-pareto-state-bound-real.v1-243564c4fcc44429`；development 构件为
+`.runtime/experiments/c-p02-m17-real-pareto-state-bound-development-6h-20260829-r3/`，experiment
+id `c.p0.2-temporal-pareto-state-bound-real.v1-3d6d0f4670b3d6e0`。
+
+**方法与证据。** 每个输入执行 `fastest/low_risk/recommended` ×
+`one_shot/slice_restore` × 2 repetitions，共 12 cases；baseline 和 candidate 都是
+actual-edge、`use_heuristic=False`、`pareto_pruning=True`、dominance disabled，candidate
+仅显式传入同 scope 的 graph-topological maximum-speed arrival certificate。两输入所有
+12/12 case 的 baseline/candidate/reference 路线、精确 ETA、7 维 cost、speed/risk/
+confidence/source IDs 和失败语义一致；one-shot 与 slice→restore deterministic，scope
+digest 两侧一致，checkpoint 恢复无拒绝漂移，state-bound rejection=0、意外 pruning=0。
+holdout 观察 `state_bound_pruned=276`（arrival-bound 216）；development 观察
+`state_bound_pruned=300`（arrival-bound 228），证明真实 actual Pareto 路径确实发生了
+新 label 的 certified pruning。baseline/candidate 最大 queue 分别为 holdout `26/3`、
+development `13/3`，最大 RSS 约 `120084/120044 KiB`，未见 swap、OOM 或超时。
+
+两个权威构件均在 systemd scope `MemoryMax=4G`、`MemorySwapMax=0` 下运行，记录的
+`memory.max=4294967296`、`memory.swap.max=0`、`memory.swap.current=0` 且 memory events
+全为 0；summary 状态均为
+`READY_FOR_P0.2-REAL-PARETO-STATE-BOUND-REVIEW`。这只是“真实输入、真实 scope 下的
+研究证书路径可复核”结论，不是性能门、candidate 晋级或 Winter 授权；candidate 和
+Winter 仍为 false，`TemporalDominancePolicy.disabled()` 仍是正式默认。
+
+**未执行与下一步。** 依计划未执行 `rolling_0_24h`、full-voyage、Winter、candidate 或
+production/frozen/latest 写入；M9 的 24h queue resource fail、FIFO violation、M14--M16、
+P3 和 ARA* 历史结论保持不变。下一步仅可另立“带连续 FIFO/interval proof 的 dominance
+资格”或“真实 24h corridor/resource frontier”计划；不因本轮 pruning 结果自动启用任何
+生产算法。
