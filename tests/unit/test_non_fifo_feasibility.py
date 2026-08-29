@@ -12,12 +12,17 @@ import pytest
 
 from arctic_route_planning.planners.non_fifo_feasibility import (
     NonFifoBusinessEvidence,
+    NonFifoFrontierCertificateError,
+    NonFifoFrontierComparisonStatus,
+    NonFifoParetoFrontierCertificate,
     NonFifoParetoSessionIdentityMismatch,
     NonFifoParetoSessionRestoreError,
     NonFifoParetoSessionState,
     NonFifoParetoTransition,
     NonFifoSearchStatus,
     NonFifoTransition,
+    certify_non_fifo_pareto_frontier,
+    compare_non_fifo_pareto_frontiers,
     create_non_fifo_pareto_session,
     restore_non_fifo_pareto_session,
     search_non_fifo,
@@ -826,3 +831,183 @@ def test_pareto_session_checkpoint_and_terminal_restore_are_fail_closed() -> Non
     checkpoint = ready.checkpoint()
     with pytest.raises(NonFifoParetoSessionRestoreError, match="state digest"):
         replace(checkpoint, expanded=checkpoint.expanded + 1)
+
+
+def test_frontier_certificate_and_independent_comparison_cover_all_goal_labels() -> None:
+    graph = {"start": ("left", "right"), "left": ("goal",), "right": ("goal",), "goal": ()}
+
+    def evaluate(start: str, end: str, arrival: datetime) -> NonFifoParetoTransition:
+        if start == "start":
+            return NonFifoParetoTransition(arrival + timedelta(hours=1), (0.0, 0.0))
+        costs = (1.0, 4.0) if start == "left" else (4.0, 1.0)
+        return NonFifoParetoTransition(T0 + timedelta(hours=2), costs)
+
+    common = {
+        "start": "start",
+        "goal": "goal",
+        "departure_time": T0,
+        "neighbors": graph.__getitem__,
+        "evaluate_edge": evaluate,
+        "objective_count": 2,
+        "fixture_digest": "m20-frontier-fixture",
+        "config_digest": "m20-config",
+    }
+    candidate_session = create_non_fifo_pareto_session(**common, pareto_pruning=True)
+    reference_session = create_non_fifo_pareto_session(**common, pareto_pruning=False)
+    candidate = candidate_session.run()
+    reference = reference_session.run()
+
+    candidate_certificate = certify_non_fifo_pareto_frontier(
+        candidate, identity=candidate_session.identity, scope_digest="m20-scope"
+    )
+    reference_certificate = NonFifoParetoFrontierCertificate.from_result(
+        reference, identity=reference_session.identity, scope_digest="m20-scope"
+    )
+    assert candidate_certificate.usable
+    assert reference_certificate.usable
+    assert candidate_certificate.frontier_count == 2
+    assert candidate_certificate.frontier_digest == reference_certificate.frontier_digest
+
+    comparison = compare_non_fifo_pareto_frontiers(
+        candidate,
+        reference,
+        candidate_identity=candidate_session.identity,
+        reference_identity=reference_session.identity,
+        candidate_scope_digest="m20-scope",
+        reference_scope_digest="m20-scope",
+    )
+    assert comparison.status is NonFifoFrontierComparisonStatus.MATCH
+    assert comparison.matched
+    assert comparison.missing_label_digests == ()
+    assert comparison.unexpected_label_digests == ()
+    assert comparison.digest
+
+
+def test_frontier_certificate_is_fail_closed_for_resource_and_evaluator_results() -> None:
+    graph = {"start": ("goal",), "goal": ()}
+
+    def evaluate(_start: str, _end: str, arrival: datetime) -> NonFifoParetoTransition:
+        return NonFifoParetoTransition(arrival + timedelta(hours=1), (1.0, 1.0))
+
+    limited_session = create_non_fifo_pareto_session(
+        start="start",
+        goal="goal",
+        departure_time=T0,
+        neighbors=graph.__getitem__,
+        evaluate_edge=evaluate,
+        objective_count=2,
+        max_expansions=1,
+        fixture_digest="m20-resource-fixture",
+    )
+    limited = limited_session.run()
+    certificate = certify_non_fifo_pareto_frontier(
+        limited, identity=limited_session.identity, scope_digest="m20-scope"
+    )
+    assert limited.status is NonFifoSearchStatus.RESOURCE_LIMIT
+    assert not certificate.usable
+    assert "status:RESOURCE_LIMIT" in (certificate.rejection_reason or "")
+    with pytest.raises(NonFifoFrontierCertificateError, match="RESOURCE_LIMIT"):
+        certificate.assert_usable()
+
+    broken_session = create_non_fifo_pareto_session(
+        start="start",
+        goal="goal",
+        departure_time=T0,
+        neighbors=graph.__getitem__,
+        evaluate_edge=lambda *_args: (_ for _ in ()).throw(RuntimeError("broken")),
+        objective_count=2,
+        fixture_digest="m20-evaluator-fixture",
+    )
+    broken = broken_session.run()
+    broken_certificate = certify_non_fifo_pareto_frontier(
+        broken, identity=broken_session.identity, scope_digest="m20-scope"
+    )
+    assert not broken_certificate.usable
+    assert "evaluator_errors" in (broken_certificate.rejection_reason or "")
+
+
+def test_frontier_comparison_rejects_scope_identity_and_label_drift() -> None:
+    graph = {"start": ("goal",), "goal": ()}
+
+    def evaluate(_start: str, _end: str, arrival: datetime) -> NonFifoParetoTransition:
+        return NonFifoParetoTransition(arrival + timedelta(hours=1), (1.0, 2.0))
+
+    def changed_evaluate(_start: str, _end: str, arrival: datetime) -> NonFifoParetoTransition:
+        return NonFifoParetoTransition(arrival + timedelta(hours=1), (1.0, 3.0))
+
+    candidate_session = create_non_fifo_pareto_session(
+        start="start",
+        goal="goal",
+        departure_time=T0,
+        neighbors=graph.__getitem__,
+        evaluate_edge=evaluate,
+        objective_count=2,
+        fixture_digest="m20-common-fixture",
+        config_digest="m20-common-config",
+    )
+    reference_session = create_non_fifo_pareto_session(
+        start="start",
+        goal="goal",
+        departure_time=T0,
+        neighbors=graph.__getitem__,
+        evaluate_edge=changed_evaluate,
+        objective_count=2,
+        fixture_digest="m20-common-fixture",
+        config_digest="m20-common-config",
+    )
+    candidate = candidate_session.run()
+    reference = reference_session.run()
+    mismatch = compare_non_fifo_pareto_frontiers(
+        candidate,
+        reference,
+        candidate_identity=candidate_session.identity,
+        reference_identity=reference_session.identity,
+        candidate_scope_digest="m20-scope",
+        reference_scope_digest="m20-scope",
+    )
+    assert mismatch.status is NonFifoFrontierComparisonStatus.FRONTIER_MISMATCH
+    assert mismatch.missing_label_digests and mismatch.unexpected_label_digests
+
+    scope_mismatch = compare_non_fifo_pareto_frontiers(
+        candidate,
+        candidate,
+        candidate_identity=candidate_session.identity,
+        reference_identity=candidate_session.identity,
+        candidate_scope_digest="m20-scope-a",
+        reference_scope_digest="m20-scope-b",
+    )
+    assert scope_mismatch.status is NonFifoFrontierComparisonStatus.IDENTITY_MISMATCH
+    assert not scope_mismatch.matched
+
+    changed_identity = replace(candidate_session.identity, max_queue=49_999)
+    identity_mismatch = compare_non_fifo_pareto_frontiers(
+        candidate,
+        candidate,
+        candidate_identity=candidate_session.identity,
+        reference_identity=changed_identity,
+        candidate_scope_digest="m20-scope",
+        reference_scope_digest="m20-scope",
+    )
+    assert identity_mismatch.status is NonFifoFrontierComparisonStatus.IDENTITY_MISMATCH
+
+
+def test_frontier_certificate_digest_tamper_is_rejected() -> None:
+    graph = {"start": ("goal",), "goal": ()}
+
+    def evaluate(_start: str, _end: str, arrival: datetime) -> NonFifoParetoTransition:
+        return NonFifoParetoTransition(arrival + timedelta(hours=1), (1.0,))
+
+    session = create_non_fifo_pareto_session(
+        start="start",
+        goal="goal",
+        departure_time=T0,
+        neighbors=graph.__getitem__,
+        evaluate_edge=evaluate,
+        fixture_digest="m20-tamper-fixture",
+    )
+    result = session.run()
+    certificate = certify_non_fifo_pareto_frontier(
+        result, identity=session.identity, scope_digest="m20-scope"
+    )
+    with pytest.raises(NonFifoFrontierCertificateError, match="digest mismatch"):
+        replace(certificate, certificate_digest="tampered")

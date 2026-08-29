@@ -82,3 +82,20 @@ def test_runner_summary_requires_complete_resource_evidence() -> None:
     summary = _RUNNER._summary([record], args)
     assert summary["resource_evidence_complete"] is False
     assert summary["status"] == "NO_PERFORMANCE_PROOF/FAIL"
+
+
+def test_runner_worker_records_a_scope_bound_complete_frontier_certificate() -> None:
+    record = _RUNNER._worker_record(
+        "strict_same_exact_dominance",
+        "fastest",
+        "pareto",
+        1,
+        -1,
+    )
+    certificate = record["frontier_certificate"]
+    assert record["status"] == "GOAL_FOUND"
+    assert certificate["usable"] is True
+    assert certificate["complete"] is True
+    assert certificate["scope_digest"] == "fixture:strict_same_exact_dominance:fastest"
+    assert certificate["frontier_count"] == len(record["frontier"])
+    assert certificate["goal_label_count"] >= certificate["frontier_count"]

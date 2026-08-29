@@ -102,6 +102,26 @@ def test_actual_bridge_preserves_business_route_and_prunes_same_goal_arrival() -
     assert pruned.diagnostics.state_bound_pruned == 0
 
 
+def test_actual_bridge_exposes_complete_frontier_certificate_after_terminal_run() -> None:
+    planner = _configured_planner()
+    request = _research_request()
+    session = create_non_fifo_temporal_pareto_session(
+        planner,
+        request,
+        pareto_pruning=True,
+    )
+
+    with pytest.raises(NonFifoTemporalParetoError, match="terminal"):
+        _ = session.frontier_certificate
+
+    result = session.run()
+    certificate = session.frontier_certificate
+    assert result.status is NonFifoSearchStatus.GOAL_FOUND
+    assert certificate.usable
+    assert certificate.frontier_count == len(result.frontier)
+    assert certificate.scope_digest == planner.temporal_scope(request).digest
+
+
 def test_actual_bridge_slice_restore_matches_one_shot_frontier() -> None:
     planner = _configured_planner()
     request = _research_request()
