@@ -15,9 +15,19 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from heapq import heappop, heappush
+from heapq import heapify, heappop, heappush
 from math import isfinite
+from types import CodeType
 from typing import Any
+
+
+def _digest(value: Any) -> str:
+    """Return a deterministic digest for session/checkpoint evidence."""
+
+    encoded = json.dumps(
+        _jsonable(value), sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode()
+    return hashlib.sha256(encoded).hexdigest()
 
 
 class NonFifoSearchStatus(StrEnum):
@@ -311,6 +321,226 @@ class NonFifoParetoSearchResult:
         return self.frontier_digest
 
 
+class NonFifoParetoSessionState(StrEnum):
+    """Lifecycle states for the finite Pareto research session."""
+
+    READY = "READY"
+    PAUSED = "PAUSED"
+    GOAL_FOUND = "GOAL_FOUND"
+    EXHAUSTED = "EXHAUSTED"
+    RESOURCE_LIMIT = "RESOURCE_LIMIT"
+    CANCELLED = "CANCELLED"
+    EVALUATOR_FAILURE = "EVALUATOR_FAILURE"
+
+
+class NonFifoParetoSessionError(RuntimeError):
+    """Base error for session lifecycle and checkpoint fences."""
+
+
+class NonFifoParetoSessionIdentityMismatch(NonFifoParetoSessionError):
+    """The supplied callbacks or policy do not match a session identity."""
+
+
+class NonFifoParetoSessionRestoreError(NonFifoParetoSessionError):
+    """A checkpoint is not restorable in its current lifecycle state."""
+
+
+@dataclass(frozen=True, slots=True)
+class NonFifoParetoSessionIdentity:
+    """Complete identity fence for one finite non-FIFO Pareto session."""
+
+    start: Any
+    goal: Any
+    departure_time: datetime
+    objective_count: int
+    pareto_pruning: bool
+    max_expansions: int
+    max_labels: int
+    max_queue: int
+    max_edge_evaluations: int
+    maximum_elapsed_seconds: float | None
+    neighbor_digest: str
+    evaluator_digest: str
+    fixture_digest: str
+    schema_version: str = "c.p0.2-nonfifo-pareto-session.v1"
+
+    @classmethod
+    def from_callbacks(
+        cls,
+        *,
+        start: Any,
+        goal: Any,
+        departure_time: datetime,
+        objective_count: int,
+        pareto_pruning: bool,
+        max_expansions: int,
+        max_labels: int,
+        max_queue: int,
+        max_edge_evaluations: int,
+        maximum_elapsed: timedelta | None,
+        neighbors: Callable[[Any], Iterable[Any]],
+        evaluate_edge: Callable[
+            [Any, Any, datetime], NonFifoTransition | NonFifoParetoTransition
+        ],
+        fixture_digest: str,
+    ) -> NonFifoParetoSessionIdentity:
+        return cls(
+            start=start,
+            goal=goal,
+            departure_time=departure_time,
+            objective_count=objective_count,
+            pareto_pruning=pareto_pruning,
+            max_expansions=max_expansions,
+            max_labels=max_labels,
+            max_queue=max_queue,
+            max_edge_evaluations=max_edge_evaluations,
+            maximum_elapsed_seconds=(
+                maximum_elapsed.total_seconds() if maximum_elapsed is not None else None
+            ),
+            neighbor_digest=_callback_digest(neighbors),
+            evaluator_digest=_callback_digest(evaluate_edge),
+            fixture_digest=fixture_digest,
+        )
+
+    @property
+    def digest(self) -> str:
+        return _digest(
+            {
+                "schema_version": self.schema_version,
+                "start": self.start,
+                "goal": self.goal,
+                "departure_time": self.departure_time,
+                "objective_count": self.objective_count,
+                "pareto_pruning": self.pareto_pruning,
+                "max_expansions": self.max_expansions,
+                "max_labels": self.max_labels,
+                "max_queue": self.max_queue,
+                "max_edge_evaluations": self.max_edge_evaluations,
+                "maximum_elapsed_seconds": self.maximum_elapsed_seconds,
+                "neighbor_digest": self.neighbor_digest,
+                "evaluator_digest": self.evaluator_digest,
+                "fixture_digest": self.fixture_digest,
+            }
+        )
+
+    @property
+    def policy_digest(self) -> str:
+        return _digest(
+            {
+                "objective_count": self.objective_count,
+                "pareto_pruning": self.pareto_pruning,
+                "max_expansions": self.max_expansions,
+                "max_labels": self.max_labels,
+                "max_queue": self.max_queue,
+                "max_edge_evaluations": self.max_edge_evaluations,
+                "maximum_elapsed_seconds": self.maximum_elapsed_seconds,
+            }
+        )
+
+    def assert_valid(self) -> None:
+        if self.schema_version != "c.p0.2-nonfifo-pareto-session.v1":
+            raise NonFifoParetoSessionIdentityMismatch("unsupported session schema")
+        if self.departure_time.tzinfo is None or self.departure_time.utcoffset() is None:
+            raise NonFifoParetoSessionIdentityMismatch("departure_time must be timezone-aware")
+        if (
+            isinstance(self.objective_count, bool)
+            or not isinstance(self.objective_count, int)
+            or self.objective_count < 1
+        ):
+            raise NonFifoParetoSessionIdentityMismatch("objective_count must be positive")
+        if not isinstance(self.pareto_pruning, bool):
+            raise NonFifoParetoSessionIdentityMismatch("pareto_pruning must be boolean")
+        limits = (
+            self.max_expansions,
+            self.max_labels,
+            self.max_queue,
+            self.max_edge_evaluations,
+        )
+        if any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 1
+            for value in limits
+        ):
+            raise NonFifoParetoSessionIdentityMismatch(
+                "session limits must be positive integers"
+            )
+        if self.maximum_elapsed_seconds is not None and self.maximum_elapsed_seconds <= 0:
+            raise NonFifoParetoSessionIdentityMismatch("maximum_elapsed must be positive")
+        if any(
+            not isinstance(value, str) or not value
+            for value in (self.neighbor_digest, self.evaluator_digest, self.fixture_digest)
+        ):
+            raise NonFifoParetoSessionIdentityMismatch("session identity digests are incomplete")
+
+
+@dataclass(frozen=True, slots=True)
+class NonFifoParetoCheckpoint:
+    """Immutable in-process snapshot for a READY/PAUSED Pareto session."""
+
+    identity: NonFifoParetoSessionIdentity
+    state: NonFifoParetoSessionState
+    labels: tuple[NonFifoParetoLabel, ...]
+    goals: tuple[NonFifoParetoLabel, ...]
+    queue: tuple[tuple[tuple[float, ...], datetime, int, NonFifoParetoLabel], ...]
+    serial: int
+    expanded: int
+    generated: int
+    queue_peak: int
+    edge_evaluations: int
+    total_labels: int
+    pareto_pruned: int
+    evaluator_errors: tuple[str, ...] = ()
+    state_digest: str = ""
+
+    def __post_init__(self) -> None:
+        self.identity.assert_valid()
+        if self.state not in (
+            NonFifoParetoSessionState.READY,
+            NonFifoParetoSessionState.PAUSED,
+        ):
+            raise NonFifoParetoSessionRestoreError(
+                "only READY or PAUSED sessions can be checkpointed"
+            )
+        expected = self._calculated_state_digest()
+        if self.state_digest and self.state_digest != expected:
+            raise NonFifoParetoSessionRestoreError("checkpoint state digest mismatch")
+        object.__setattr__(self, "state_digest", expected)
+
+    def _calculated_state_digest(self) -> str:
+        return _digest(
+            {
+                "identity": self.identity.digest,
+                "state": self.state,
+                "labels": tuple(_pareto_label_payload(label) for label in self.labels),
+                "goals": tuple(_pareto_label_payload(label) for label in self.goals),
+                "queue": tuple(
+                    (
+                        costs,
+                        arrival,
+                        serial,
+                        _pareto_label_payload(label),
+                    )
+                    for costs, arrival, serial, label in self.queue
+                ),
+                "serial": self.serial,
+                "expanded": self.expanded,
+                "generated": self.generated,
+                "queue_peak": self.queue_peak,
+                "edge_evaluations": self.edge_evaluations,
+                "total_labels": self.total_labels,
+                "pareto_pruned": self.pareto_pruned,
+                "evaluator_errors": self.evaluator_errors,
+            }
+        )
+
+    def assert_valid(self) -> None:
+        if self.state_digest != self._calculated_state_digest():
+            raise NonFifoParetoSessionRestoreError("checkpoint state digest mismatch")
+
+    @property
+    def digest(self) -> str:
+        return self.state_digest
+
+
 def search_non_fifo(
     *,
     start: Any,
@@ -474,7 +704,7 @@ def search_non_fifo(
     )
 
 
-def search_non_fifo_pareto(
+def _legacy_search_non_fifo_pareto(
     *,
     start: Any,
     goal: Any,
@@ -669,6 +899,424 @@ def search_non_fifo_pareto(
     )
 
 
+def _callback_digest(callback: Any) -> str:
+    """Fingerprint a finite-session callback without using process identity."""
+
+    explicit = getattr(callback, "__non_fifo_identity__", None)
+    if isinstance(explicit, str) and explicit.strip():
+        return f"explicit:{explicit.strip()}"
+    function = getattr(callback, "__func__", callback)
+    code = getattr(function, "__code__", None)
+    if code is None:
+        return f"type:{type(callback).__module__}.{type(callback).__qualname__}"
+    closure = []
+    for cell in getattr(function, "__closure__", ()) or ():
+        try:
+            value = cell.cell_contents
+        except ValueError:
+            value = None
+        closure.append(_jsonable(value))
+    payload = {
+        "module": getattr(function, "__module__", ""),
+        "qualname": getattr(function, "__qualname__", ""),
+        "code": code.co_code.hex(),
+        "consts": _jsonable(code.co_consts),
+        "names": _jsonable(code.co_names),
+        "defaults": _jsonable(getattr(function, "__defaults__", None)),
+        "closure": closure,
+    }
+    return f"code:{_digest(payload)}"
+
+
+class NonFifoParetoSession:
+    """A resumable finite exact-arrival Pareto research session.
+
+    The callbacks remain process-local and are never serialized.  A restore
+    therefore requires the caller to provide callbacks whose deterministic
+    digests match the checkpoint identity.  This class is intentionally not
+    exported through the production planner or any C/D contract.
+    """
+
+    __slots__ = (
+        "cancel_check",
+        "edge_evaluations",
+        "evaluate_edge",
+        "evaluator_errors",
+        "expanded",
+        "generated",
+        "goals",
+        "identity",
+        "labels_by_key",
+        "maximum_elapsed",
+        "neighbors",
+        "pareto_pruned",
+        "queue",
+        "queue_peak",
+        "result",
+        "serial",
+        "state",
+        "total_labels",
+    )
+
+    def __init__(
+        self,
+        *,
+        start: Any,
+        goal: Any,
+        departure_time: datetime,
+        neighbors: Callable[[Any], Iterable[Any]],
+        evaluate_edge: Callable[
+            [Any, Any, datetime], NonFifoTransition | NonFifoParetoTransition
+        ],
+        objective_count: int = 1,
+        pareto_pruning: bool = False,
+        max_expansions: int = 50_000,
+        max_labels: int = 100_000,
+        max_queue: int = 50_000,
+        max_edge_evaluations: int = 400_000,
+        maximum_elapsed: timedelta | None = None,
+        fixture_digest: str = "unspecified-fixture",
+        cancel_check: Callable[[], bool] | None = None,
+        identity: NonFifoParetoSessionIdentity | None = None,
+    ) -> None:
+        candidate_identity = NonFifoParetoSessionIdentity.from_callbacks(
+            start=start,
+            goal=goal,
+            departure_time=departure_time,
+            objective_count=objective_count,
+            pareto_pruning=pareto_pruning,
+            max_expansions=max_expansions,
+            max_labels=max_labels,
+            max_queue=max_queue,
+            max_edge_evaluations=max_edge_evaluations,
+            maximum_elapsed=maximum_elapsed,
+            neighbors=neighbors,
+            evaluate_edge=evaluate_edge,
+            fixture_digest=fixture_digest,
+        )
+        expected_identity = candidate_identity if identity is None else identity
+        expected_identity.assert_valid()
+        if identity is not None and identity != candidate_identity:
+            raise NonFifoParetoSessionIdentityMismatch(
+                "session parameters or callback digest do not match identity"
+            )
+        self.identity = expected_identity
+        self.neighbors = neighbors
+        self.evaluate_edge = evaluate_edge
+        self.cancel_check = cancel_check
+        self.maximum_elapsed = (
+            timedelta(seconds=expected_identity.maximum_elapsed_seconds)
+            if expected_identity.maximum_elapsed_seconds is not None
+            else None
+        )
+        self._initialize()
+
+    def _initialize(self) -> None:
+        departure = self.identity.departure_time.astimezone(UTC)
+        initial = NonFifoParetoLabel(
+            self.identity.start,
+            departure,
+            (0.0,) * self.identity.objective_count,
+            (self.identity.start,),
+        )
+        self.state = NonFifoParetoSessionState.READY
+        self.labels_by_key = {initial.exact_key: [initial]}
+        self.queue = [(initial.costs, departure, 0, initial)]
+        self.serial = 0
+        self.expanded = 0
+        self.generated = 0
+        self.queue_peak = 1
+        self.edge_evaluations = 0
+        self.total_labels = 1
+        self.pareto_pruned = 0
+        self.evaluator_errors = []
+        self.goals = []
+        self.result = None
+
+    @classmethod
+    def _restore(
+        cls,
+        checkpoint: NonFifoParetoCheckpoint,
+        *,
+        neighbors: Callable[[Any], Iterable[Any]],
+        evaluate_edge: Callable[
+            [Any, Any, datetime], NonFifoTransition | NonFifoParetoTransition
+        ],
+        cancel_check: Callable[[], bool] | None,
+    ) -> NonFifoParetoSession:
+        checkpoint.assert_valid()
+        identity = checkpoint.identity
+        if _callback_digest(neighbors) != identity.neighbor_digest:
+            raise NonFifoParetoSessionIdentityMismatch("neighbor callback digest mismatch")
+        if _callback_digest(evaluate_edge) != identity.evaluator_digest:
+            raise NonFifoParetoSessionIdentityMismatch("evaluator callback digest mismatch")
+        session = cls.__new__(cls)
+        session.identity = identity
+        session.neighbors = neighbors
+        session.evaluate_edge = evaluate_edge
+        session.cancel_check = cancel_check
+        session.maximum_elapsed = (
+            timedelta(seconds=identity.maximum_elapsed_seconds)
+            if identity.maximum_elapsed_seconds is not None
+            else None
+        )
+        session.state = checkpoint.state
+        session.labels_by_key = {}
+        for label in checkpoint.labels:
+            session.labels_by_key.setdefault(label.exact_key, []).append(label)
+        session.queue = list(checkpoint.queue)
+        heapify(session.queue)
+        session.serial = checkpoint.serial
+        session.expanded = checkpoint.expanded
+        session.generated = checkpoint.generated
+        session.queue_peak = checkpoint.queue_peak
+        session.edge_evaluations = checkpoint.edge_evaluations
+        session.total_labels = checkpoint.total_labels
+        session.pareto_pruned = checkpoint.pareto_pruned
+        session.evaluator_errors = list(checkpoint.evaluator_errors)
+        session.goals = list(checkpoint.goals)
+        session.result = None
+        return session
+
+    @property
+    def session_id(self) -> str:
+        return self.identity.digest
+
+    @property
+    def policy_digest(self) -> str:
+        return self.identity.policy_digest
+
+    def _finish(
+        self,
+        status: NonFifoSearchStatus,
+        reason: str | None,
+    ) -> NonFifoParetoSearchResult:
+        self.state = NonFifoParetoSessionState(status.value)
+        self.result = _pareto_result(
+            status,
+            self.goals,
+            self.labels_by_key,
+            self.expanded,
+            self.generated,
+            self.queue_peak,
+            self.edge_evaluations,
+            self.pareto_pruned,
+            self.evaluator_errors,
+            reason,
+            goal_node=self.identity.goal,
+            pareto_pruning=self.identity.pareto_pruning,
+            search_limits=(
+                self.identity.max_expansions,
+                self.identity.max_labels,
+                self.identity.max_queue,
+                self.identity.max_edge_evaluations,
+            ),
+        )
+        return self.result
+
+    def advance(self, expansion_slice: int | None = None) -> NonFifoParetoSearchResult | None:
+        """Advance up to a slice; return ``None`` only while paused."""
+
+        if expansion_slice is not None and (
+            isinstance(expansion_slice, bool) or expansion_slice < 1
+        ):
+            raise ValueError("expansion_slice must be a positive integer or None")
+        if self.state in (
+            NonFifoParetoSessionState.GOAL_FOUND,
+            NonFifoParetoSessionState.EXHAUSTED,
+            NonFifoParetoSessionState.RESOURCE_LIMIT,
+            NonFifoParetoSessionState.CANCELLED,
+            NonFifoParetoSessionState.EVALUATOR_FAILURE,
+        ):
+            return self.result
+        if self.state is NonFifoParetoSessionState.PAUSED:
+            self.state = NonFifoParetoSessionState.READY
+        expanded_this_call = 0
+        limits = self.identity
+        while self.queue:
+            if _cancelled(self.cancel_check):
+                return self._finish(NonFifoSearchStatus.CANCELLED, "cancelled")
+            if expansion_slice is not None and expanded_this_call >= expansion_slice:
+                self.state = NonFifoParetoSessionState.PAUSED
+                return None
+            _, _, _, label = heappop(self.queue)
+            if not _contains_label(self.labels_by_key[label.exact_key], label):
+                continue
+            self.expanded += 1
+            expanded_this_call += 1
+            if self.expanded > limits.max_expansions:
+                return self._finish(NonFifoSearchStatus.RESOURCE_LIMIT, "search_limit_exceeded")
+            if label.node == limits.goal:
+                self.goals.append(label)
+                continue
+            try:
+                neighbours = _ordered_neighbors(self.neighbors(label.node))
+            except Exception as error:
+                self.evaluator_errors.append(f"{type(error).__name__}:{error}")
+                continue
+            for neighbor in neighbours:
+                if _cancelled(self.cancel_check):
+                    return self._finish(NonFifoSearchStatus.CANCELLED, "cancelled")
+                self.edge_evaluations += 1
+                if self.edge_evaluations > limits.max_edge_evaluations:
+                    return self._finish(NonFifoSearchStatus.RESOURCE_LIMIT, "search_limit_exceeded")
+                try:
+                    transition = self.evaluate_edge(label.node, neighbor, label.arrival_time)
+                    transition = _coerce_pareto_transition(
+                        transition, limits.objective_count
+                    )
+                    if transition.arrival_time <= label.arrival_time:
+                        raise NonFifoEvaluationError("arrival_not_strictly_later")
+                    if transition.arrival_time < limits.departure_time:
+                        raise NonFifoEvaluationError("arrival_before_departure")
+                except Exception as error:
+                    self.evaluator_errors.append(f"{type(error).__name__}:{error}")
+                    continue
+                if self.maximum_elapsed is not None and (
+                    transition.arrival_time - limits.departure_time > self.maximum_elapsed
+                ):
+                    continue
+                next_label = NonFifoParetoLabel(
+                    neighbor,
+                    transition.arrival_time,
+                    tuple(
+                        left + right
+                        for left, right in zip(
+                            label.costs, transition.costs, strict=True
+                        )
+                    ),
+                    (*label.path, neighbor),
+                    (*label.transitions, transition),
+                )
+                frontier = self.labels_by_key.setdefault(next_label.exact_key, [])
+                if self.identity.pareto_pruning and any(
+                    existing.dominates(next_label) for existing in frontier
+                ):
+                    self.pareto_pruned += 1
+                    continue
+                if self.total_labels >= limits.max_labels:
+                    return self._finish(NonFifoSearchStatus.RESOURCE_LIMIT, "search_limit_exceeded")
+                frontier.append(next_label)
+                self.total_labels += 1
+                self.serial += 1
+                heappush(
+                    self.queue,
+                    (next_label.costs, next_label.arrival_time, self.serial, next_label),
+                )
+                self.generated += 1
+                self.queue_peak = max(self.queue_peak, len(self.queue))
+                if len(self.queue) > limits.max_queue:
+                    return self._finish(NonFifoSearchStatus.RESOURCE_LIMIT, "search_limit_exceeded")
+        if self.evaluator_errors:
+            return self._finish(NonFifoSearchStatus.EVALUATOR_FAILURE, "evaluator_failure")
+        if self.goals:
+            return self._finish(NonFifoSearchStatus.GOAL_FOUND, None)
+        return self._finish(NonFifoSearchStatus.EXHAUSTED, "no_route")
+
+    def run(self) -> NonFifoParetoSearchResult:
+        result = self.advance()
+        if result is None:
+            raise RuntimeError("unbounded Pareto session unexpectedly paused")
+        return result
+
+    def checkpoint(self) -> NonFifoParetoCheckpoint:
+        if self.state not in (
+            NonFifoParetoSessionState.READY,
+            NonFifoParetoSessionState.PAUSED,
+        ):
+            raise NonFifoParetoSessionRestoreError(
+                "only READY or PAUSED sessions can be checkpointed"
+            )
+        labels = tuple(
+            label for values in self.labels_by_key.values() for label in values
+        )
+        return NonFifoParetoCheckpoint(
+            identity=self.identity,
+            state=self.state,
+            labels=labels,
+            goals=tuple(self.goals),
+            queue=tuple(self.queue),
+            serial=self.serial,
+            expanded=self.expanded,
+            generated=self.generated,
+            queue_peak=self.queue_peak,
+            edge_evaluations=self.edge_evaluations,
+            total_labels=self.total_labels,
+            pareto_pruned=self.pareto_pruned,
+            evaluator_errors=tuple(self.evaluator_errors),
+        )
+
+
+def create_non_fifo_pareto_session(
+    **kwargs: Any,
+) -> NonFifoParetoSession:
+    """Create an explicit finite Pareto session with a complete identity."""
+
+    return NonFifoParetoSession(**kwargs)
+
+
+def restore_non_fifo_pareto_session(
+    checkpoint: NonFifoParetoCheckpoint,
+    *,
+    neighbors: Callable[[Any], Iterable[Any]],
+    evaluate_edge: Callable[
+        [Any, Any, datetime], NonFifoTransition | NonFifoParetoTransition
+    ],
+    cancel_check: Callable[[], bool] | None = None,
+    identity: NonFifoParetoSessionIdentity | None = None,
+) -> NonFifoParetoSession:
+    """Restore a paused finite session after all identity fences."""
+
+    if not isinstance(checkpoint, NonFifoParetoCheckpoint):
+        raise NonFifoParetoSessionRestoreError("checkpoint type is invalid")
+    checkpoint.assert_valid()
+    if identity is not None and identity != checkpoint.identity:
+        raise NonFifoParetoSessionIdentityMismatch("restore identity mismatch")
+    return NonFifoParetoSession._restore(
+        checkpoint,
+        neighbors=neighbors,
+        evaluate_edge=evaluate_edge,
+        cancel_check=cancel_check,
+    )
+
+
+def search_non_fifo_pareto(
+    *,
+    start: Any,
+    goal: Any,
+    departure_time: datetime,
+    neighbors: Callable[[Any], Iterable[Any]],
+    evaluate_edge: Callable[[Any, Any, datetime], NonFifoTransition | NonFifoParetoTransition],
+    objective_count: int = 1,
+    pareto_pruning: bool = False,
+    max_expansions: int = 50_000,
+    max_labels: int = 100_000,
+    max_queue: int = 50_000,
+    max_edge_evaluations: int = 400_000,
+    cancel_check: Callable[[], bool] | None = None,
+    maximum_elapsed: timedelta | None = None,
+    fixture_digest: str = "one-shot-fixture",
+) -> NonFifoParetoSearchResult:
+    """Run one finite session to completion with the historical API."""
+
+    return create_non_fifo_pareto_session(
+        start=start,
+        goal=goal,
+        departure_time=departure_time,
+        neighbors=neighbors,
+        evaluate_edge=evaluate_edge,
+        objective_count=objective_count,
+        pareto_pruning=pareto_pruning,
+        max_expansions=max_expansions,
+        max_labels=max_labels,
+        max_queue=max_queue,
+        max_edge_evaluations=max_edge_evaluations,
+        cancel_check=cancel_check,
+        maximum_elapsed=maximum_elapsed,
+        fixture_digest=fixture_digest,
+    ).run()
+
+
 def _validate_non_fifo_limits(
     *,
     objective_count: int,
@@ -831,8 +1479,21 @@ def _result(
 
 
 def _jsonable(value: Any) -> Any:
+    if isinstance(value, CodeType):
+        return {
+            "co_code": value.co_code.hex(),
+            "co_consts": _jsonable(value.co_consts),
+            "co_names": _jsonable(value.co_names),
+            "co_varnames": _jsonable(value.co_varnames),
+        }
     if isinstance(value, datetime):
         return value.astimezone(UTC).isoformat(timespec="microseconds")
+    if isinstance(value, timedelta):
+        return value.total_seconds()
+    if isinstance(value, StrEnum):
+        return value.value
+    if isinstance(value, NonFifoParetoLabel):
+        return _pareto_label_payload(value)
     if isinstance(value, NonFifoBusinessEvidence):
         return {
             "speed_knots": value.speed_knots,
@@ -860,19 +1521,30 @@ def _jsonable(value: Any) -> Any:
         return {str(key): _jsonable(item) for key, item in value.items()}
     if isinstance(value, (tuple, list)):
         return [_jsonable(item) for item in value]
-    return value
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    return {"type": f"{type(value).__module__}.{type(value).__qualname__}"}
 
 
 __all__ = [
     "NonFifoBusinessEvidence",
     "NonFifoEvaluationError",
     "NonFifoLabel",
+    "NonFifoParetoCheckpoint",
     "NonFifoParetoLabel",
     "NonFifoParetoSearchResult",
+    "NonFifoParetoSession",
+    "NonFifoParetoSessionError",
+    "NonFifoParetoSessionIdentity",
+    "NonFifoParetoSessionIdentityMismatch",
+    "NonFifoParetoSessionRestoreError",
+    "NonFifoParetoSessionState",
     "NonFifoParetoTransition",
     "NonFifoSearchResult",
     "NonFifoSearchStatus",
     "NonFifoTransition",
+    "create_non_fifo_pareto_session",
+    "restore_non_fifo_pareto_session",
     "search_non_fifo",
     "search_non_fifo_pareto",
 ]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
@@ -11,9 +12,14 @@ import pytest
 
 from arctic_route_planning.planners.non_fifo_feasibility import (
     NonFifoBusinessEvidence,
+    NonFifoParetoSessionIdentityMismatch,
+    NonFifoParetoSessionRestoreError,
+    NonFifoParetoSessionState,
     NonFifoParetoTransition,
     NonFifoSearchStatus,
     NonFifoTransition,
+    create_non_fifo_pareto_session,
+    restore_non_fifo_pareto_session,
     search_non_fifo,
     search_non_fifo_pareto,
 )
@@ -645,3 +651,160 @@ def test_pareto_failed_result_has_no_frontier_or_partial_route() -> None:
     assert result.label is None
     assert result.semantic_digest is None
     assert result.frontier_digest
+
+
+def test_pareto_session_slice_restore_matches_one_shot_frontier() -> None:
+    graph = {
+        "start": ("left", "right"),
+        "left": ("goal",),
+        "right": ("goal",),
+        "goal": (),
+    }
+
+    def neighbours(node: str) -> tuple[str, ...]:
+        return graph[node]
+
+    def evaluate(start: str, _end: str, arrival: datetime) -> NonFifoParetoTransition:
+        if start == "start":
+            return NonFifoParetoTransition(arrival + timedelta(hours=1), (0.0, 0.0))
+        costs = (1.0, 4.0) if start == "left" else (4.0, 1.0)
+        return NonFifoParetoTransition(T0 + timedelta(hours=2), costs)
+
+    common = {
+        "start": "start",
+        "goal": "goal",
+        "departure_time": T0,
+        "neighbors": neighbours,
+        "evaluate_edge": evaluate,
+        "objective_count": 2,
+        "pareto_pruning": True,
+        "fixture_digest": "m12-fixture",
+    }
+    one_shot = search_non_fifo_pareto(**common)
+    session = create_non_fifo_pareto_session(**common)
+    assert session.advance(expansion_slice=1) is None
+    assert session.state is NonFifoParetoSessionState.PAUSED
+    checkpoint = session.checkpoint()
+    restored = restore_non_fifo_pareto_session(
+        checkpoint,
+        neighbors=neighbours,
+        evaluate_edge=evaluate,
+    )
+    restored_result = restored.run()
+
+    assert restored_result.status is NonFifoSearchStatus.GOAL_FOUND
+    assert restored_result.semantic_digest == one_shot.semantic_digest
+    assert restored_result.frontier_digest == one_shot.frontier_digest
+    assert restored_result.goal_frontier == one_shot.goal_frontier
+    assert restored_result.expanded == one_shot.expanded
+    assert restored_result.generated == one_shot.generated
+    assert restored_result.pareto_pruned == one_shot.pareto_pruned
+
+
+def test_pareto_session_slice_only_reaches_terminal_result() -> None:
+    graph = {"start": ("middle",), "middle": ("goal",), "goal": ()}
+
+    def neighbours(node: str) -> tuple[str, ...]:
+        return graph[node]
+
+    def evaluate(_start: str, _end: str, arrival: datetime) -> NonFifoParetoTransition:
+        return NonFifoParetoTransition(arrival + timedelta(hours=1), (1.0, 1.0))
+
+    session = create_non_fifo_pareto_session(
+        start="start",
+        goal="goal",
+        departure_time=T0,
+        neighbors=neighbours,
+        evaluate_edge=evaluate,
+        objective_count=2,
+        fixture_digest="m12-slice-fixture",
+    )
+    result = None
+    pauses = 0
+    while result is None:
+        result = session.advance(expansion_slice=1)
+        if result is None:
+            pauses += 1
+            assert session.state is NonFifoParetoSessionState.PAUSED
+
+    assert pauses >= 1
+    assert result.status is NonFifoSearchStatus.GOAL_FOUND
+    assert session.state is NonFifoParetoSessionState.GOAL_FOUND
+    assert result.label is not None
+
+
+def test_pareto_session_restore_rejects_identity_and_callback_drift() -> None:
+    graph = {"start": ("goal",), "goal": ()}
+
+    def neighbours(node: str) -> tuple[str, ...]:
+        return graph[node]
+
+    def evaluate(_start: str, _end: str, arrival: datetime) -> NonFifoParetoTransition:
+        return NonFifoParetoTransition(arrival + timedelta(hours=1), (1.0, 1.0))
+
+    session = create_non_fifo_pareto_session(
+        start="start",
+        goal="goal",
+        departure_time=T0,
+        neighbors=neighbours,
+        evaluate_edge=evaluate,
+        objective_count=2,
+        fixture_digest="m12-drift-fixture",
+    )
+    checkpoint = session.checkpoint()
+    changed_policy = replace(checkpoint.identity, pareto_pruning=True)
+    with pytest.raises(NonFifoParetoSessionIdentityMismatch, match="identity mismatch"):
+        restore_non_fifo_pareto_session(
+            checkpoint,
+            neighbors=neighbours,
+            evaluate_edge=evaluate,
+            identity=changed_policy,
+        )
+
+    def changed_evaluate(
+        _start: str, _end: str, arrival: datetime
+    ) -> NonFifoParetoTransition:
+        return NonFifoParetoTransition(arrival + timedelta(hours=1), (2.0, 2.0))
+
+    with pytest.raises(NonFifoParetoSessionIdentityMismatch, match="evaluator callback"):
+        restore_non_fifo_pareto_session(
+            checkpoint,
+            neighbors=neighbours,
+            evaluate_edge=changed_evaluate,
+        )
+
+
+def test_pareto_session_checkpoint_and_terminal_restore_are_fail_closed() -> None:
+    def evaluate(_start: str, _end: str, arrival: datetime) -> NonFifoParetoTransition:
+        return NonFifoParetoTransition(arrival + timedelta(hours=1), (1.0, 1.0))
+
+    session = create_non_fifo_pareto_session(
+        start="start",
+        goal="goal",
+        departure_time=T0,
+        neighbors=lambda _node: ("goal",),
+        evaluate_edge=evaluate,
+        objective_count=2,
+        cancel_check=lambda: True,
+        fixture_digest="m12-cancel-fixture",
+    )
+    cancelled = session.advance()
+    assert cancelled is not None
+    assert cancelled.status is NonFifoSearchStatus.CANCELLED
+    assert cancelled.label is None
+    assert cancelled.goal_frontier == ()
+    with pytest.raises(NonFifoParetoSessionRestoreError, match="READY or PAUSED"):
+        session.checkpoint()
+
+    ready = create_non_fifo_pareto_session(
+        start="start",
+        goal="goal",
+        departure_time=T0,
+        neighbors=lambda _node: ("goal",),
+        evaluate_edge=evaluate,
+        objective_count=2,
+        fixture_digest="m12-checkpoint-fixture",
+    )
+    checkpoint = ready.checkpoint()
+    with pytest.raises(NonFifoParetoSessionRestoreError, match="state digest"):
+        replace(checkpoint, expanded=checkpoint.expanded + 1)
