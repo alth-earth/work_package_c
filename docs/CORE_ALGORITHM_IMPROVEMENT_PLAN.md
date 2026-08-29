@@ -3698,6 +3698,32 @@ boundary 和 `git diff --check`；实验构件仅写入新的 `.runtime/experime
 本地提交并删除辅助 worktree，保留研究分支，不 push；P2.1、P3、ARA* 和所有 production
 candidate 状态保持原结论。
 
+### 【2026-08-30 | PLANNED】P0.2-M28：goal-gated heuristic ordering and queue pressure
+
+M27 在两个真实 `rolling_0_24h` selected-objective 诊断中观察到：认证 heuristic ordering
+使 holdout/development 的 expanded 分别减少约 `7.1%`/`0.6%`，并产生 `745`/`40` 次
+terminal pruning，但 queue peak 同时增加约 `81.5%`/`67.6%`。M28 只处理这个队列压力
+问题，不改变 M27 已验证的 exact-arrival label 语义。
+
+新增显式 C 内部 goal-gated priority policy：在首个 goal label 出现前沿用历史
+`(cost-vector, arrival, serial)` 顺序；首个 goal 出现后，再对**尚未扩展**的 queue entries
+一次性重排为认证的 `cost + lower-bound` 顺序，以帮助 selected-route terminal bound
+尽早发挥作用。重排只改变 heap key，保留全部 label、serial、exact arrival 和既有
+tie-break；不删除 queue entry、不删除已扩展 label、不跨 arrival 做支配。policy mode、
+pre/post callback digest、当前 priority phase 和 checkpoint state digest 全部纳入 identity
+fence；缺失/漂移/非有限 callback fail-closed。M27 的 always-priority API 和默认无 callback
+行为保持兼容。
+
+先以 synthetic finite Pareto oracle 验证完整 frontier/selected-route 语义、determinism、
+slice→restore、cancel、resource limit、priority phase reheapify 及 identity drift；然后在
+冻结 state-bound + selected-route terminal bound 的真实 24h 诊断中对 holdout/development
+各选 `fastest` 一次，比较 baseline、M27 always-priority 和 M28 goal-gated priority 的
+expanded、edge evaluation、queue peak、terminal pruning、semantic digest 及资源观察。
+实验结果只作 queue/heuristic 研究证据，不构成完整 frontier、dominance、candidate 或
+Winter 资格；冻结 `50k/100k/50k/400k` 上限不变。若 queue 降低但扩展收益不稳定，记录
+trade-off 并保持 default-off；若仍无净收益，转向有证明的 queue compaction/corridor
+envelope，不提高资源上限。
+
 ### 【2026-08-30 | COMPLETED（selected-objective real diagnostic；not a qualification）】P0.2-M27：Pareto certified heuristic ordering
 
 **实现、隔离与身份。** M27 在 M26 clean research commit 上建立隔离分支
