@@ -2802,3 +2802,42 @@ implementation/lock/config/scope identity；不启动真实 24h，真实输入�
 任一语义、fail-closed、恢复或 identity 失败标记 `NO_PERFORMANCE_PROOF/FAIL`；构件不完整
 标记 `INVALID/PENDING`。M9 的 `REAL_INPUT_24H_RESOURCE_FAIL`、M10 的组合证书边界、M13--M15
 历史结论保持不变。完成后只本地集成、保留研究分支和构件、清理辅助 worktree，不 push。
+
+### 【2026-08-29 | COMPLETED】P0.2-M16：proof-carrying state-bound actual Pareto bridge
+
+本轮在隔离分支 `research/p02-m16-pareto-state-bound-20260829` 完成。计划提交为
+`b749f97`，bridge/测试/runner 实现提交为 `1de6d63`、`4618b28`、`ce54ac1`；最终权威
+evidence 绑定 clean implementation commit `ce54ac1ee7a604bf980925dabfa30129aec1ecba`。
+早期 r1 构件因启动时 worktree 尚有未提交改动，manifest 的 `implementation.dirty=true`，
+按治理规则仅保留为诊断，不纳入结论；r3 为最终权威构件。
+
+**实现边界。** `non_fifo_temporal_pareto.py` 增加显式可选
+`state_bound_certificate` 参数，默认 `None` 的 M14/M15 调用行为不变；无显式证书时仍
+拒绝 planner 上意外安装的 state-bound。显式证书必须是
+`TemporalStateBoundCertificate`，并将证书 digest 纳入 callback/component/session checkpoint
+identity。actual edge traversal 先得到 exact arrival，再调用已有
+`TemporalLabelAStar._should_prune_state_bound`；只有新生成且超出可用证书的 label 被以
+unavailable edge 形式跳过，已扩展 label、不同 exact arrival、evaluator/hard-mask/coverage
+失败、取消和资源状态不被删除或包装成成功。scope、proof、coverage、evaluator 或证书
+digest 不匹配时保持 pruning=0 并记录拒绝原因。checkpoint 同时保存 state-bound digest 和
+累计 checks/pruned/rejection diagnostics，恢复后继续同一证据计数。
+
+**权威 synthetic evidence。** 新增 runner schema
+`c.p0.2-temporal-pareto-state-bound.v1`，构件目录为
+`.runtime/experiments/c-p02-m16-pareto-state-bound-20260829-r3/`，包含 manifest、cases、
+summary、heartbeat 和 `ALL_DONE`。矩阵为
+`certified/scope_mismatch/coverage_incomplete/checkpoint_drift/disabled` ×
+`fastest/low_risk/recommended` × `one_shot/slice_restore/cancelled` × 2 repetitions，
+共 `90/90`。摘要为 `TEMPORAL_NONFIFO_PARETO_STATE_BOUND_MATRIX_PASS`：
+`deterministic=true`、独立 exhaustive oracle 语义对照通过、有效证书观察到真实
+state-bound pruning、scope/coverage/disabled 场景 pruning 为零、checkpoint certificate
+drift 全部拒绝、取消无 partial route/frontier、资源观察 clean。正式默认路径仍为
+`state_bound=disabled`，candidate/Winter 均为 false。
+
+**结论与边界。** 本轮证明有限 actual-edge Pareto bridge 可以在完整 scope 与 proof-carrying
+state bound 下安全拒绝新 label，同时保留 exact-arrival/业务语义和恢复围栏；不证明真实
+连续海洋模型的 corridor 证书、不证明 24h 资源前沿、不改变冻结
+`50k/100k/50k/400k` 上限，也不把 M9 的 `REAL_INPUT_24H_RESOURCE_FAIL` 转为通过。真实
+145 帧输入本轮没有启用该证书路径；下一步另立带真实 scope、独立 admissible bound 证明和
+强制 cgroup 的 Pareto 资源计划。M10、M13、M14、M15、FIFO violation 及 P3/ARA* 历史结论
+保持不变；完成后仅本地集成，不 push。
