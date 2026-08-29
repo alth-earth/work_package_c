@@ -647,6 +647,28 @@ def _summary(cases: list[dict[str, Any]], args: argparse.Namespace, ignored: int
         and len(groups) == len(OBJECTIVES) * args.repetitions
     )
     pair_results = [_pair_ok(group) for group in groups.values()]
+    deterministic_by_cell: dict[str, bool] = {}
+    for objective in OBJECTIVES:
+        for mode in args.modes:
+            selected = [
+                case
+                for case in cases
+                if case.get("objective") == objective.value and case.get("mode") == mode
+            ]
+            signatures = [
+                (
+                    case.get("status"),
+                    case.get("semantic_digest"),
+                    case.get("reference_match"),
+                )
+                for case in selected
+            ]
+            deterministic_by_cell[f"{objective.value}:{mode}"] = (
+                args.repetitions >= 2
+                and len(signatures) == args.repetitions
+                and len(set(map(repr, signatures))) == 1
+            )
+    deterministic = bool(deterministic_by_cell) and all(deterministic_by_cell.values())
     semantic_failure = any(
         case.get("status") == NonFifoSearchStatus.GOAL_FOUND.value
         and case.get("reference_match") is not True
@@ -662,7 +684,7 @@ def _summary(cases: list[dict[str, Any]], args: argparse.Namespace, ignored: int
         status = "NO_PERFORMANCE_PROOF/FAIL"
     elif not complete or not all_terminal:
         status = "INVALID/PENDING"
-    elif not all(pair_results):
+    elif not all(pair_results) or not deterministic:
         status = "NO_PERFORMANCE_PROOF/FAIL"
     elif not resource_clean or not resource_complete:
         status = "REAL_INPUT_SESSION_RESOURCE_FAIL"
@@ -678,6 +700,8 @@ def _summary(cases: list[dict[str, Any]], args: argparse.Namespace, ignored: int
         "matrix_complete": matrix_complete,
         "pair_count": len(pair_results),
         "all_pairs_equivalent": bool(pair_results) and all(pair_results),
+        "deterministic": deterministic,
+        "deterministic_by_cell": deterministic_by_cell,
         "all_resource_clean": resource_clean,
         "resource_evidence_complete": resource_complete,
         "dominance_policy": "disabled",

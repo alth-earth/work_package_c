@@ -141,7 +141,8 @@ def test_summary_never_promotes_partial_mode_matrix(tmp_path: Path) -> None:
                 }
             )
     summary = _RUNNER._summary(cases, args, 0)
-    assert summary["status"] == "REAL_INPUT_SESSION_RESOURCE_FAIL"
+    assert summary["status"] == "NO_PERFORMANCE_PROOF/FAIL"
     assert summary["all_pairs_equivalent"]
+    assert summary["deterministic"] is False
     assert summary["candidate_authorized"] is False
     assert summary["winter_authorized"] is False
