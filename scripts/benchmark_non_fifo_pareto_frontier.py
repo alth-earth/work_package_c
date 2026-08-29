@@ -30,7 +30,8 @@ from arctic_route_planning.planners.non_fifo_feasibility import (
     NonFifoBusinessEvidence,
     NonFifoParetoTransition,
     NonFifoSearchStatus,
-    search_non_fifo_pareto,
+    certify_non_fifo_pareto_frontier,
+    create_non_fifo_pareto_session,
 )
 
 SCHEMA_VERSION = "c.p0.2-nonfifo-pareto-frontier.v1"
@@ -421,7 +422,7 @@ def _worker_record(
         os.sched_setaffinity(0, {cpu})
     started = perf_counter()
     cancel_check = (lambda: True) if fixture.name == "cancelled" else None
-    result = search_non_fifo_pareto(
+    session = create_non_fifo_pareto_session(
         start=fixture.start,
         goal=fixture.goal,
         departure_time=T0,
@@ -432,6 +433,12 @@ def _worker_record(
         cancel_check=cancel_check,
         maximum_elapsed=fixture.maximum_elapsed,
         **fixture.limits,
+    )
+    result = session.run()
+    certificate = certify_non_fifo_pareto_frontier(
+        result,
+        identity=session.identity,
+        scope_digest=f"fixture:{fixture_name}:{objective}",
     )
     elapsed_ms = (perf_counter() - started) * 1000.0
     oracle = (
@@ -452,6 +459,20 @@ def _worker_record(
         "semantic_digest": result.semantic_digest,
         "frontier": [_label_payload(label) for label in result.goal_frontier],
         "frontier_digest": result.frontier_digest,
+        "frontier_certificate": {
+            "digest": certificate.digest,
+            "usable": certificate.usable,
+            "complete": certificate.complete,
+            "status": certificate.status.value,
+            "scope_digest": certificate.scope_digest,
+            "session_identity_digest": certificate.session_identity_digest,
+            "comparison_identity_digest": certificate.comparison_identity_digest,
+            "policy_digest": certificate.policy_digest,
+            "frontier_digest": certificate.frontier_digest,
+            "frontier_count": certificate.frontier_count,
+            "goal_label_count": certificate.goal_label_count,
+            "rejection_reason": certificate.rejection_reason,
+        },
         "oracle": oracle_value,
         "pareto_pruned": result.pareto_pruned,
         "expanded": result.expanded,
@@ -606,6 +627,7 @@ def _summary(cases: list[dict[str, Any]], args: argparse.Namespace) -> dict[str,
     resource_evidence_complete = True
     resource_clean = True
     observed_pruning = 0
+    certificate_complete = True
     for (fixture_name, _objective, policy), values in groups.items():
         fingerprints = {
             _digest(
@@ -639,6 +661,17 @@ def _summary(cases: list[dict[str, Any]], args: argparse.Namespace) -> dict[str,
             else:
                 resource_clean &= int(resource.get("process_swap_kib") or 0) == 0
             expected_statuses &= value.get("status") == value.get("expected_status")
+            certificate = value.get("frontier_certificate")
+            if not isinstance(certificate, Mapping):
+                certificate_complete = False
+            elif value.get("status") == NonFifoSearchStatus.GOAL_FOUND.value:
+                certificate_complete &= certificate.get("usable") is True
+                certificate_complete &= certificate.get("complete") is True
+                certificate_complete &= int(certificate.get("frontier_count") or 0) == len(
+                    value.get("frontier") or []
+                )
+            else:
+                certificate_complete &= certificate.get("usable") is False
             if value.get("status") == NonFifoSearchStatus.GOAL_FOUND.value:
                 oracle = value.get("oracle") or {}
                 semantic &= value.get("frontier") == oracle.get("frontier")
@@ -666,7 +699,11 @@ def _summary(cases: list[dict[str, Any]], args: argparse.Namespace) -> dict[str,
                 None,
             )
             if baseline is not None and candidate is not None:
-                policy_bound &= baseline["frontier_digest"] != candidate["frontier_digest"]
+                policy_bound &= baseline["frontier"] == candidate["frontier"]
+                policy_bound &= (
+                    baseline["frontier_certificate"].get("policy_digest")
+                    != candidate["frontier_certificate"].get("policy_digest")
+                )
     status = (
         "TEMPORAL_NONFIFO_PARETO_FRONTIER_MATRIX_PASS"
         if (
@@ -676,6 +713,7 @@ def _summary(cases: list[dict[str, Any]], args: argparse.Namespace) -> dict[str,
             and fail_closed
             and policy_bound
             and expected_statuses
+            and certificate_complete
             and not worker_errors
             and resource_evidence_complete
             and resource_clean
@@ -693,6 +731,7 @@ def _summary(cases: list[dict[str, Any]], args: argparse.Namespace) -> dict[str,
         "fail_closed": fail_closed,
         "policy_digest_bound": policy_bound,
         "expected_statuses": expected_statuses,
+        "frontier_certificate_complete": certificate_complete,
         "worker_errors": worker_errors,
         "resource_evidence_complete": resource_evidence_complete,
         "resource_clean": resource_clean,

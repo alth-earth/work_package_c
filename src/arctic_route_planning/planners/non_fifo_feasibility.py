@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import Counter
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -330,6 +331,392 @@ class NonFifoParetoSearchResult:
         return self.frontier_digest
 
 
+class NonFifoFrontierCertificateError(ValueError):
+    """A finite Pareto frontier cannot be certified under the research fence."""
+
+
+class NonFifoFrontierComparisonStatus(StrEnum):
+    """Fail-closed outcomes for comparing two exact-arrival frontiers."""
+
+    MATCH = "MATCH"
+    INCOMPLETE = "INCOMPLETE"
+    IDENTITY_MISMATCH = "IDENTITY_MISMATCH"
+    FRONTIER_MISMATCH = "FRONTIER_MISMATCH"
+
+
+def _frontier_label_token(label: NonFifoParetoLabel) -> str:
+    """Return the canonical token for one complete goal-frontier label."""
+
+    return json.dumps(
+        _pareto_label_payload(label),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _canonical_frontier_digest(labels: Iterable[NonFifoParetoLabel]) -> str:
+    """Digest the complete frontier without embedding search-policy metadata."""
+
+    tokens = tuple(sorted(_frontier_label_token(label) for label in labels))
+    return _digest(
+        {
+            "schema_version": "c.p0.2-nonfifo-frontier-labels.v1",
+            "labels": tokens,
+        }
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class NonFifoParetoFrontierCertificate:
+    """Certificate that one finite Pareto result has a complete goal frontier.
+
+    The certificate is intentionally stricter than a selected-route result.  A
+    resource-limited, cancelled, evaluator-failed, or otherwise incomplete
+    search is never usable, even if it happened to discover a goal label.  The
+    callback-specific session digest remains bound through
+    ``session_identity_digest``; ``comparison_identity_digest`` is the shared
+    input/config fence used when independently implemented searches are
+    compared.
+    """
+
+    session_identity_digest: str
+    comparison_identity_digest: str
+    scope_digest: str
+    policy_digest: str
+    status: NonFifoSearchStatus
+    pareto_pruning: bool
+    search_limits: tuple[int, int, int, int]
+    result_frontier_digest: str
+    frontier_digest: str
+    frontier_count: int
+    goal_label_count: int
+    complete: bool
+    rejection_reason: str | None = None
+    schema_version: str = "c.p0.2-nonfifo-frontier-certificate.v1"
+    certificate_digest: str = ""
+
+    def __post_init__(self) -> None:
+        if self.schema_version != "c.p0.2-nonfifo-frontier-certificate.v1":
+            raise NonFifoFrontierCertificateError("unsupported frontier certificate schema")
+        for name in (
+            "session_identity_digest",
+            "comparison_identity_digest",
+            "scope_digest",
+            "policy_digest",
+            "result_frontier_digest",
+            "frontier_digest",
+        ):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value:
+                raise NonFifoFrontierCertificateError(f"frontier certificate {name} is empty")
+        if not isinstance(self.status, NonFifoSearchStatus):
+            raise NonFifoFrontierCertificateError("frontier certificate status is invalid")
+        if not isinstance(self.pareto_pruning, bool) or not isinstance(self.complete, bool):
+            raise NonFifoFrontierCertificateError("frontier certificate flags are invalid")
+        if (
+            isinstance(self.frontier_count, bool)
+            or not isinstance(self.frontier_count, int)
+            or self.frontier_count < 0
+            or isinstance(self.goal_label_count, bool)
+            or not isinstance(self.goal_label_count, int)
+            or self.goal_label_count < 0
+        ):
+            raise NonFifoFrontierCertificateError("frontier certificate counts are invalid")
+        limits = tuple(self.search_limits)
+        if len(limits) != 4 or any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 1
+            for value in limits
+        ):
+            raise NonFifoFrontierCertificateError("frontier certificate limits are invalid")
+        object.__setattr__(self, "search_limits", limits)
+        if self.complete and (
+            self.status is not NonFifoSearchStatus.GOAL_FOUND
+            or self.frontier_count < 1
+            or self.goal_label_count < self.frontier_count
+            or self.rejection_reason is not None
+        ):
+            raise NonFifoFrontierCertificateError(
+                "complete frontier certificate has an invalid success state"
+            )
+        expected = self._calculated_digest()
+        if self.certificate_digest and self.certificate_digest != expected:
+            raise NonFifoFrontierCertificateError("frontier certificate digest mismatch")
+        object.__setattr__(self, "certificate_digest", expected)
+
+    def _calculated_digest(self) -> str:
+        return _digest(
+            {
+                "schema_version": self.schema_version,
+                "session_identity_digest": self.session_identity_digest,
+                "comparison_identity_digest": self.comparison_identity_digest,
+                "scope_digest": self.scope_digest,
+                "policy_digest": self.policy_digest,
+                "status": self.status,
+                "pareto_pruning": self.pareto_pruning,
+                "search_limits": self.search_limits,
+                "result_frontier_digest": self.result_frontier_digest,
+                "frontier_digest": self.frontier_digest,
+                "frontier_count": self.frontier_count,
+                "goal_label_count": self.goal_label_count,
+                "complete": self.complete,
+                "rejection_reason": self.rejection_reason,
+            }
+        )
+
+    @property
+    def digest(self) -> str:
+        return self.certificate_digest
+
+    @property
+    def usable(self) -> bool:
+        """Whether this certificate may authorize a frontier comparison."""
+
+        return self.complete
+
+    def assert_usable(self) -> None:
+        if not self.usable:
+            raise NonFifoFrontierCertificateError(
+                self.rejection_reason or "frontier certificate is incomplete"
+            )
+
+    @classmethod
+    def from_result(
+        cls,
+        result: NonFifoParetoSearchResult,
+        *,
+        identity: NonFifoParetoSessionIdentity,
+        scope_digest: str,
+    ) -> NonFifoParetoFrontierCertificate:
+        """Build a certificate and retain an explicit reason when unusable."""
+
+        if not isinstance(result, NonFifoParetoSearchResult):
+            raise NonFifoFrontierCertificateError("frontier result type is invalid")
+        if not isinstance(identity, NonFifoParetoSessionIdentity):
+            raise NonFifoFrontierCertificateError("frontier identity type is invalid")
+        identity.assert_valid()
+        if not isinstance(scope_digest, str) or not scope_digest:
+            raise NonFifoFrontierCertificateError("frontier scope digest is empty")
+        frontier = result.goal_frontier
+        expected_limits = (
+            identity.max_expansions,
+            identity.max_labels,
+            identity.max_queue,
+            identity.max_edge_evaluations,
+        )
+        reasons: list[str] = []
+        if result.pareto_pruning is not identity.pareto_pruning:
+            reasons.append("policy_mismatch")
+        if tuple(result.search_limits) != expected_limits:
+            reasons.append("search_limits_mismatch")
+        if result.status is not NonFifoSearchStatus.GOAL_FOUND:
+            reasons.append(f"status:{result.status.value}")
+        if result.label is None:
+            reasons.append("selected_label_missing")
+        if result.reason is not None:
+            reasons.append(f"reason:{result.reason}")
+        if result.evaluator_errors:
+            reasons.append("evaluator_errors")
+        if result.goal_node is not None and result.goal_node != identity.goal:
+            reasons.append("goal_node_mismatch")
+        if result.label is not None and result.label.node != identity.goal:
+            reasons.append("selected_goal_mismatch")
+        if not frontier:
+            reasons.append("frontier_empty")
+        complete = not reasons
+        return cls(
+            session_identity_digest=identity.digest,
+            comparison_identity_digest=identity.comparison_digest,
+            scope_digest=scope_digest,
+            policy_digest=identity.policy_digest,
+            status=result.status,
+            pareto_pruning=identity.pareto_pruning,
+            search_limits=expected_limits,
+            result_frontier_digest=result.frontier_digest,
+            frontier_digest=_canonical_frontier_digest(frontier),
+            frontier_count=len(frontier),
+            goal_label_count=len(result.goal_labels),
+            complete=complete,
+            rejection_reason=None if complete else ";".join(reasons),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class NonFifoParetoFrontierComparison:
+    """Auditable comparison of two independently produced complete frontiers."""
+
+    status: NonFifoFrontierComparisonStatus
+    matched: bool
+    candidate_certificate_digest: str
+    reference_certificate_digest: str
+    candidate_frontier_digest: str
+    reference_frontier_digest: str
+    missing_label_digests: tuple[str, ...] = ()
+    unexpected_label_digests: tuple[str, ...] = ()
+    reason: str | None = None
+    comparison_digest: str = ""
+    schema_version: str = "c.p0.2-nonfifo-frontier-comparison.v1"
+
+    def __post_init__(self) -> None:
+        if self.schema_version != "c.p0.2-nonfifo-frontier-comparison.v1":
+            raise NonFifoFrontierCertificateError("unsupported frontier comparison schema")
+        for name in (
+            "candidate_certificate_digest",
+            "reference_certificate_digest",
+            "candidate_frontier_digest",
+            "reference_frontier_digest",
+        ):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value:
+                raise NonFifoFrontierCertificateError(f"frontier comparison {name} is empty")
+        if not isinstance(self.status, NonFifoFrontierComparisonStatus):
+            raise NonFifoFrontierCertificateError("frontier comparison status is invalid")
+        if not isinstance(self.matched, bool):
+            raise NonFifoFrontierCertificateError("frontier comparison matched flag is invalid")
+        object.__setattr__(self, "missing_label_digests", tuple(self.missing_label_digests))
+        object.__setattr__(self, "unexpected_label_digests", tuple(self.unexpected_label_digests))
+        if (self.status is NonFifoFrontierComparisonStatus.MATCH) != self.matched:
+            raise NonFifoFrontierCertificateError(
+                "frontier comparison status and matched flag disagree"
+            )
+        if self.matched and (
+            self.missing_label_digests
+            or self.unexpected_label_digests
+            or self.reason is not None
+        ):
+            raise NonFifoFrontierCertificateError(
+                "matched frontier comparison contains rejection evidence"
+            )
+        expected = self._calculated_digest()
+        if self.comparison_digest and self.comparison_digest != expected:
+            raise NonFifoFrontierCertificateError("frontier comparison digest mismatch")
+        object.__setattr__(self, "comparison_digest", expected)
+
+    def _calculated_digest(self) -> str:
+        return _digest(
+            {
+                "schema_version": self.schema_version,
+                "status": self.status,
+                "matched": self.matched,
+                "candidate_certificate_digest": self.candidate_certificate_digest,
+                "reference_certificate_digest": self.reference_certificate_digest,
+                "candidate_frontier_digest": self.candidate_frontier_digest,
+                "reference_frontier_digest": self.reference_frontier_digest,
+                "missing_label_digests": self.missing_label_digests,
+                "unexpected_label_digests": self.unexpected_label_digests,
+                "reason": self.reason,
+            }
+        )
+
+    @property
+    def digest(self) -> str:
+        return self.comparison_digest
+
+
+def certify_non_fifo_pareto_frontier(
+    result: NonFifoParetoSearchResult,
+    *,
+    identity: NonFifoParetoSessionIdentity,
+    scope_digest: str,
+) -> NonFifoParetoFrontierCertificate:
+    """Create a scope-bound complete-frontier certificate for a result."""
+
+    return NonFifoParetoFrontierCertificate.from_result(
+        result, identity=identity, scope_digest=scope_digest
+    )
+
+
+def compare_non_fifo_pareto_frontiers(
+    candidate: NonFifoParetoSearchResult,
+    reference: NonFifoParetoSearchResult,
+    *,
+    candidate_identity: NonFifoParetoSessionIdentity,
+    reference_identity: NonFifoParetoSessionIdentity,
+    candidate_scope_digest: str,
+    reference_scope_digest: str,
+) -> NonFifoParetoFrontierComparison:
+    """Compare complete exact-arrival frontiers with fail-closed identity fences.
+
+    Independent implementations normally have different callback bytecode, so
+    the comparison uses each session's shared ``comparison_digest`` plus the
+    explicit scope digest, while retaining full callback-bound certificate
+    digests in the returned evidence.  It never compares only a selected
+    route, and it never applies a numeric tolerance to exact arrival or costs.
+    """
+
+    candidate_certificate = NonFifoParetoFrontierCertificate.from_result(
+        candidate, identity=candidate_identity, scope_digest=candidate_scope_digest
+    )
+    reference_certificate = NonFifoParetoFrontierCertificate.from_result(
+        reference, identity=reference_identity, scope_digest=reference_scope_digest
+    )
+    common_identity = (
+        candidate_identity.comparison_digest == reference_identity.comparison_digest
+        and candidate_scope_digest == reference_scope_digest
+    )
+    if not common_identity:
+        status = NonFifoFrontierComparisonStatus.IDENTITY_MISMATCH
+        reason = "comparison identity or scope mismatch"
+        return NonFifoParetoFrontierComparison(
+            status=status,
+            matched=False,
+            candidate_certificate_digest=candidate_certificate.digest,
+            reference_certificate_digest=reference_certificate.digest,
+            candidate_frontier_digest=candidate_certificate.frontier_digest,
+            reference_frontier_digest=reference_certificate.frontier_digest,
+            reason=reason,
+        )
+    if not candidate_certificate.usable or not reference_certificate.usable:
+        status = NonFifoFrontierComparisonStatus.INCOMPLETE
+        reason = "; ".join(
+            value
+            for value in (
+                f"candidate:{candidate_certificate.rejection_reason}"
+                if not candidate_certificate.usable
+                else None,
+                f"reference:{reference_certificate.rejection_reason}"
+                if not reference_certificate.usable
+                else None,
+            )
+            if value
+        )
+        return NonFifoParetoFrontierComparison(
+            status=status,
+            matched=False,
+            candidate_certificate_digest=candidate_certificate.digest,
+            reference_certificate_digest=reference_certificate.digest,
+            candidate_frontier_digest=candidate_certificate.frontier_digest,
+            reference_frontier_digest=reference_certificate.frontier_digest,
+            reason=reason or "frontier incomplete",
+        )
+
+    candidate_tokens = sorted(_frontier_label_token(label) for label in candidate.goal_frontier)
+    reference_tokens = sorted(_frontier_label_token(label) for label in reference.goal_frontier)
+    candidate_counts = Counter(candidate_tokens)
+    reference_counts = Counter(reference_tokens)
+    missing_tokens = sorted((reference_counts - candidate_counts).elements())
+    unexpected_tokens = sorted((candidate_counts - reference_counts).elements())
+    missing = tuple(_digest(token) for token in missing_tokens)
+    unexpected = tuple(_digest(token) for token in unexpected_tokens)
+    matched = not missing and not unexpected
+    status = (
+        NonFifoFrontierComparisonStatus.MATCH
+        if matched
+        else NonFifoFrontierComparisonStatus.FRONTIER_MISMATCH
+    )
+    return NonFifoParetoFrontierComparison(
+        status=status,
+        matched=matched,
+        candidate_certificate_digest=candidate_certificate.digest,
+        reference_certificate_digest=reference_certificate.digest,
+        candidate_frontier_digest=candidate_certificate.frontier_digest,
+        reference_frontier_digest=reference_certificate.frontier_digest,
+        missing_label_digests=missing,
+        unexpected_label_digests=unexpected,
+        reason=None if matched else "complete frontier labels differ",
+    )
+
+
 class NonFifoParetoSessionState(StrEnum):
     """Lifecycle states for the finite Pareto research session."""
 
@@ -447,6 +834,35 @@ class NonFifoParetoSessionIdentity:
                 "max_queue": self.max_queue,
                 "max_edge_evaluations": self.max_edge_evaluations,
                 "maximum_elapsed_seconds": self.maximum_elapsed_seconds,
+            }
+        )
+
+    @property
+    def comparison_digest(self) -> str:
+        """Shared input/config fence for independently implemented searches.
+
+        ``digest`` intentionally includes callback bytecode so a checkpoint
+        cannot silently restore with another evaluator.  An independent
+        reference has different callback code by design, therefore frontier
+        comparison uses this second digest for the common request, fixture,
+        configuration and frozen limits while retaining each full identity in
+        its certificate.
+        """
+
+        return _digest(
+            {
+                "schema_version": self.schema_version,
+                "start": self.start,
+                "goal": self.goal,
+                "departure_time": self.departure_time,
+                "objective_count": self.objective_count,
+                "max_expansions": self.max_expansions,
+                "max_labels": self.max_labels,
+                "max_queue": self.max_queue,
+                "max_edge_evaluations": self.max_edge_evaluations,
+                "maximum_elapsed_seconds": self.maximum_elapsed_seconds,
+                "fixture_digest": self.fixture_digest,
+                "config_digest": self.config_digest,
             }
         )
 
@@ -1564,8 +1980,12 @@ __all__ = [
     "NonFifoBusinessEvidence",
     "NonFifoEvaluationError",
     "NonFifoEvaluationSkipped",
+    "NonFifoFrontierCertificateError",
+    "NonFifoFrontierComparisonStatus",
     "NonFifoLabel",
     "NonFifoParetoCheckpoint",
+    "NonFifoParetoFrontierCertificate",
+    "NonFifoParetoFrontierComparison",
     "NonFifoParetoLabel",
     "NonFifoParetoSearchResult",
     "NonFifoParetoSession",
@@ -1578,6 +1998,8 @@ __all__ = [
     "NonFifoSearchResult",
     "NonFifoSearchStatus",
     "NonFifoTransition",
+    "certify_non_fifo_pareto_frontier",
+    "compare_non_fifo_pareto_frontiers",
     "create_non_fifo_pareto_session",
     "restore_non_fifo_pareto_session",
     "search_non_fifo",

@@ -33,12 +33,14 @@ from .non_fifo_feasibility import (
     NonFifoBusinessEvidence,
     NonFifoEvaluationSkipped,
     NonFifoParetoCheckpoint,
+    NonFifoParetoFrontierCertificate,
     NonFifoParetoLabel,
     NonFifoParetoSearchResult,
     NonFifoParetoSession,
     NonFifoParetoSessionIdentity,
     NonFifoParetoTransition,
     NonFifoSearchStatus,
+    certify_non_fifo_pareto_frontier,
     create_non_fifo_pareto_session,
     restore_non_fifo_pareto_session,
 )
@@ -384,6 +386,25 @@ class NonFifoTemporalParetoResearchSession:
     @property
     def identity(self) -> NonFifoParetoSessionIdentity:
         return self.session.identity
+
+    @property
+    def frontier_certificate(self) -> NonFifoParetoFrontierCertificate:
+        """Return a complete-frontier certificate after terminal completion.
+
+        The bridge exposes this only on the explicit research session.  A
+        paused or ready session has not drained all exact-arrival labels and
+        therefore cannot be treated as a complete frontier.
+        """
+
+        if self.session.result is None:
+            raise NonFifoTemporalParetoError(
+                "frontier certificate requires a terminal Pareto session"
+            )
+        return certify_non_fifo_pareto_frontier(
+            self.session.result,
+            identity=self.session.identity,
+            scope_digest=self.scope.digest,
+        )
 
     def advance(self, expansion_slice: int | None = None) -> NonFifoTemporalParetoResult | None:
         raw = self.session.advance(expansion_slice=expansion_slice)
