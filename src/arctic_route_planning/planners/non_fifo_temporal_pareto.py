@@ -281,13 +281,6 @@ class NonFifoTemporalParetoResult:
     def incumbent_bound_rejection_reasons(self) -> tuple[tuple[str, int], ...]:
         return self.raw_result.incumbent_bound_rejection_reasons
 
-    @property
-    def incumbent_bound_authorized(self) -> bool:
-        """Whether the supplied incumbent certificate remains authorized."""
-
-        return self.session.incumbent_bound_authorized
-
-
 @dataclass(frozen=True, slots=True)
 class NonFifoTemporalParetoCheckpoint:
     """Research checkpoint with a bridge/schema/scope digest fence."""
@@ -434,6 +427,36 @@ class NonFifoTemporalParetoResearchSession:
     @property
     def identity(self) -> NonFifoParetoSessionIdentity:
         return self.session.identity
+
+    @property
+    def incumbent_bound_pruned(self) -> int:
+        """Number of newly generated labels rejected by the bound."""
+
+        return self.session.incumbent_bound_pruned
+
+    @property
+    def incumbent_bound_rejected(self) -> int:
+        """Number of bound checks rejected without pruning."""
+
+        return self.session.incumbent_bound_rejected
+
+    @property
+    def incumbent_bound_digest(self) -> str:
+        """Digest of the installed incumbent-bound certificate or disabled fence."""
+
+        return self.session.identity.incumbent_bound_digest
+
+    @property
+    def incumbent_bound_rejection_reasons(self) -> tuple[tuple[str, int], ...]:
+        """Stable fail-closed rejection counters for audit evidence."""
+
+        return tuple(sorted(self.session.incumbent_bound_rejection_reasons.items()))
+
+    @property
+    def incumbent_bound_authorized(self) -> bool:
+        """Whether the supplied incumbent certificate remains authorized."""
+
+        return self.session.incumbent_bound_authorized
 
     @property
     def frontier_certificate(self) -> NonFifoParetoFrontierCertificate:
