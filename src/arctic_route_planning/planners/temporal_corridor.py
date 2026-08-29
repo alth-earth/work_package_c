@@ -81,6 +81,7 @@ class TemporalCorridorEvidence:
     arrival_upper_bounds: tuple[tuple[Any, float], ...] = ()
     edge_lower_hours: tuple[tuple[Any, Any, float], ...] = ()
     edge_bound_complete: bool = False
+    edge_bound_partial: bool = False
     projected_label_reduction: float | None = None
     reason: str | None = None
     schema_version: str = "c.p0.1-temporal-corridor-evidence.v1"
@@ -106,6 +107,7 @@ class TemporalCorridorEvidence:
                 "arrival_upper_bounds": self.arrival_upper_bounds,
                 "edge_lower_hours": self.edge_lower_hours,
                 "edge_bound_complete": self.edge_bound_complete,
+                "edge_bound_partial": self.edge_bound_partial,
                 "objective": self.objective,
                 "projected_label_reduction": self.projected_label_reduction,
                 "reason": self.reason,
@@ -172,9 +174,9 @@ def derive_temporal_corridor(
     objective_lower_bound: Mapping[Any, float] | Callable[[Any], float] | None = None,
     generated_nodes: Iterable[Any] | None = None,
     include_arrival_upper_bounds: bool = False,
-    edge_lower_hours: Mapping[tuple[Any, Any], float]
-    | Iterable[tuple[Any, Any, float]] = (),
+    edge_lower_hours: Mapping[tuple[Any, Any], float] | Iterable[tuple[Any, Any, float]] = (),
     edge_bound_complete: bool = False,
+    edge_bound_partial: bool = False,
 ) -> TemporalCorridorEvidence:
     """Derive a necessary-condition corridor and a fail-closed certificate.
 
@@ -232,9 +234,7 @@ def derive_temporal_corridor(
     normalized_edge_bounds: list[tuple[Any, Any, float]] = []
     try:
         if isinstance(edge_lower_hours, Mapping):
-            raw_edges = tuple(
-                (*edge, value) for edge, value in edge_lower_hours.items()
-            )
+            raw_edges = tuple((*edge, value) for edge, value in edge_lower_hours.items())
         else:
             raw_edges = tuple(edge_lower_hours)
         seen_edges: set[tuple[Any, Any]] = set()
@@ -253,16 +253,18 @@ def derive_temporal_corridor(
             if not isfinite(value) or value < 0.0:
                 raise ValueError("edge lower bounds must be finite and non-negative")
             normalized_edge_bounds.append((edge_start, edge_end, value))
+        if edge_bound_complete and edge_bound_partial:
+            raise ValueError("edge bound cannot be both complete and partial")
         if edge_bound_complete:
             if not normalized_edge_bounds or neighbors is None:
                 raise ValueError("edge bound coverage is incomplete")
             expected_edges = {
-                (node, neighbour)
-                for node in universe
-                for neighbour in neighbors(node)
+                (node, neighbour) for node in universe for neighbour in neighbors(node)
             }
             if not expected_edges.issubset(seen_edges):
                 raise ValueError("edge bound coverage is incomplete")
+        elif edge_bound_partial and not normalized_edge_bounds:
+            raise ValueError("partial edge bound requires edge lower bounds")
     except (KeyError, TypeError, ValueError) as error:
         return _rejected(
             scope=active_scope,
@@ -367,6 +369,7 @@ def derive_temporal_corridor(
         "incumbent_upper_bound": incumbent_upper_bound,
         "edge_lower_hours": tuple(normalized_edge_bounds),
         "edge_bound_complete": edge_bound_complete,
+        "edge_bound_partial": edge_bound_partial,
     }
     if include_arrival_upper_bounds:
         proof_payload["arrival_upper"] = tuple(arrival_upper)
@@ -382,6 +385,7 @@ def derive_temporal_corridor(
         arrival_upper_hours=tuple(arrival_upper),
         edge_lower_hours=tuple(normalized_edge_bounds),
         edge_bound_complete=edge_bound_complete,
+        edge_bound_partial=edge_bound_partial,
     )
     projected = None
     if generated_nodes is not None:
@@ -401,6 +405,7 @@ def derive_temporal_corridor(
         arrival_upper_bounds=tuple(arrival_upper),
         edge_lower_hours=tuple(normalized_edge_bounds),
         edge_bound_complete=edge_bound_complete,
+        edge_bound_partial=edge_bound_partial,
         objective=objective,
         projected_label_reduction=projected,
         reason=None if certificate.usable else certificate.reason,

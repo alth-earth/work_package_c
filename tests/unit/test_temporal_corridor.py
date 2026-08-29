@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 from arctic_route_planning.planners.temporal_corridor import (
     AdmissibleBoundEvidence,
     derive_temporal_corridor,
 )
 from arctic_route_planning.planners.temporal_qualification import TemporalScope
+
+T0 = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 def _scope() -> TemporalScope:
@@ -216,3 +220,41 @@ def test_incomplete_edge_envelope_is_rejected_without_authorization() -> None:
 
     assert not evidence.certificate.usable
     assert evidence.reason == "invalid_edge_bound:ValueError"
+
+
+def test_partial_edge_envelope_authorizes_only_listed_pairs() -> None:
+    universe = ((0, 0), (0, 1), (1, 1))
+    edges = {
+        (0, 0): ((0, 1),),
+        (0, 1): ((1, 1),),
+        (1, 1): (),
+    }
+    scope = _scope()
+    evidence = derive_temporal_corridor(
+        scope=scope,
+        expected_scope=scope,
+        universe_nodes=universe,
+        start=(0, 0),
+        goal=(1, 1),
+        neighbors=lambda node: edges[node],
+        forward_lower_hours={node: 0.0 for node in universe},
+        reverse_lower_hours={node: 0.0 for node in universe},
+        horizon_hours=2.0,
+        objective="fastest",
+        bound_evidence=_evidence(scope),
+        include_arrival_upper_bounds=True,
+        edge_lower_hours={((0, 0), (0, 1)): 1.0},
+        edge_bound_partial=True,
+    )
+
+    assert evidence.certificate.usable
+    assert evidence.certificate.edge_bound_partial
+    assert evidence.certificate.allows_transition(
+        (0, 0), (0, 1), T0, T0
+    )
+    assert evidence.certificate.allows_transition(
+        (0, 1), (1, 1), T0 + timedelta(hours=2), T0
+    )
+    assert not evidence.certificate.allows_transition(
+        (0, 0), (0, 1), T0 + timedelta(hours=2), T0
+    )
