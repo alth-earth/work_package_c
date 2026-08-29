@@ -352,6 +352,45 @@ def test_actual_bridge_accepts_explicit_heuristic_ordering_without_pruning() -> 
     assert ordered.raw_result.priority_policy_digest == certificate.digest
 
 
+def test_actual_bridge_supports_goal_gated_heuristic_ordering() -> None:
+    planner = _configured_planner()
+    request = _research_request()
+    certificate = _zero_heuristic_certificate(planner, request)
+
+    baseline = run_non_fifo_temporal_pareto_search(
+        _configured_planner(), request, pareto_pruning=True
+    )
+    gated = run_non_fifo_temporal_pareto_search(
+        planner,
+        request,
+        pareto_pruning=True,
+        heuristic_certificate=certificate,
+        heuristic_ordering="after_goal",
+    )
+
+    assert baseline.status is NonFifoSearchStatus.GOAL_FOUND
+    assert gated.status is NonFifoSearchStatus.GOAL_FOUND
+    assert gated.frontier == baseline.frontier
+    assert gated.semantic_digest == baseline.semantic_digest
+    assert gated.diagnostics.heuristic_policy == "certified-after-goal"
+    assert gated.diagnostics.heuristic_scope_match is True
+    assert gated.diagnostics.heuristic_rejected == 0
+    assert gated.raw_result.priority_policy_digest != certificate.digest
+    assert gated.raw_result.priority_policy_digest
+
+
+def test_actual_bridge_rejects_goal_gated_ordering_without_certificate() -> None:
+    planner = _configured_planner()
+    request = _research_request()
+
+    with pytest.raises(NonFifoTemporalParetoError, match="requires a certificate"):
+        run_non_fifo_temporal_pareto_search(
+            planner,
+            request,
+            heuristic_ordering="after_goal",
+        )
+
+
 def test_actual_bridge_heuristic_checkpoint_and_scope_drift_fail_closed() -> None:
     planner = _configured_planner()
     request = _research_request()

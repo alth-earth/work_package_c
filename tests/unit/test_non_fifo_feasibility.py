@@ -734,6 +734,109 @@ def test_pareto_priority_checkpoint_binds_callback_and_policy() -> None:
         )
 
 
+def test_goal_gated_priority_rekeys_only_after_first_goal_and_preserves_frontier() -> None:
+    graph = {"start": ("branch", "goal"), "branch": ("goal",), "goal": ()}
+
+    def evaluate(start: str, end: str, arrival: datetime) -> NonFifoParetoTransition:
+        if start == "start" and end == "goal":
+            return NonFifoParetoTransition(arrival + timedelta(hours=1), (1.0, 1.0))
+        if start == "start" and end == "branch":
+            return NonFifoParetoTransition(arrival + timedelta(hours=2), (2.0, 2.0))
+        return NonFifoParetoTransition(arrival + timedelta(hours=1), (1.0, 1.0))
+
+    def post_goal_priority(label: NonFifoParetoLabel) -> float:
+        # Once a goal has been seen, make the pending branch the first queued
+        # item.  This is deliberately an ordering-only fixture.
+        return 0.0 if label.node == "branch" else label.costs[0]
+
+    session = create_non_fifo_pareto_session(
+        start="start",
+        goal="goal",
+        departure_time=T0,
+        neighbors=graph.__getitem__,
+        evaluate_edge=evaluate,
+        objective_count=2,
+        pareto_pruning=True,
+        priority_after_goal=post_goal_priority,
+        priority_policy_digest="fixture-goal-gated-priority-v1",
+    )
+    assert session.advance(expansion_slice=1) is None
+    before_goal = session.checkpoint()
+    assert before_goal.priority_phase == "pre_goal"
+    assert not before_goal.goals
+
+    # The direct goal is popped next under the historical key.  Re-keying is
+    # then visible in the paused checkpoint without removing the branch label.
+    assert session.advance(expansion_slice=1) is None
+    after_goal = session.checkpoint()
+    assert after_goal.priority_phase == "post_goal"
+    assert len(after_goal.goals) == 1
+    assert len(after_goal.queue) == 1
+    assert after_goal.queue[0][0][0] == pytest.approx(0.0)
+
+    restored = restore_non_fifo_pareto_session(
+        after_goal,
+        neighbors=graph.__getitem__,
+        evaluate_edge=evaluate,
+        priority_after_goal=post_goal_priority,
+    )
+    result = restored.run()
+    baseline = search_non_fifo_pareto(
+        start="start",
+        goal="goal",
+        departure_time=T0,
+        neighbors=graph.__getitem__,
+        evaluate_edge=evaluate,
+        objective_count=2,
+        pareto_pruning=True,
+    )
+    assert result.status is NonFifoSearchStatus.GOAL_FOUND
+    assert result.goal_frontier == baseline.goal_frontier
+    assert result.priority_policy_digest == "fixture-goal-gated-priority-v1"
+
+
+def test_goal_gated_priority_checkpoint_binds_post_goal_callback() -> None:
+    graph = {"start": ("goal",), "goal": ()}
+
+    def evaluate(_start: str, _end: str, arrival: datetime) -> NonFifoParetoTransition:
+        return NonFifoParetoTransition(arrival + timedelta(hours=1), (1.0, 1.0))
+
+    def post_goal_priority(label: NonFifoParetoLabel) -> float:
+        return label.costs[0]
+
+    session = create_non_fifo_pareto_session(
+        start="start",
+        goal="goal",
+        departure_time=T0,
+        neighbors=graph.__getitem__,
+        evaluate_edge=evaluate,
+        objective_count=2,
+        priority_after_goal=post_goal_priority,
+        priority_policy_digest="fixture-goal-gated-checkpoint-v1",
+    )
+    assert session.advance(expansion_slice=1) is None
+    checkpoint = session.checkpoint()
+
+    restored = restore_non_fifo_pareto_session(
+        checkpoint,
+        neighbors=graph.__getitem__,
+        evaluate_edge=evaluate,
+        priority_after_goal=post_goal_priority,
+    )
+    assert restored.run().status is NonFifoSearchStatus.GOAL_FOUND
+
+    def changed_post_goal_priority(label: NonFifoParetoLabel) -> float:
+        return label.costs[0] + 1.0
+
+    with pytest.raises(NonFifoParetoSessionIdentityMismatch, match="post-goal priority"):
+        restore_non_fifo_pareto_session(
+            checkpoint,
+            neighbors=graph.__getitem__,
+            evaluate_edge=evaluate,
+            priority_after_goal=changed_post_goal_priority,
+        )
+
+
 def test_pareto_failed_result_has_no_frontier_or_partial_route() -> None:
     result = search_non_fifo_pareto(
         start="start",
