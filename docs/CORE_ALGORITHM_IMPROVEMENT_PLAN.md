@@ -2408,6 +2408,29 @@ oracle 一致，确定性、资源证据、fail-closed 和合法 pruning 全通�
 进入真实非 FIFO 实现。完成后在 clean local commit 上 fast-forward 正式分支并移除辅助
 worktree，不 push。
 
+### 【2026-08-29 | COMPLETED】P0.2-M12.1：session identity fence completeness audit
+
+本轮在隔离分支 `research/p02-m12-1-session-fence-20260829` 完成；计划提交为
+`ae6dcb6`，实现提交为 `8002668`。改动仅补强 M12 C 内部 session identity：新增显式
+`config_digest` 并纳入 session/policy/checkpoint digest，保留 one-shot 默认兼容值；runner
+新增 `limit_drift` 与 `config_drift` adversarial cases，并为每个 case 输出 identity、policy、
+config 和 checkpoint digest。正式 planner、B/C、C/D、ingress/service、candidate/Winter 均未
+改变或接入。
+
+**Authoritative matrix。** 在 clean implementation `8002668` 上，runner
+`c.p0.2-nonfifo-pareto-session.v1` 完成 `1080/1080` cases（12 scenarios × 3 objectives ×
+3 modes × 10 repeats），权威构件位于
+`.runtime/experiments/c-p02-m12-1-session-fence-synthetic-20260829-r1/`。summary 状态为
+`TEMPORAL_NONFIFO_PARETO_SESSION_MATRIX_PASS`；`deterministic=true`、语义与 independent
+oracle 一致、slice/restore 等价、资源证据完整且无 swap，合法同 exact 新 label pruning 为
+`90`，所有 mismatch/cancel/resource/evaluator 失败均无 partial route/frontier。新增的
+`limit_drift`、`config_drift` 均 `MISMATCH_REJECTED`。resume 复跑保持 `1080 -> 1080`，无重复
+追加。
+
+本轮只是身份围栏完整性修复，不证明连续非 FIFO 海洋模型全局最优性，不构成真实输入性能
+或 candidate 晋级；M10 的 `REAL_INPUT_FIFO_VIOLATED`、M11/M12 历史及冻结
+`50k/100k/50k/400k` 上限保持不变。辅助 worktree 已移除，研究分支保留，未 push。
+
 ### 【2026-08-29 | PLANNED】P0.2-M9：certified heuristic long-horizon resource audit
 
 M8 在完整 holdout `executable_0_6h` 上证明了证书化反向图 objective lower bound 可以只改变
