@@ -470,6 +470,8 @@ def _child_command(
         str(Path(args.route_plan_set).resolve()),
         "--config-root",
         str(Path(args.config_root).resolve()),
+        "--output-dir",
+        str(Path(args.output_dir).resolve()),
         "--segment",
         args.segment,
         "--objective",

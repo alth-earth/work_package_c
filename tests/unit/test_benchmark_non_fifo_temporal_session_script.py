@@ -61,6 +61,7 @@ def test_child_command_fences_mode_and_slice(tmp_path: Path) -> None:
     assert "--worker" in command
     assert command[command.index("--mode") + 1] == "slice_restore"
     assert command[command.index("--slice-expansions") + 1] == "7"
+    assert command[command.index("--output-dir") + 1] == str(tmp_path / "out")
     assert command[command.index("--cpu") + 1] == "3"
 
 
