@@ -3189,3 +3189,69 @@ point reference match、deterministic 和资源证据通过时，只标记
 `REAL_INPUT_FRONTIER_EQUIVALENCE_INCONCLUSIVE`。本轮不执行 24h/full-voyage、不提高资源上限、
 不写 formal latest/replanning baseline/frozen artifact，不改变 FIFO violation/uncertain、
 candidate/Winter、P3/ARA* 或正式合同状态。
+
+### 【2026-08-29 | COMPLETED】P0.2-M21：real 6h Pareto frontier equivalence
+
+本轮在隔离分支 `research/p02-m21-real-frontier-equivalence-20260829` 完成；实现提交为
+`b1d61ea`，聚焦测试提交为 `690741e`，实验启动时 worktree clean，实验身份绑定的
+implementation commit 为 `690741e7e6352835f1b1aad35f62c325eecd5aa5`。新增
+`scripts/benchmark_non_fifo_temporal_pareto_frontier_real.py` 仍是 C 内部研究 runner：它从已审计
+real-input fixture loader 读取完整 145 帧 RiskFrame 和冻结 route-plan-set，分别以
+`pareto_pruning=False/True` 运行 actual temporal Pareto sidecar；两边都保持
+`TemporalDominancePolicy.disabled()`、无 heuristic、无 state-bound、无 `certified_only(...)`，
+不修改正式 planner、合同或 ingress/service。
+
+**身份、输入和执行。** holdout/development 均只运行 `executable_0_6h`，三目标
+`fastest/low_risk/recommended`，两种 policy、两次重复，共每输入 `12/12` 独立 worker；重复顺序
+交替，CPU 固定为 0，systemd scope 为 `MemoryMax=4G`、`MemorySwapMax=0`。每个目录均具备
+`manifest.json`、`cases.jsonl`、`frontier-comparison.jsonl`、`resource-frontier.jsonl`、
+`comparison-summary.json`、`heartbeat.json` 和 `ALL_DONE`。权威构件为：
+
+- holdout：`.runtime/experiments/c-p02-m21-real-frontier-equivalence-holdout-20260829-r1/`，
+  experiment id `c.p0.2-temporal-pareto-frontier-real.v1-7722d09c1070b35a`，RiskFrame 145 帧、
+  start `[5,7]`、goal `[7,6]`、departure `2026-02-22T00:00:00Z`；
+- development：`.runtime/experiments/c-p02-m21-real-frontier-equivalence-development-20260829-r1/`，
+  experiment id `c.p0.2-temporal-pareto-frontier-real.v1-b48ef4c188a3d6b7`，RiskFrame 145 帧、
+  start `[5,7]`、goal `[7,7]`、departure `2026-03-22T00:00:00Z`。
+
+两份 manifest 的 implementation digest 均为
+`78ad48eb93467e81c5da7ec0af040f76700794e9e61c92e4e2c5db1db6e22aef`，`uv.lock` digest 均为
+`8893cb8387825ca4890ed808f4a98b02ba938337752971dacc3e77f859164f22`；RiskFrame commit/content/frame
+digest、route-plan-set 和 configs tree 均逐实验绑定，未使用新下载数据。
+
+**正确性结果。** holdout 与 development summary 均为
+`READY_FOR_P0.2-REAL-FRONTIER-IMPLEMENTATION-REVIEW`：`12/12` case terminal
+`GOAL_FOUND`、`deterministic=true`、`point_reference_match=true`、`frontier_pair_count=6`、
+`frontier_pairs_match=true`、`strict_frontier_pairs_match=true`、
+`semantic_frontier_pairs_match=true`、`no_unexpected_pruning=true`。每个 policy/objective 的
+两次运行均保留相同完整 goal frontier；六个 pair 的节点、精确 UTC arrival、路径、向量成本、
+transition business evidence/source IDs 和证书 scope/comparison identity 均严格 MATCH。为响应
+“适当放宽正确性门禁”的授权，runner 同时记录一个仅去除派生 `semantic_digest` 字段的
+`SEMANTIC_MATCH` 诊断层；它不使用数值容差、不忽略任何业务字段，且只有 identity/certificate
+完整时才可接受。此次真实构件实际全部为严格 `MATCH`，未使用放宽分支。
+
+独立 zero-heuristic point oracle 的 selected route 对照在两输入、三目标、两 policy、两重复
+全部通过。真实输入本轮 `pareto_pruned_total=0`（queue 尚未形成可安全消除的同 exact-arrival
+新 label）；这不是性能收益证明，也不把 synthetic M20 的 3 次安全 pruning 外推到真实输入。
+
+**资源与边界。** holdout 每 case `expanded=32`、`queue_peak=26`、`edge_evaluations=240`，
+compute 约 `1204–1680 ms`，观测最大 RSS 约 `120300 KiB`；development 每 case
+`expanded=17`、`queue_peak=13`、`edge_evaluations=128`，compute 约 `645–753 ms`，最大 RSS
+约 `120324 KiB`。两输入均为 `resource_clean=true`、`resource_evidence_complete=true`，
+cgroup memory events 的 OOM/kill/high/low 均为 0，`memory_swap_max/current=0`，host
+`/proc/swaps` 和 `free -h` 均为 `Swap: 0B`。未提高 `50k/100k/50k/400k` 搜索上限，未启动
+24h/full-voyage。
+
+**结论。** M21 只证明冻结真实 6h 输入上，研究 Pareto sidecar 在当前有限状态域内与未剪枝
+reference 的完整 frontier 可复核等价，状态为
+`READY_FOR_P0.2-REAL-FRONTIER-IMPLEMENTATION-REVIEW`。它不证明 continuous FIFO、interval
+proof、性能回归门、生产资格或 candidate/Winter 授权；`TemporalDominancePolicy.disabled()`、
+P2.1/P3/ARA*、M18 queue resource fail、M19 24h reference、B/C/C/D 合同及 formal latest/
+replanning baseline/frozen artifact 全部保持不变。后续只能另立带真实 scope、资源和 pruning
+证据的 P0.2 implementation review，不自动重跑 Winter 或启用 candidate。
+
+**验证。** M21 runner 的聚焦测试为 `5 passed`；其余 C 测试、Ruff、lock/offline sync、CLI
+smoke、active/archive import boundary 和 `git diff --check` 将在本地收口提交前复核。原样
+`UV_OFFLINE=1 make check` 若仍因隔离 worktree 缺少 `.mamba-env/bin/uv` 阻塞，使用正式 C 的
+`.mamba-env/bin/uv` 执行等价离线检查并如实记录。完成验证后删除 M21 辅助 worktree，保留分支
+和 `.runtime/experiments/` 构件，不 push、不合并正式 `research-validation-system`。
