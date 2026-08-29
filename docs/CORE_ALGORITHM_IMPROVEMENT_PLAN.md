@@ -2687,3 +2687,27 @@ Pareto、业务 evidence、恢复/取消和 fail-closed 语义具备继续审计
 冻结 `50k/100k/50k/400k` 上限保持不变。下一步另立带强制 cgroup/真实输入 scope 的
 P0.2-real Pareto 资格或资源计划；candidate、Winter、formal latest、replanning baseline
 和 frozen artifact 继续关闭。
+
+### 【2026-08-29 | PLANNED】P0.2-M15：real 6h Pareto qualification audit
+
+M14 的 actual-edge Pareto bridge 已在独立 synthetic 矩阵中证明有限 exact-arrival 状态、
+业务 edge evidence、checkpoint 恢复、取消和同一精确状态的安全新 label pruning。M15 将把
+该 bridge 接到冻结的真实 145 帧 holdout/development 输入，仅执行 `executable_0_6h` 的
+研究资格审计；不执行真实 24h、全航程或 Winter 复测，不启用 candidate。
+
+本轮从 clean `3056fb3` 建立隔离分支
+`research/p02-m15-real-pareto-20260829` 与 worktree
+`/root/my_project/.runtime/worktrees/c-p02-m15-real-pareto`。新增 runner 只使用
+`non_fifo_temporal_pareto` 的 zero-heuristic、dominance-disabled 实际 edge evaluator，
+以冻结 route-plan-set 自动解析目标，绑定 implementation/lock/config、RiskFrame 与
+route-plan-set digest、TemporalScope/request、搜索限制和 evaluator identity。每个输入和
+objective 运行 one-shot、slice→restore、cancelled 以及两次重复，成功路线再与独立
+zero-heuristic exhaustive/reference 搜索核对；资源、确定性、身份恢复和 fail-closed 证据
+逐记录 fsync 保存到 `.runtime/experiments/`。
+
+通过条件是所有预期 case 完整、重复确定、slice 等价、成功语义与 reference 一致、合法
+same-exact pruning 可观测、cancel/失败/资源限制不产生 partial route/frontier，且固定 CPU、
+swap/OOM/timeout 证据完整。通过只标记
+`READY_FOR_P0.2-REAL-PARETO-REVIEW`，失败标记
+`REAL_INPUT_PARETO_RESOURCE_FAIL` 或 `INVALID/PENDING`；任何结果都不授权 dominance、
+candidate 或 Winter。完成后仅本地集成并移除辅助 worktree，保留研究分支和实验构件，不 push。
