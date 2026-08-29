@@ -52,3 +52,11 @@ def test_checkpoint_digest_drift_is_rejected() -> None:
     assert record["status"] == "MISMATCH_REJECTED"
     assert record["restore_error"]
     assert record["fail_closed"] is True
+
+
+def test_checkpoint_drift_cancel_mode_still_exercises_cancellation() -> None:
+    record = _RUNNER._case("checkpoint_drift", "recommended", "cancelled", 1)
+    assert record["status"] == "CANCELLED"
+    assert record["semantic_match"] is True
+    assert record["state_bound_edge_pruned"] == 0
+    assert record["fail_closed"] is True
