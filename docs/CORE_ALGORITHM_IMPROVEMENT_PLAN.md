@@ -3537,3 +3537,49 @@ terminal pruning；同时证明完整-frontier certificate 对 `selection_only` 
 **收口。** selected-route 语义、determinism、checkpoint、fail-closed 和资源证据通过时，
 状态只标记 `READY_FOR_SEPARATE_SELECTED_ROUTE_BOUND_PLAN`；不把它升级为
 `READY_FOR_REAL_DOMINANCE`，不写 formal latest/replanning baseline/frozen artifact。
+
+### 【2026-08-29 | COMPLETED（synthetic；real resource boundary）】P0.2-M25：selected-route terminal incumbent bound
+
+**实现与身份。** 在隔离分支
+`research/p02-m25-terminal-bound-20260829` 完成实现，代码提交为 `eb8d682`，计划提交为
+`09d6517`。新增 `NonFifoParetoTerminalBoundCertificate` 及
+`NonFifoParetoTerminalBoundStatus`，并将证书 digest 绑定到既有
+`NonFifoParetoSessionIdentity`、checkpoint 和 bridge component digest。证书要求完整节点
+覆盖、已认证 evaluator、非负有限字典序下界和 `selection_only=true`；scope、goal、维度、
+证书或 callback identity 不匹配时保持 fail-closed。搜索只在新 label 入队前检查，已扩展
+label 不删除；等价成本保留。`NonFifoParetoSearchResult` 明确暴露
+`selection_only`/`frontier_complete`，完整 frontier certificate 对此结果返回
+`frontier_incomplete_by_policy`。
+
+**Synthetic 证据。** M25 聚焦矩阵为 `64 passed`（包含 terminal certificate 的恶化分支、
+不同/相同终点 arrival、scope mismatch、非有限下界、checkpoint digest 恢复，以及旧
+incumbent-bound 与 actual-edge bridge 回归）。新增 adversarial 图中，禁用 bound 与
+terminal bound 的选定路线、exact arrival 和成本 digest 完全一致；bound 对较差的新终点
+label 观察到真实 pruning，等价成本和更低成本的较晚 arrival 均保留。默认
+`search_non_fifo_pareto`、旧 exact-arrival certificate 和正式 planner 行为未改变。
+
+**真实短诊断。** 仅复用冻结 145 帧和现有 route-plan-set，未下载数据、未启用
+`certified_only`、未提高 `50k/100k/50k/400k` 限制。runner
+`scripts/benchmark_non_fifo_temporal_selected_route_bound_real.py` 使用 schema
+`c.p0.2-nonfifo-selected-route-bound-real.v1`，为每个 objective 串行执行
+dominance-disabled baseline 与显式 terminal selection-only bound，固定 CPU 0、可恢复
+manifest/cases/summary/heartbeat/ALL_DONE 构件和 120/30 秒 worker deadline。
+
+| 输入 | 实验目录 | experiment id | case | 结果 |
+|---|---|---|---:|---|
+| holdout `rolling_0_24h` | `.runtime/experiments/c-p02-m25-selected-route-bound-holdout-20260829-r1/` | `c.p0.2-nonfifo-selected-route-bound-real.v1-9e17dcdc11b05cfc` | `3/3` | `REAL_SELECTED_ROUTE_BOUND_RESOURCE_FAIL` |
+| development `rolling_0_24h` | `.runtime/experiments/c-p02-m25-selected-route-bound-development-20260829-r1/` | `c.p0.2-nonfifo-selected-route-bound-real.v1-56bd898b43c6d0a6` | `3/3` | `REAL_SELECTED_ROUTE_BOUND_RESOURCE_FAIL` |
+
+两份 summary 均 `complete=true`、`identity_clean=true`，三个 objective 均在 worker
+deadline 内触及搜索边界并记为 `RESOURCE_LIMIT/worker_timeout`，没有语义 match 或真实
+pruning 证据；超时记录的资源快照不完整，因此不宣称资源通过。实验 identity 分别绑定
+M25 clean commit、RiskFrame commit/content/frame digest、route-plan-set、配置树、`uv.lock`
+和 scope digest。该结果只证明冻结资源下的真实 24h 选定路线仍不可行，不证明算法失败或
+candidate 性能收益。
+
+**收口与后续。** M25 状态为 `REAL_SELECTED_ROUTE_BOUND_RESOURCE_FAIL`，不是
+`READY_FOR_SEPARATE_SELECTED_ROUTE_BOUND_PLAN`，因为真实三目标均未完成。candidate、
+Winter、formal latest、replanning baseline 和 frozen artifact 均未启动/写入；P2.1、P3、
+ARA* 及 M24 的 `REAL_INPUT_INCUMBENT_BOUND_UNCERTAIN` 历史结论保持不变。下一步只能另立
+带独立 resource-bound/corridor proof 的计划，或推进 test-only P0.2 label-correcting 设计；
+不得通过放宽资源上限、缩短输入或将 selection-only 结果包装成完整 frontier 来制造通过。
