@@ -3972,3 +3972,28 @@ lock。M30 结论为 `SAFE_BUT_NO_NET_QUEUE_GAIN / EXACT_LABEL_RESOURCE_FAIL`：
 调 queue threshold，保持 `50k/100k/50k/400k` 上限和 dominance disabled，转向带独立
 证明的 corridor/state envelope 研究。M30 不触发 candidate、Winter、P2.1、P3、ARA*、
 formal latest、replanning baseline 或 frozen artifact；M29 及更早历史记录保持不变。
+
+### 【2026-08-30 | PLANNED】P0.2-M31：proof-carrying edge corridor envelope
+
+M30 证明 stale heap entry 可以安全回收，但真实 24h 的 stale 比例过低，激进扫描反而
+使 compute 成本增加；下一轮不再调 compaction threshold。现有 state-bound 仅在完整
+edge ETA 评估后检查 node/arrival envelope，不能减少已经失败或明显超出 horizon 的
+昂贵边评估。M31 研究一个更窄的 C 内部 edge lower-time envelope：证书同时绑定完整
+`TemporalScope`、finite universe、每条有向边的保守最短 travel hours、目标节点
+arrival upper bound、evaluator/proof digest 和 search limits。
+
+对新生成转移 `(node, neighbour, arrival)`，只有在证书可用且
+`arrival_elapsed + edge_lower_hours(node, neighbour) > arrival_upper_hours[neighbour]`
+被向下取整后仍严格成立时，才在调用 edge evaluator 前拒绝该转移；不得删除已扩展
+label、已存在 predecessor、不同 exact arrival 或 goal evidence。缺边、非有限值、
+hard-mask/coverage/evaluator 未知、scope/policy/checkpoint 漂移均保持原有精确搜索并
+记录拒绝原因。证书不改变 ETA、FIFO、dominance 或正式 `plan()` 默认行为。
+
+先补 finite synthetic oracle：可证明的 edge pre-gating 必须与无 envelope baseline
+路线、精确 ETA、cost、risk、confidence、source IDs 和失败语义一致，并观察实际 edge
+评估减少；malformed/partial/scope-mismatch/cancel/resource-limit 场景 pre-pruning
+必须为零或 fail-closed。随后在冻结 holdout/development 145 帧的 `executable_0_6h`
+三目标上做单 worker 诊断；24h 只在 6h 语义一致且资源边界可解释时选择性运行。保持
+`dominance=disabled`、`50k/100k/50k/400k` 上限、candidate/Winter 关闭，reference
+Dijkstra 只作正确性证据。该诊断不构成性能资格；若 edge envelope 没有净收益或
+资源证据不完整，停止继续调参，转向更强 corridor/state envelope 证明。
