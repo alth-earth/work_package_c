@@ -19,6 +19,7 @@ from arctic_route_planning.planners.non_fifo_temporal_pareto import (
     restore_non_fifo_temporal_pareto_session,
     run_non_fifo_temporal_pareto_search,
 )
+from arctic_route_planning.planners.temporal_bounds import TemporalStateBoundCertificate
 from arctic_route_planning.planners.temporal_label_astar import TemporalSearchLimits, _RejectedEdge
 from arctic_route_planning.planners.time_dependent_astar import _EdgeTraversal
 
@@ -177,10 +178,111 @@ def test_actual_bridge_rejects_non_research_modes() -> None:
         )
 
 
-def test_actual_bridge_can_skip_only_classified_domain_rejections() -> None:
-    planner = _planner(
-        edge_evaluator=lambda *_args: (_ for _ in ()).throw(_RejectedEdge("hard"))
+def test_actual_bridge_accepts_explicit_state_bound_and_prunes_new_labels_only() -> None:
+    planner = _configured_planner()
+    request = _research_request()
+    scope = planner.temporal_scope(request)
+    certificate = TemporalStateBoundCertificate.certified(
+        scope,
+        allowed_nodes=((0, 0), (0, 1), (0, 2), (1, 1), (1, 2)),
+        excluded_nodes=((1, 0),),
+        proof_digest="actual-pareto-bound-fixture-v1",
     )
+
+    baseline = run_non_fifo_temporal_pareto_search(
+        _configured_planner(),
+        request,
+        pareto_pruning=True,
+    )
+    bounded = run_non_fifo_temporal_pareto_search(
+        planner,
+        request,
+        pareto_pruning=True,
+        state_bound_certificate=certificate,
+    )
+
+    assert baseline.status is NonFifoSearchStatus.GOAL_FOUND
+    assert bounded.status is NonFifoSearchStatus.GOAL_FOUND
+    assert bounded.selected is not None
+    assert baseline.selected is not None
+    assert bounded.semantic_digest == baseline.semantic_digest
+    assert bounded.diagnostics.dominance_pruned == 0
+    assert bounded.diagnostics.state_bound_rejected == 0
+    assert bounded.diagnostics.state_bound_checks > 0
+    assert bounded.diagnostics.state_bound_pruned > 0
+
+
+def test_actual_pareto_state_bound_scope_and_checkpoint_drift_fail_closed() -> None:
+    planner = _configured_planner()
+    request = _research_request()
+    scope = planner.temporal_scope(request)
+    certificate = TemporalStateBoundCertificate.certified(
+        scope,
+        allowed_nodes=((0, 0), (0, 1), (0, 2), (1, 1), (1, 2)),
+        excluded_nodes=((1, 0),),
+        proof_digest="actual-pareto-bound-fixture-v1",
+    )
+    session = create_non_fifo_temporal_pareto_session(
+        planner,
+        request,
+        pareto_pruning=True,
+        state_bound_certificate=certificate,
+    )
+    assert session.advance(expansion_slice=1) is None
+    checkpoint = session.checkpoint()
+    assert checkpoint.state_bound_digest == certificate.digest
+
+    restored = restore_non_fifo_temporal_pareto_session(
+        planner,
+        request,
+        checkpoint,
+        state_bound_certificate=certificate,
+    )
+    while (result := restored.advance(expansion_slice=1)) is None:
+        pass
+    assert result.status is NonFifoSearchStatus.GOAL_FOUND
+    assert result.diagnostics.state_bound_pruned > 0
+
+    drifted = TemporalStateBoundCertificate.certified(
+        scope,
+        allowed_nodes=((0, 0), (0, 1), (0, 2), (1, 1)),
+        excluded_nodes=((1, 0), (1, 2)),
+        proof_digest="actual-pareto-bound-drift-v1",
+    )
+    with pytest.raises(NonFifoTemporalParetoError, match="state-bound digest mismatch"):
+        restore_non_fifo_temporal_pareto_session(
+            planner,
+            request,
+            checkpoint,
+            state_bound_certificate=drifted,
+        )
+
+
+def test_actual_pareto_state_bound_scope_mismatch_keeps_all_labels() -> None:
+    planner = _configured_planner()
+    request = _research_request()
+    scope = planner.temporal_scope(request)
+    mismatched_scope = type(scope).from_mapping({**scope.mapping, "scope_revision": "drift"})
+    certificate = TemporalStateBoundCertificate.certified(
+        mismatched_scope,
+        allowed_nodes=((0, 0), (0, 1), (0, 2)),
+        excluded_nodes=((1, 0), (1, 1), (1, 2)),
+        proof_digest="actual-pareto-bound-mismatch-v1",
+    )
+
+    result = run_non_fifo_temporal_pareto_search(
+        planner,
+        request,
+        state_bound_certificate=certificate,
+    )
+
+    assert result.status is NonFifoSearchStatus.GOAL_FOUND
+    assert result.diagnostics.state_bound_pruned == 0
+    assert result.diagnostics.state_bound_rejected > 0
+
+
+def test_actual_bridge_can_skip_only_classified_domain_rejections() -> None:
+    planner = _planner(edge_evaluator=lambda *_args: (_ for _ in ()).throw(_RejectedEdge("hard")))
     result = run_non_fifo_temporal_pareto_search(
         planner,
         _research_request(),

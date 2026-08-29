@@ -42,6 +42,7 @@ from .non_fifo_feasibility import (
     create_non_fifo_pareto_session,
     restore_non_fifo_pareto_session,
 )
+from .temporal_bounds import TemporalStateBoundCertificate
 from .temporal_label_astar import TemporalLabelAStar, _eta_rejection_reason, _RejectedEdge
 from .temporal_qualification import TemporalScope
 from .time_dependent_astar import PlanningRequest, _EdgeTraversal
@@ -65,6 +66,7 @@ class TemporalParetoComponent(StrEnum):
 
 TEMPORAL_PARETO_COMPONENTS = tuple(TemporalParetoComponent)
 TEMPORAL_PARETO_SCHEMA = "c.p0.2-temporal-pareto-bridge.v1"
+_STATE_BOUND_DISABLED_DIGEST = "temporal-state-bound-disabled"
 _HEADING_NONE: tuple[int, int] | None = None
 type TemporalParetoState = tuple[tuple[int, int], tuple[int, int] | None]
 
@@ -267,12 +269,44 @@ class NonFifoTemporalParetoCheckpoint:
     pareto_checkpoint: NonFifoParetoCheckpoint
     scope_digest: str
     component_digest: str
+    state_bound_digest: str = _STATE_BOUND_DISABLED_DIGEST
+    state_bound_checks: int = 0
+    state_bound_pruned: int = 0
+    state_bound_arrival_pruned: int = 0
+    state_bound_rejected: int = 0
+    state_bound_rejection_reasons: tuple[tuple[str, int], ...] = ()
     schema_version: str = TEMPORAL_PARETO_SCHEMA
     state_digest: str = ""
 
     def __post_init__(self) -> None:
         if self.schema_version != TEMPORAL_PARETO_SCHEMA:
             raise NonFifoTemporalParetoError("unsupported actual Pareto checkpoint schema")
+        if not isinstance(self.state_bound_digest, str) or not self.state_bound_digest:
+            raise NonFifoTemporalParetoError(
+                "actual Pareto checkpoint state-bound digest is invalid"
+            )
+        for name in (
+            "state_bound_checks",
+            "state_bound_pruned",
+            "state_bound_arrival_pruned",
+            "state_bound_rejected",
+        ):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise NonFifoTemporalParetoError(f"actual Pareto checkpoint {name} is invalid")
+        reasons = tuple(self.state_bound_rejection_reasons)
+        if any(
+            not isinstance(item, (tuple, list))
+            or len(item) != 2
+            or not isinstance(item[0], str)
+            or not isinstance(item[1], int)
+            or item[1] < 0
+            for item in reasons
+        ):
+            raise NonFifoTemporalParetoError(
+                "actual Pareto checkpoint state-bound rejection reasons are invalid"
+            )
+        object.__setattr__(self, "state_bound_rejection_reasons", reasons)
         expected = self._calculated_state_digest()
         if self.state_digest and self.state_digest != expected:
             raise NonFifoTemporalParetoError("actual Pareto checkpoint digest mismatch")
@@ -284,12 +318,25 @@ class NonFifoTemporalParetoCheckpoint:
                 "schema_version": self.schema_version,
                 "scope_digest": self.scope_digest,
                 "component_digest": self.component_digest,
+                "state_bound_digest": getattr(
+                    self, "state_bound_digest", _STATE_BOUND_DISABLED_DIGEST
+                ),
+                "state_bound_checks": getattr(self, "state_bound_checks", 0),
+                "state_bound_pruned": getattr(self, "state_bound_pruned", 0),
+                "state_bound_arrival_pruned": getattr(self, "state_bound_arrival_pruned", 0),
+                "state_bound_rejected": getattr(self, "state_bound_rejected", 0),
+                "state_bound_rejection_reasons": getattr(self, "state_bound_rejection_reasons", ()),
                 "pareto_checkpoint": self.pareto_checkpoint.digest,
             }
         )
 
     def assert_valid(self) -> None:
         self.pareto_checkpoint.assert_valid()
+        state_bound_digest = getattr(self, "state_bound_digest", _STATE_BOUND_DISABLED_DIGEST)
+        if not isinstance(state_bound_digest, str) or not state_bound_digest:
+            raise NonFifoTemporalParetoError(
+                "actual Pareto checkpoint state-bound digest is invalid"
+            )
         if self.state_digest != self._calculated_state_digest():
             raise NonFifoTemporalParetoError("actual Pareto checkpoint digest mismatch")
 
@@ -353,10 +400,20 @@ class NonFifoTemporalParetoResearchSession:
         )
 
     def checkpoint(self) -> NonFifoTemporalParetoCheckpoint:
+        state_bound = self.context.state_bound_certificate
+        diagnostics = self.context.diagnostics.freeze()
         return NonFifoTemporalParetoCheckpoint(
             pareto_checkpoint=self.session.checkpoint(),
             scope_digest=self.scope.digest,
             component_digest=self.component_digest,
+            state_bound_digest=(
+                state_bound.digest if state_bound is not None else _STATE_BOUND_DISABLED_DIGEST
+            ),
+            state_bound_checks=diagnostics.state_bound_checks,
+            state_bound_pruned=diagnostics.state_bound_pruned,
+            state_bound_arrival_pruned=diagnostics.state_bound_arrival_pruned,
+            state_bound_rejected=diagnostics.state_bound_rejected,
+            state_bound_rejection_reasons=diagnostics.state_bound_rejection_reasons,
         )
 
 
@@ -366,13 +423,18 @@ def create_non_fifo_temporal_pareto_session(
     *,
     pareto_pruning: bool = False,
     skip_expected_rejections: bool = False,
+    state_bound_certificate: TemporalStateBoundCertificate | None = None,
     identity: NonFifoParetoSessionIdentity | None = None,
 ) -> NonFifoTemporalParetoResearchSession:
     """Create an actual-edge Pareto session for explicit research only."""
 
-    scope = _validate_bridge(planner, request)
+    scope = _validate_bridge(planner, request, state_bound_certificate)
     callbacks, context, component_digest = _callbacks(
-        planner, request, scope, skip_expected_rejections=skip_expected_rejections
+        planner,
+        request,
+        scope,
+        skip_expected_rejections=skip_expected_rejections,
+        state_bound_certificate=state_bound_certificate,
     )
     session = create_non_fifo_pareto_session(
         start=(request.start, _HEADING_NONE),
@@ -404,20 +466,35 @@ def restore_non_fifo_temporal_pareto_session(
     *,
     cancel_check: Any = None,
     skip_expected_rejections: bool = False,
+    state_bound_certificate: TemporalStateBoundCertificate | None = None,
 ) -> NonFifoTemporalParetoResearchSession:
     """Restore an actual-edge Pareto session after all bridge fences."""
 
     if not isinstance(checkpoint, NonFifoTemporalParetoCheckpoint):
         raise NonFifoTemporalParetoError("checkpoint type is invalid")
     checkpoint.assert_valid()
-    scope = _validate_bridge(planner, request)
+    scope = _validate_bridge(planner, request, state_bound_certificate)
     callbacks, context, component_digest = _callbacks(
-        planner, request, scope, skip_expected_rejections=skip_expected_rejections
+        planner,
+        request,
+        scope,
+        skip_expected_rejections=skip_expected_rejections,
+        state_bound_certificate=state_bound_certificate,
     )
     if checkpoint.scope_digest != scope.digest:
         raise NonFifoTemporalParetoError("actual Pareto checkpoint scope mismatch")
+    expected_state_bound_digest = _state_bound_digest(state_bound_certificate)
+    if checkpoint.state_bound_digest != expected_state_bound_digest:
+        raise NonFifoTemporalParetoError("actual Pareto checkpoint state-bound digest mismatch")
     if checkpoint.component_digest != component_digest:
         raise NonFifoTemporalParetoError("actual Pareto checkpoint component mismatch")
+    context.diagnostics.state_bound_checks = checkpoint.state_bound_checks
+    context.diagnostics.state_bound_pruned = checkpoint.state_bound_pruned
+    context.diagnostics.state_bound_arrival_pruned = checkpoint.state_bound_arrival_pruned
+    context.diagnostics.state_bound_rejected = checkpoint.state_bound_rejected
+    context.diagnostics.state_bound_rejection_reasons = dict(
+        checkpoint.state_bound_rejection_reasons
+    )
     session = restore_non_fifo_pareto_session(
         checkpoint.pareto_checkpoint,
         neighbors=callbacks.neighbors,
@@ -435,6 +512,7 @@ def run_non_fifo_temporal_pareto_search(
     *,
     pareto_pruning: bool = False,
     skip_expected_rejections: bool = False,
+    state_bound_certificate: TemporalStateBoundCertificate | None = None,
 ) -> NonFifoTemporalParetoResult:
     """Run the actual-edge Pareto sidecar to a terminal state."""
 
@@ -443,6 +521,7 @@ def run_non_fifo_temporal_pareto_search(
         request,
         pareto_pruning=pareto_pruning,
         skip_expected_rejections=skip_expected_rejections,
+        state_bound_certificate=state_bound_certificate,
     ).run()
 
 
@@ -452,7 +531,15 @@ class _Callbacks:
     evaluate_edge: Any
 
 
-def _validate_bridge(planner: TemporalLabelAStar, request: PlanningRequest) -> TemporalScope:
+def _state_bound_digest(certificate: TemporalStateBoundCertificate | None) -> str:
+    return certificate.digest if certificate is not None else _STATE_BOUND_DISABLED_DIGEST
+
+
+def _validate_bridge(
+    planner: TemporalLabelAStar,
+    request: PlanningRequest,
+    state_bound_certificate: TemporalStateBoundCertificate | None = None,
+) -> TemporalScope:
     if not isinstance(planner, TemporalLabelAStar):
         raise NonFifoTemporalParetoError("actual Pareto bridge requires TemporalLabelAStar")
     if request.use_heuristic:
@@ -461,8 +548,14 @@ def _validate_bridge(planner: TemporalLabelAStar, request: PlanningRequest) -> T
         raise NonFifoTemporalParetoError(
             "actual Pareto bridge requires TemporalDominancePolicy.disabled()"
         )
-    if planner.state_bound_certificate is not None:
+    if state_bound_certificate is None and planner.state_bound_certificate is not None:
         raise NonFifoTemporalParetoError("actual Pareto bridge rejects state-bound certificates")
+    if state_bound_certificate is not None:
+        if not isinstance(state_bound_certificate, TemporalStateBoundCertificate):
+            raise NonFifoTemporalParetoError("state-bound certificate type is invalid")
+        installed = planner.state_bound_certificate
+        if installed is not None and installed.digest != state_bound_certificate.digest:
+            raise NonFifoTemporalParetoError("state-bound certificate digest mismatch")
     if planner.heuristic_certificate is not None:
         raise NonFifoTemporalParetoError("actual Pareto bridge rejects heuristic certificates")
     scope = planner.temporal_scope(request)
@@ -477,6 +570,7 @@ def _callbacks(
     scope: TemporalScope,
     *,
     skip_expected_rejections: bool,
+    state_bound_certificate: TemporalStateBoundCertificate | None,
 ) -> tuple[_Callbacks, Any, str]:
     component_digest = _digest(
         {
@@ -485,9 +579,11 @@ def _callbacks(
             "objective": ObjectiveMode(request.objective),
             "scope": scope.digest,
             "skip_expected_rejections": skip_expected_rejections,
+            "state_bound_digest": _state_bound_digest(state_bound_certificate),
         }
     )
     context = planner._new_execution_context()
+    context.state_bound_certificate = state_bound_certificate
     cost_model = planner._cost_model(ObjectiveMode(request.objective))
     token = f"{TEMPORAL_PARETO_SCHEMA}:{scope.digest}:{component_digest}"
 
@@ -529,6 +625,22 @@ def _callbacks(
             raise
         if not isinstance(traversal, _EdgeTraversal):
             raise NonFifoTemporalParetoError("actual edge evaluator returned an invalid traversal")
+        if state_bound_certificate is not None:
+            heading_code = (
+                _HEADING_NONE
+                if next_node == request.goal
+                else (next_node[0] - node[0], next_node[1] - node[1])
+            )
+            candidate_state = (next_node, heading_code, traversal.arrival_time)
+            if planner._should_prune_state_bound(
+                candidate_state,
+                request,
+                context=context,
+            ):
+                # The finite Pareto sidecar treats this marker as an
+                # unavailable edge.  The label has not entered the session,
+                # so an already-expanded label is never deleted.
+                raise NonFifoEvaluationSkipped("state_bound")
         step = TemporalParetoStepEvidence.from_traversal(traversal)
         return NonFifoParetoTransition(
             arrival_time=traversal.arrival_time,
@@ -616,11 +728,7 @@ def _wrap_result(
             key=lambda route: (route.costs, route.arrival_times[-1], route.nodes),
         )
     )
-    selected = (
-        _route(raw.label, request.departure_time)
-        if raw.label is not None
-        else None
-    )
+    selected = _route(raw.label, request.departure_time) if raw.label is not None else None
     return NonFifoTemporalParetoResult(
         status=raw.status,
         selected=selected,
