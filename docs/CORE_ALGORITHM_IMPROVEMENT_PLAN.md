@@ -3359,12 +3359,13 @@ M18 queue resource fail、M19 reference、M20/M21、P2.1/P3/ARA* 历史结论保
 M22 已在真实 24h 有界状态域证明 graph-topological state bound 下的完整 Pareto frontier
 等价，但真实 candidate 的同 exact-arrival Pareto pruning 很少，尚未验证一个可安全扩大
 剪枝覆盖面的核心规则。本轮研究 C 内部、默认关闭的 multi-objective incumbent bound：对
-每个新生成 label 绑定一个完整 scope 的保守剩余成本向量下界；只有已有完整 goal label
-严格支配“当前成本 + 剩余下界”时，才丢弃该新 label。不同 exact arrival 永远不直接比较，
-已扩展 label 不删除，缺失/失效证书保持零 bound pruning。
+每个新生成 label 绑定一个完整 scope 的 exact-state 保守剩余成本向量下界，并同时证明其
+所有后缀的唯一 exact goal arrival；只有已有相同 exact goal arrival 的完整 goal label 严格
+支配“当前成本 + 剩余下界”时，才丢弃该新 label。不同 exact arrival 永远不直接比较，已
+扩展 label 不删除，缺失/失效证书保持零 bound pruning。
 
 **证书和身份。** 新证书必须绑定 scope/fixture、goal、objective count、节点覆盖、每个
-维度的有限非负下界、evaluator/proof digest 和完整性状态；checkpoint/session identity
+维度的有限非负下界、exact goal arrival、evaluator/proof digest 和完整性状态；checkpoint/session identity
 必须包含 bound policy digest。下界缺失、scope/config/evaluator 漂移、非有限值、覆盖不足、
 evaluator failure 或 checkpoint digest 漂移均 fail-closed，记录拒绝原因而不把未知值当成
 零下界。默认 session、actual Pareto bridge、`TemporalDominancePolicy.disabled()` 和正式
@@ -3382,3 +3383,28 @@ evaluator failure 或 checkpoint digest 漂移均 fail-closed，记录拒绝原�
 剪枝、不同 exact arrival 被错误比较、证书失效仍剪枝、恢复身份漂移或 partial route/frontier
 均标记 `NO_PERFORMANCE_PROOF/FAIL`。不提高冻结 `50k/100k/50k/400k` 上限，不重跑
 Winter，不把 M22 的等价证据包装成 production qualification。
+
+### 【2026-08-29 | COMPLETED（synthetic correctness）】P0.2-M23 实施收口
+
+本轮在研究分支 `research/p02-m23-pareto-incumbent-bound-20260829` 的提交
+`a6fcbd0` 完成 proof-carrying multi-objective incumbent bound。证书以
+`(node, exact UTC arrival)` 为键，同时绑定唯一 `goal_arrival`、完整 scope digest、
+objective count、有限非负成本向量、proof digest 和覆盖/评估器状态。只有已发现的、
+相同 exact goal arrival 的 goal label 严格支配 `candidate.costs + lower_bound` 时，才丢弃
+尚未入队的新 label；不同 arrival 不比较，已扩展 label 不删除。scope、证书、节点覆盖、
+非有限值或恢复 digest 任一不匹配都会停止授权并保持零 bound pruning。actual temporal
+Pareto bridge 已接入同一证书 digest 和 checkpoint identity fence，但仍是 C 内部研究路径。
+
+**验证证据。** 新增 5 个有限图测试，并补充 actual bridge 的 rejected-certificate
+fail-closed 测试；聚焦 `test_non_fifo_pareto_incumbent_bound.py` 与
+`test_non_fifo_temporal_pareto.py` 共 `16 passed`。覆盖真实 bound pruning、不同 exact
+goal arrival 保留、scope/证书拒绝、checkpoint digest 漂移、取消和 evaluator failure；
+失效路径均为 `incumbent_bound_pruned=0`。完整测试为 `572 passed, 3 skipped`，3 个 skip
+仅因 C worktree 没有 orchestrator archive fixture。Ruff、`git diff --check`、离线 lock
+check/sync、CLI smoke 和等价 `UV_OFFLINE=1 make check` 均通过；主机和进程 swap 均为
+`0B`。本轮没有运行真实输入或性能/资源实验。
+
+**结论。** synthetic correctness 状态为
+`READY-FOR-P0.2-REAL-INCUMBENT-BOUND-RESOURCE-PLAN`，仅允许另立真实 scope/资源审计；
+没有 production qualification、performance proof、candidate 或 Winter 授权。真实 FIFO、
+M22 frontier equivalence、M18 queue resource fail、P2.1/P3/ARA* 历史状态保持不变。
