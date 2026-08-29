@@ -18,6 +18,14 @@ from arctic_route_planning.planners.temporal_label_astar import (
     TemporalSearchLimitExceeded,
     TemporalSearchLimits,
 )
+from arctic_route_planning.planners.temporal_queue_compaction import (
+    TemporalQueueCompactionPolicy,
+)
+from arctic_route_planning.planners.temporal_session import (
+    TemporalSessionIdentityMismatch,
+    checkpoint_session,
+    restore_session,
+)
 from arctic_route_planning.planners.time_dependent_astar import _EdgeTraversal
 from arctic_route_planning.risk import RiskSampler
 
@@ -229,6 +237,68 @@ def test_eta_failure_class_is_preserved_in_session_diagnostics() -> None:
     assert session.context.diagnostics.eta_failure_reasons == {
         "fixed_point_uncertain": 3
     }
+
+
+def test_queue_compaction_removes_only_stale_entries() -> None:
+    planner = _planner()
+    policy = TemporalQueueCompactionPolicy.live_only(
+        check_interval=1,
+        min_stale_entries=1,
+        min_stale_fraction=0.25,
+    )
+    planner.queue_compaction_policy = policy
+    request = PlanningRequest(start=(1, 0), goal=(1, 3), departure_time=T0)
+    session = planner.create_session(request)
+    state = ((1, 1), (0, 1), T0 + timedelta(hours=1))
+    session.labels[state] = 1.0
+    stale = (2.0, 2.0, 1, 1, 0, 1, state[2].toordinal(), state[2].microsecond, state[2], state)
+    live = (1.0, 1.0, 1, 1, 0, 1, state[2].toordinal(), state[2].microsecond, state[2], state)
+    session.queue.extend((stale, live))
+
+    session._maybe_compact_queue(1, force=True)
+
+    assert session.labels[state] == 1.0
+    assert [entry[1] for entry in session.queue].count(2.0) == 0
+    assert [entry[1] for entry in session.queue].count(1.0) == 1
+    assert session.context.diagnostics.queue_compactions == 1
+    assert session.context.diagnostics.queue_compaction_removed == 1
+    assert session.context.diagnostics.queue_compaction_rejected == 0
+
+
+def test_queue_compaction_malformed_queue_fails_closed_without_mutation() -> None:
+    planner = _planner()
+    planner.queue_compaction_policy = TemporalQueueCompactionPolicy.live_only(
+        check_interval=1,
+        min_stale_entries=1,
+        min_stale_fraction=0.1,
+    )
+    request = PlanningRequest(start=(1, 0), goal=(1, 3), departure_time=T0)
+    session = planner.create_session(request)
+    before = list(session.queue)
+    session.queue.append(("malformed",))
+
+    session._maybe_compact_queue(1, force=True)
+
+    assert session.queue == [*before, ("malformed",)]
+    assert session.context.diagnostics.queue_compactions == 0
+    assert session.context.diagnostics.queue_compaction_rejected == 1
+
+
+def test_queue_compaction_policy_digest_is_checkpoint_bound() -> None:
+    planner = _planner()
+    planner.queue_compaction_policy = TemporalQueueCompactionPolicy.live_only(
+        check_interval=1,
+        min_stale_entries=1,
+        min_stale_fraction=0.1,
+    )
+    request = PlanningRequest(start=(1, 0), goal=(1, 3), departure_time=T0)
+    session = planner.create_session(request)
+    planner.advance_session(session, expansion_slice=1)
+    checkpoint = checkpoint_session(session)
+    planner.queue_compaction_policy = TemporalQueueCompactionPolicy.disabled()
+
+    with pytest.raises(TemporalSessionIdentityMismatch, match="identity fence"):
+        restore_session(planner, checkpoint, request=request)
 
 
 def test_same_bucket_exact_arrivals_are_not_cross_dominated() -> None:

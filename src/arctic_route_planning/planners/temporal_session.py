@@ -15,7 +15,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, fields, is_dataclass, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from heapq import heappop
+from heapq import heapify, heappop
 from itertools import count
 from math import isfinite
 from time import perf_counter
@@ -26,6 +26,12 @@ from arctic_route_planning.contracts.codec import risk_frame_content_digest
 from arctic_route_planning.domain.models import ObjectiveMode
 from arctic_route_planning.errors import NoRouteError, PlanningCancelled
 from arctic_route_planning.planners.errors import EndpointBlockedError, PlanningHorizonExceeded
+
+from .temporal_queue_compaction import (
+    QUEUE_COMPACTION_DISABLED_DIGEST,
+    TemporalQueueCompactionPolicy,
+    is_well_formed_queue_entry,
+)
 
 if TYPE_CHECKING:
     from arctic_route_planning.planners.temporal_label_astar import (
@@ -236,6 +242,7 @@ class TemporalSessionIdentity:
     dominance_policy_digest: str = ""
     state_bound_policy_digest: str = ""
     heuristic_policy_digest: str = ""
+    queue_compaction_policy_digest: str = QUEUE_COMPACTION_DISABLED_DIGEST
     algorithm_version: str = _ALGORITHM_VERSION
 
     @classmethod
@@ -323,6 +330,11 @@ class TemporalSessionIdentity:
                 "heuristic_policy_digest",
                 "temporal-heuristic-default",
             ),
+            queue_compaction_policy_digest=getattr(
+                planner,
+                "queue_compaction_policy_digest",
+                QUEUE_COMPACTION_DISABLED_DIGEST,
+            ),
         )
 
     @property
@@ -353,6 +365,7 @@ class TemporalSessionIdentity:
             self.dominance_policy_digest,
             self.state_bound_policy_digest,
             self.heuristic_policy_digest,
+            self.queue_compaction_policy_digest,
         )
         if (
             self.objective is None
@@ -459,6 +472,7 @@ class TemporalSession:
         "planner",
         "predecessors",
         "queue",
+        "queue_compaction_policy",
         "request",
         "result",
         "serial_consumed",
@@ -477,6 +491,15 @@ class TemporalSession:
         self.planner = planner
         self.request = request
         self.identity = identity
+        self.queue_compaction_policy = getattr(
+            planner,
+            "queue_compaction_policy",
+            TemporalQueueCompactionPolicy.disabled(),
+        )
+        if not isinstance(self.queue_compaction_policy, TemporalQueueCompactionPolicy):
+            raise TemporalSessionIdentityMismatch("queue compaction policy type is invalid")
+        if self.queue_compaction_policy.digest != identity.queue_compaction_policy_digest:
+            raise TemporalSessionIdentityMismatch("queue compaction policy digest mismatch")
         self.state = TemporalSessionState.READY
         self.context = planner._new_execution_context()
         planner._authorize_dominance(
@@ -684,6 +707,10 @@ class TemporalSession:
                         tentative_cost,
                         context=self.context,
                     )
+                    self._maybe_compact_queue(
+                        self.serial_consumed + 1,
+                        force=len(self.queue) + 1 >= self.planner.limits.max_queue,
+                    )
                     self.planner._ensure_queue_capacity(self.queue)
                     self.planner._push_queue(
                         self.queue,
@@ -728,6 +755,49 @@ class TemporalSession:
         bucket = int(elapsed_hours)
         profile = self.context.diagnostics.queue_peak_by_elapsed_hour
         profile[bucket] = max(profile.get(bucket, 0), len(self.queue))
+
+    def _maybe_compact_queue(self, event_count: int, *, force: bool = False) -> None:
+        """Remove only heap entries proven stale by the current label map.
+
+        The compaction scan is deliberately conservative.  Any malformed
+        entry or unhashable state rejects this optimisation and leaves the
+        queue untouched; the search therefore falls back to its historical
+        lazy stale-pop behaviour instead of guessing which entries are live.
+        """
+
+        policy = self.queue_compaction_policy
+        if not policy.should_check(event_count, force=force):
+            return
+        diagnostics = self.context.diagnostics
+        diagnostics.queue_compaction_checks += 1
+        before = len(self.queue)
+        if before == 0:
+            return
+        live: list[_QUEUE_TYPE] = []
+        stale = 0
+        try:
+            for entry in self.queue:
+                if not is_well_formed_queue_entry(entry):
+                    raise ValueError("malformed_queue_entry")
+                state = entry[-1]
+                current_cost = self.labels.get(state)
+                if current_cost is None or entry[1] != current_cost:
+                    stale += 1
+                else:
+                    live.append(entry)
+        except (TypeError, ValueError, KeyError) as error:
+            diagnostics.queue_compaction_rejected += 1
+            reason = f"{type(error).__name__}:{error}"
+            diagnostics.queue_compaction_rejection_reasons[reason] = (
+                diagnostics.queue_compaction_rejection_reasons.get(reason, 0) + 1
+            )
+            return
+        if not policy.qualifies(stale, before):
+            return
+        self.queue[:] = live
+        heapify(self.queue)
+        diagnostics.queue_compactions += 1
+        diagnostics.queue_compaction_removed += stale
 
     def _current_compute_ms(self) -> float:
         if self.advance_started is None:
@@ -914,6 +984,15 @@ def restore_session(
     session.planner = planner
     session.request = restored_request
     session.identity = checkpoint.identity
+    session.queue_compaction_policy = getattr(
+        planner,
+        "queue_compaction_policy",
+        TemporalQueueCompactionPolicy.disabled(),
+    )
+    if not isinstance(session.queue_compaction_policy, TemporalQueueCompactionPolicy):
+        raise TemporalSessionIdentityMismatch("queue compaction policy type is invalid")
+    if session.queue_compaction_policy.digest != checkpoint.identity.queue_compaction_policy_digest:
+        raise TemporalSessionIdentityMismatch("queue compaction policy digest mismatch")
     session.state = checkpoint.state
     session.context = planner._new_execution_context()
     planner._authorize_dominance(

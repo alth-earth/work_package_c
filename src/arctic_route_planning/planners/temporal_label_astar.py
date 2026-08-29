@@ -50,6 +50,7 @@ from .temporal_qualification import (
     TemporalScope,
     temporal_scope_from_planner,
 )
+from .temporal_queue_compaction import TemporalQueueCompactionPolicy
 from .time_dependent_astar import (
     PlanningRequest,
     PlanningResult,
@@ -176,6 +177,12 @@ class TemporalDiagnostics:
     heuristic_rejection_reasons: tuple[tuple[str, int], ...] = ()
     incumbent_pruned: int = 0
     queue_peak_by_elapsed_hour: tuple[tuple[int, int], ...] = ()
+    queue_compaction_policy: str = "disabled"
+    queue_compaction_checks: int = 0
+    queue_compactions: int = 0
+    queue_compaction_removed: int = 0
+    queue_compaction_rejected: int = 0
+    queue_compaction_rejection_reasons: tuple[tuple[str, int], ...] = ()
     state_bound_checks: int = 0
     state_bound_pruned: int = 0
     state_bound_arrival_pruned: int = 0
@@ -246,6 +253,12 @@ class _MutableDiagnostics:
     heuristic_rejection_reasons: dict[str, int] = field(default_factory=dict)
     incumbent_pruned: int = 0
     queue_peak_by_elapsed_hour: dict[int, int] = field(default_factory=dict)
+    queue_compaction_policy: str = "disabled"
+    queue_compaction_checks: int = 0
+    queue_compactions: int = 0
+    queue_compaction_removed: int = 0
+    queue_compaction_rejected: int = 0
+    queue_compaction_rejection_reasons: dict[str, int] = field(default_factory=dict)
     state_bound_checks: int = 0
     state_bound_pruned: int = 0
     state_bound_arrival_pruned: int = 0
@@ -312,6 +325,14 @@ class _MutableDiagnostics:
             heuristic_rejection_reasons=tuple(sorted(self.heuristic_rejection_reasons.items())),
             incumbent_pruned=self.incumbent_pruned,
             queue_peak_by_elapsed_hour=tuple(sorted(self.queue_peak_by_elapsed_hour.items())),
+            queue_compaction_policy=self.queue_compaction_policy,
+            queue_compaction_checks=self.queue_compaction_checks,
+            queue_compactions=self.queue_compactions,
+            queue_compaction_removed=self.queue_compaction_removed,
+            queue_compaction_rejected=self.queue_compaction_rejected,
+            queue_compaction_rejection_reasons=tuple(
+                sorted(self.queue_compaction_rejection_reasons.items())
+            ),
             state_bound_checks=self.state_bound_checks,
             state_bound_pruned=self.state_bound_pruned,
             state_bound_arrival_pruned=self.state_bound_arrival_pruned,
@@ -374,6 +395,7 @@ class TemporalLabelAStar(TimeDependentAStar):
         dominance_policy: TemporalDominancePolicy | None = None,
         state_bound_certificate: TemporalStateBoundCertificate | None = None,
         heuristic_certificate: TemporalHeuristicCertificate | None = None,
+        queue_compaction_policy: TemporalQueueCompactionPolicy | None = None,
     ) -> None:
         super().__init__(
             grid,
@@ -389,6 +411,11 @@ class TemporalLabelAStar(TimeDependentAStar):
         self.dominance_policy = dominance_policy or TemporalDominancePolicy.disabled()
         self.state_bound_certificate = state_bound_certificate
         self.heuristic_certificate = heuristic_certificate
+        self.queue_compaction_policy = (
+            queue_compaction_policy or TemporalQueueCompactionPolicy.disabled()
+        )
+        if not isinstance(self.queue_compaction_policy, TemporalQueueCompactionPolicy):
+            raise TypeError("queue_compaction_policy must be TemporalQueueCompactionPolicy")
 
     @property
     def dominance_policy_digest(self) -> str:
@@ -411,6 +438,12 @@ class TemporalLabelAStar(TimeDependentAStar):
         if self.heuristic_certificate is None:
             return "temporal-heuristic-default"
         return self.heuristic_certificate.digest
+
+    @property
+    def queue_compaction_policy_digest(self) -> str:
+        """Identity fence for the optional stale-entry compaction policy."""
+
+        return self.queue_compaction_policy.digest
 
     def temporal_scope(
         self,
@@ -740,6 +773,7 @@ class TemporalLabelAStar(TimeDependentAStar):
         if self.heuristic_certificate is not None:
             context.diagnostics.heuristic_policy = "certified"
             context.diagnostics.heuristic_certificate_digest = self.heuristic_certificate.digest
+        context.diagnostics.queue_compaction_policy = self.queue_compaction_policy.digest
         context.state_bound_certificate = self.state_bound_certificate
         return context
 
