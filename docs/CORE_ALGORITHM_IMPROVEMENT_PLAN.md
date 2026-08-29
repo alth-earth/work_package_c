@@ -3190,6 +3190,38 @@ point reference match、deterministic 和资源证据通过时，只标记
 不写 formal latest/replanning baseline/frozen artifact，不改变 FIFO violation/uncertain、
 candidate/Winter、P3/ARA* 或正式合同状态。
 
+### 【2026-08-29 | PLANNED】P0.2-M22：real 24h state-bound Pareto frontier equivalence
+
+M18 已在真实 `rolling_0_24h` 上观察到 graph-topological arrival envelope 能将 actual
+Pareto candidate 压在冻结 queue 上限内，但 baseline 未完成，M19 只补齐了 selected route 的
+独立 reference，M20/M21 分别补齐了 synthetic/真实 6h 的完整 frontier 证据。本轮把三者合并
+为一个有限的真实 24h 正确性审计：同一完整 `TemporalScope`、同一 proof-carrying
+`TemporalStateBoundCertificate` 下，比较 `pareto_pruning=False` 的 certified reference
+sidecar 与 `pareto_pruning=True` 的 candidate sidecar 的完整 goal frontier，并以独立
+zero-heuristic Dijkstra 做 selected-route 业务字段对照。
+
+**边界和资源。** 只运行冻结 holdout/development 的 `rolling_0_24h`，三目标，每个 policy/
+objective/mode 至少一次；mode 为 one-shot 与 slice→restore。两边均保持
+`TemporalDominancePolicy.disabled()`、`use_heuristic=False`、无 `certified_only(...)`，仅显式
+使用同一 graph-topological arrival bound；不提高 `50k/100k/50k/400k`，不执行 full-voyage、
+Winter 或 candidate。每个 worker 置于 `MemoryMax=4G`、`MemorySwapMax=0`、固定 CPU 的独立
+systemd scope；任何 queue/label/expansion/edge limit、timeout、OOM、scope/proof mismatch
+或 evaluator failure 都记录为资源/证据失败，不择优重跑。
+
+**正确性。** reference/candidate 的完整 frontier 必须证书 complete、scope/comparison
+identity 相同，并逐项比较节点、exact UTC arrival、路径、7 维成本、速度、风险、confidence、
+source IDs 和 CostBreakdown；selected route 继续与独立 Dijkstra 对照。只允许把派生
+`semantic_digest` 的稳定序列化差异标为 `SEMANTIC_MATCH` 诊断接受，不能忽略业务字段或使用
+数值容差；实际 exact match 仍单独记录。state-bound 只能拒绝新生成 label，已扩展 label、
+不同 exact arrival、失败/取消/资源状态不得删除或伪装成功。
+
+**收口。** 完整 frontier、selected-route 语义、slice→restore、determinism、fail-closed 和
+强 cgroup 全部通过时标记 `READY_FOR_P0.2-REAL-24H-FRONTIER-IMPLEMENTATION-REVIEW`；任一
+语义/证书/fail-closed 失败为 `NO_FRONTIER_PROOF/FAIL`；冻结资源触顶为
+`REAL_INPUT_24H_STATE_BOUND_FRONTIER_RESOURCE_FAIL`；构件不完整或身份漂移为
+`INVALID/PENDING`。无论结果如何，不授权 dominance、candidate/Winter 或生产接口；完成后
+只保留本地分支与实验构件并清理辅助 worktree。
+
 ### 【2026-08-29 | COMPLETED】P0.2-M21：real 6h Pareto frontier equivalence
 
 本轮在隔离分支 `research/p02-m21-real-frontier-equivalence-20260829` 完成；实现提交为
