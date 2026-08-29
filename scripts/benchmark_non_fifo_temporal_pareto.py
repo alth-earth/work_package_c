@@ -505,17 +505,26 @@ def _worker_record(
                 request,
                 pareto_pruning=True,
             )
-            if session.advance(expansion_slice=1) is not None:
-                raise RuntimeError("fixture did not pause before checkpoint")
-            checkpoint = session.checkpoint()
-            checkpoint_digest = checkpoint.digest
-            restored = restore_non_fifo_temporal_pareto_session(planner, request, checkpoint)
-            result = restored.run()
-            full = run_non_fifo_temporal_pareto_search(planner, request, pareto_pruning=True)
-            restore_match = (
-                result.frontier_digest == full.frontier_digest
-                and result.semantic_digest == full.semantic_digest
-            )
+            initial = session.advance(expansion_slice=1)
+            if initial is not None:
+                # An evaluator can fail before the first pause.  That is a
+                # terminal failure, not a missing checkpoint, and must remain
+                # visible as the expected fail-closed status.
+                result = initial
+            else:
+                checkpoint = session.checkpoint()
+                checkpoint_digest = checkpoint.digest
+                restored = restore_non_fifo_temporal_pareto_session(
+                    planner, request, checkpoint
+                )
+                result = restored.run()
+                full = run_non_fifo_temporal_pareto_search(
+                    planner, request, pareto_pruning=True
+                )
+                restore_match = (
+                    result.frontier_digest == full.frontier_digest
+                    and result.semantic_digest == full.semantic_digest
+                )
         else:
             result = run_non_fifo_temporal_pareto_search(planner, request, pareto_pruning=True)
         if result.status is NonFifoSearchStatus.GOAL_FOUND:
