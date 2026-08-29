@@ -417,6 +417,185 @@ class NonFifoParetoIncumbentBoundCertificate:
         )
 
 
+class NonFifoParetoTerminalBoundStatus(StrEnum):
+    """Fail-closed states for selected-route terminal bounds."""
+
+    DISABLED = "DISABLED"
+    CERTIFIED = "CERTIFIED"
+    REJECTED = "REJECTED"
+
+
+@dataclass(frozen=True, slots=True)
+class NonFifoParetoTerminalBoundCertificate:
+    """A lower-bound proof for selected-route-only terminal pruning.
+
+    Unlike :class:`NonFifoParetoIncumbentBoundCertificate`, this certificate
+    does not claim that a suffix has one exact goal arrival.  It is therefore
+    usable only by the explicit selected-route mode, where the goal is a
+    terminal state and the objective vector is compared lexicographically.
+    The full exact-arrival Pareto frontier is intentionally not certifiable
+    from this evidence.
+    """
+
+    status: NonFifoParetoTerminalBoundStatus
+    scope_digest: str
+    goal: Any
+    objective_count: int
+    node_lower_bounds: tuple[tuple[Any, tuple[float, ...]], ...]
+    coverage_complete: bool
+    evaluator_certified: bool
+    proof_digest: str
+    reason: str | None = None
+    selection_only: bool = True
+    schema_version: str = "c.p0.2-nonfifo-pareto-terminal-bound.v1"
+    certificate_digest: str = ""
+
+    def __post_init__(self) -> None:
+        if self.schema_version != "c.p0.2-nonfifo-pareto-terminal-bound.v1":
+            raise ValueError("unsupported terminal-bound certificate schema")
+        if not isinstance(self.status, NonFifoParetoTerminalBoundStatus):
+            raise ValueError("terminal-bound certificate status is invalid")
+        if not isinstance(self.scope_digest, str) or not self.scope_digest:
+            raise ValueError("terminal-bound certificate scope is empty")
+        if (
+            isinstance(self.objective_count, bool)
+            or not isinstance(self.objective_count, int)
+            or self.objective_count < 1
+        ):
+            raise ValueError("terminal-bound objective_count must be positive")
+        if not isinstance(self.coverage_complete, bool) or not isinstance(
+            self.evaluator_certified, bool
+        ):
+            raise ValueError("terminal-bound coverage/evaluator flags are invalid")
+        if not isinstance(self.selection_only, bool) or not self.selection_only:
+            raise ValueError("terminal-bound certificate must be selection-only")
+        if not isinstance(self.proof_digest, str) or not self.proof_digest:
+            raise ValueError("terminal-bound proof digest is empty")
+        normalized: list[tuple[Any, tuple[float, ...]]] = []
+        seen: set[Any] = set()
+        for node, values in self.node_lower_bounds:
+            try:
+                if node in seen:
+                    raise ValueError("terminal-bound node is duplicated")
+                seen.add(node)
+            except TypeError as error:
+                raise ValueError("terminal-bound node is not hashable") from error
+            vector = tuple(values)
+            if len(vector) != self.objective_count or any(
+                not isfinite(value) or value < 0.0 for value in vector
+            ):
+                raise ValueError("terminal-bound lower bounds are invalid")
+            normalized.append((node, vector))
+        normalized.sort(key=lambda item: _canonical_token(item[0]))
+        object.__setattr__(self, "node_lower_bounds", tuple(normalized))
+        expected = self._calculated_digest()
+        if self.certificate_digest and self.certificate_digest != expected:
+            raise ValueError("terminal-bound certificate digest mismatch")
+        object.__setattr__(self, "certificate_digest", expected)
+
+    @classmethod
+    def certified(
+        cls,
+        *,
+        scope_digest: str,
+        goal: Any,
+        objective_count: int,
+        node_lower_bounds: Mapping[Any, Iterable[float]],
+        proof_digest: str,
+    ) -> NonFifoParetoTerminalBoundCertificate:
+        return cls(
+            status=NonFifoParetoTerminalBoundStatus.CERTIFIED,
+            scope_digest=scope_digest,
+            goal=goal,
+            objective_count=objective_count,
+            node_lower_bounds=tuple(node_lower_bounds.items()),
+            coverage_complete=True,
+            evaluator_certified=True,
+            proof_digest=proof_digest,
+        )
+
+    @classmethod
+    def rejected(
+        cls,
+        *,
+        scope_digest: str,
+        goal: Any,
+        objective_count: int,
+        reason: str,
+        proof_digest: str = "rejected-proof",
+        node_lower_bounds: Mapping[Any, Iterable[float]] | None = None,
+        coverage_complete: bool = False,
+        evaluator_certified: bool = False,
+    ) -> NonFifoParetoTerminalBoundCertificate:
+        return cls(
+            status=NonFifoParetoTerminalBoundStatus.REJECTED,
+            scope_digest=scope_digest,
+            goal=goal,
+            objective_count=objective_count,
+            node_lower_bounds=tuple(
+                (node, tuple(values))
+                for node, values in (node_lower_bounds or {}).items()
+            ),
+            coverage_complete=coverage_complete,
+            evaluator_certified=evaluator_certified,
+            proof_digest=proof_digest,
+            reason=reason,
+        )
+
+    @property
+    def digest(self) -> str:
+        return self.certificate_digest
+
+    @property
+    def usable(self) -> bool:
+        return (
+            self.status is NonFifoParetoTerminalBoundStatus.CERTIFIED
+            and self.coverage_complete
+            and self.evaluator_certified
+            and self.reason is None
+            and self.selection_only
+            and bool(self.node_lower_bounds)
+        )
+
+    def permits(self, *, scope_digest: str, goal: Any, objective_count: int) -> bool:
+        return (
+            self.usable
+            and self.scope_digest == scope_digest
+            and self.scope_digest != "unspecified-scope"
+            and scope_digest != "unspecified-scope"
+            and self.goal == goal
+            and self.objective_count == objective_count
+        )
+
+    def lower_bound(self, node: Any) -> tuple[float, ...] | None:
+        for candidate, values in self.node_lower_bounds:
+            if candidate == node:
+                return values
+        return None
+
+    def _calculated_digest(self) -> str:
+        return _digest(
+            {
+                "schema_version": self.schema_version,
+                "status": self.status,
+                "scope_digest": self.scope_digest,
+                "goal": self.goal,
+                "objective_count": self.objective_count,
+                "node_lower_bounds": self.node_lower_bounds,
+                "coverage_complete": self.coverage_complete,
+                "evaluator_certified": self.evaluator_certified,
+                "proof_digest": self.proof_digest,
+                "reason": self.reason,
+                "selection_only": self.selection_only,
+            }
+        )
+
+
+NonFifoParetoBoundCertificate = (
+    NonFifoParetoIncumbentBoundCertificate | NonFifoParetoTerminalBoundCertificate
+)
+
+
 @dataclass(frozen=True, slots=True)
 class NonFifoSearchResult:
     status: NonFifoSearchStatus
@@ -466,6 +645,20 @@ class NonFifoParetoSearchResult:
     incumbent_bound_pruned: int = 0
     incumbent_bound_rejected: int = 0
     incumbent_bound_rejection_reasons: tuple[tuple[str, int], ...] = ()
+    # A terminal-bound search deliberately proves only the selected route,
+    # not the complete exact-arrival goal frontier.  Keep this explicit in
+    # the result so callers cannot accidentally promote it to a frontier
+    # certificate.
+    frontier_complete: bool = True
+    selection_only: bool = False
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.frontier_complete, bool) or not isinstance(
+            self.selection_only, bool
+        ):
+            raise ValueError("Pareto result frontier policy flags are invalid")
+        if self.selection_only and self.frontier_complete:
+            raise ValueError("selection-only result cannot claim a complete frontier")
 
     @property
     def goal_labels(self) -> tuple[NonFifoParetoLabel, ...]:
@@ -524,6 +717,8 @@ class NonFifoParetoSearchResult:
             "reason": self.reason,
             "pareto_pruning": self.pareto_pruning,
             "incumbent_bound_digest": self.incumbent_bound_digest,
+            "frontier_complete": self.frontier_complete,
+            "selection_only": self.selection_only,
             "search_limits": self.search_limits,
             "frontier": frontier,
         }
@@ -722,6 +917,8 @@ class NonFifoParetoFrontierCertificate:
             reasons.append("selected_label_missing")
         if result.reason is not None:
             reasons.append(f"reason:{result.reason}")
+        if not result.frontier_complete or result.selection_only:
+            reasons.append("frontier_incomplete_by_policy")
         if result.evaluator_errors:
             reasons.append("evaluator_errors")
         if result.goal_node is not None and result.goal_node != identity.goal:
@@ -1635,6 +1832,7 @@ class NonFifoParetoSession:
         "incumbent_bound_pruned",
         "incumbent_bound_rejected",
         "incumbent_bound_rejection_reasons",
+        "incumbent_bound_selection_only",
         "labels_by_key",
         "maximum_elapsed",
         "neighbors",
@@ -1667,7 +1865,7 @@ class NonFifoParetoSession:
         fixture_digest: str = "unspecified-fixture",
         config_digest: str = "unspecified-config",
         scope_digest: str = "unspecified-scope",
-        incumbent_bound_certificate: NonFifoParetoIncumbentBoundCertificate | None = None,
+        incumbent_bound_certificate: NonFifoParetoBoundCertificate | None = None,
         cancel_check: Callable[[], bool] | None = None,
         identity: NonFifoParetoSessionIdentity | None = None,
     ) -> None:
@@ -1701,12 +1899,16 @@ class NonFifoParetoSession:
             )
         self.identity = expected_identity
         if incumbent_bound_certificate is not None and not isinstance(
-            incumbent_bound_certificate, NonFifoParetoIncumbentBoundCertificate
+            incumbent_bound_certificate,
+            (NonFifoParetoIncumbentBoundCertificate, NonFifoParetoTerminalBoundCertificate),
         ):
             raise NonFifoParetoSessionIdentityMismatch(
                 "incumbent-bound certificate type is invalid"
             )
         self.incumbent_bound_certificate = incumbent_bound_certificate
+        self.incumbent_bound_selection_only = isinstance(
+            incumbent_bound_certificate, NonFifoParetoTerminalBoundCertificate
+        )
         self.neighbors = neighbors
         self.evaluate_edge = evaluate_edge
         self.cancel_check = cancel_check
@@ -1753,7 +1955,7 @@ class NonFifoParetoSession:
             [Any, Any, datetime], NonFifoTransition | NonFifoParetoTransition
         ],
         cancel_check: Callable[[], bool] | None,
-        incumbent_bound_certificate: NonFifoParetoIncumbentBoundCertificate | None,
+        incumbent_bound_certificate: NonFifoParetoBoundCertificate | None,
     ) -> NonFifoParetoSession:
         checkpoint.assert_valid()
         identity = checkpoint.identity
@@ -1764,7 +1966,8 @@ class NonFifoParetoSession:
         session = cls.__new__(cls)
         session.identity = identity
         if incumbent_bound_certificate is not None and not isinstance(
-            incumbent_bound_certificate, NonFifoParetoIncumbentBoundCertificate
+            incumbent_bound_certificate,
+            (NonFifoParetoIncumbentBoundCertificate, NonFifoParetoTerminalBoundCertificate),
         ):
             raise NonFifoParetoSessionIdentityMismatch(
                 "incumbent-bound certificate type is invalid"
@@ -1779,6 +1982,9 @@ class NonFifoParetoSession:
                 "incumbent-bound certificate digest mismatch"
             )
         session.incumbent_bound_certificate = incumbent_bound_certificate
+        session.incumbent_bound_selection_only = isinstance(
+            incumbent_bound_certificate, NonFifoParetoTerminalBoundCertificate
+        )
         session.neighbors = neighbors
         session.evaluate_edge = evaluate_edge
         session.cancel_check = cancel_check
@@ -1858,6 +2064,36 @@ class NonFifoParetoSession:
             self._record_incumbent_bound_rejection("certificate_missing")
             self.incumbent_bound_authorized = False
             return False
+        if isinstance(certificate, NonFifoParetoTerminalBoundCertificate):
+            lower_bound = certificate.lower_bound(candidate.node)
+            if lower_bound is None:
+                # A complete certificate must cover every reachable state.  A
+                # missing entry is therefore a fail-closed rejection, not a
+                # reason to guess a zero bound.
+                self._record_incumbent_bound_rejection("state_uncovered")
+                self.incumbent_bound_authorized = False
+                return False
+            if len(lower_bound) != len(candidate.costs):
+                self._record_incumbent_bound_rejection("objective_dimension_mismatch")
+                self.incumbent_bound_authorized = False
+                return False
+            completion = tuple(
+                current + bound
+                for current, bound in zip(candidate.costs, lower_bound, strict=True)
+            )
+            if any(not isfinite(value) for value in completion):
+                self._record_incumbent_bound_rejection("non_finite_completion")
+                self.incumbent_bound_authorized = False
+                return False
+            # The terminal state has no successors, so arrival time is not a
+            # future-evaluator input.  In this explicit selection-only mode,
+            # compare the conservative completion bound to an observed goal
+            # lexicographically.  Equal vectors are retained for deterministic
+            # path/arrival tie-breaking and auditability.
+            if any(goal.costs < completion for goal in self.goals):
+                self.incumbent_bound_pruned += 1
+                return True
+            return False
         evidence = certificate.lower_bound(candidate.node, candidate.arrival_time)
         if evidence is None:
             self._record_incumbent_bound_rejection("state_uncovered")
@@ -1921,6 +2157,7 @@ class NonFifoParetoSession:
             incumbent_bound_rejection_reasons=tuple(
                 sorted(self.incumbent_bound_rejection_reasons.items())
             ),
+            selection_only=self.incumbent_bound_selection_only,
         )
         return self.result
 
@@ -2087,7 +2324,7 @@ def restore_non_fifo_pareto_session(
     ],
     cancel_check: Callable[[], bool] | None = None,
     identity: NonFifoParetoSessionIdentity | None = None,
-    incumbent_bound_certificate: NonFifoParetoIncumbentBoundCertificate | None = None,
+    incumbent_bound_certificate: NonFifoParetoBoundCertificate | None = None,
 ) -> NonFifoParetoSession:
     """Restore a paused finite session after all identity fences."""
 
@@ -2123,7 +2360,7 @@ def search_non_fifo_pareto(
     fixture_digest: str = "one-shot-fixture",
     config_digest: str = "one-shot-config",
     scope_digest: str = "unspecified-scope",
-    incumbent_bound_certificate: NonFifoParetoIncumbentBoundCertificate | None = None,
+    incumbent_bound_certificate: NonFifoParetoBoundCertificate | None = None,
 ) -> NonFifoParetoSearchResult:
     """Run one finite session to completion with the historical API."""
 
@@ -2258,6 +2495,7 @@ def _pareto_result(
     incumbent_bound_pruned: int = 0,
     incumbent_bound_rejected: int = 0,
     incumbent_bound_rejection_reasons: Iterable[tuple[str, int]] = (),
+    selection_only: bool = False,
 ) -> NonFifoParetoSearchResult:
     goal_list = tuple(goals)
     selected = (
@@ -2289,6 +2527,8 @@ def _pareto_result(
         incumbent_bound_pruned=incumbent_bound_pruned,
         incumbent_bound_rejected=incumbent_bound_rejected,
         incumbent_bound_rejection_reasons=tuple(incumbent_bound_rejection_reasons),
+        frontier_complete=not selection_only,
+        selection_only=selection_only,
     )
 
 
@@ -2347,6 +2587,21 @@ def _jsonable(value: Any) -> Any:
             "reason": value.reason,
             "certificate_digest": value.digest,
         }
+    if isinstance(value, NonFifoParetoTerminalBoundCertificate):
+        return {
+            "schema_version": value.schema_version,
+            "status": value.status,
+            "scope_digest": value.scope_digest,
+            "goal": _jsonable(value.goal),
+            "objective_count": value.objective_count,
+            "node_lower_bounds": _jsonable(value.node_lower_bounds),
+            "coverage_complete": value.coverage_complete,
+            "evaluator_certified": value.evaluator_certified,
+            "proof_digest": value.proof_digest,
+            "reason": value.reason,
+            "selection_only": value.selection_only,
+            "certificate_digest": value.digest,
+        }
     if isinstance(value, NonFifoBusinessEvidence):
         return {
             "speed_knots": value.speed_knots,
@@ -2399,6 +2654,8 @@ __all__ = [
     "NonFifoParetoSessionIdentityMismatch",
     "NonFifoParetoSessionRestoreError",
     "NonFifoParetoSessionState",
+    "NonFifoParetoTerminalBoundCertificate",
+    "NonFifoParetoTerminalBoundStatus",
     "NonFifoParetoTransition",
     "NonFifoSearchResult",
     "NonFifoSearchStatus",

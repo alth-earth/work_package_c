@@ -12,6 +12,7 @@ from arctic_route_planning.domain.models import ObjectiveMode
 from arctic_route_planning.grid import heading_change_degrees
 from arctic_route_planning.planners.non_fifo_feasibility import (
     NonFifoParetoIncumbentBoundCertificate,
+    NonFifoParetoTerminalBoundCertificate,
     NonFifoSearchStatus,
 )
 from arctic_route_planning.planners.non_fifo_temporal_pareto import (
@@ -201,6 +202,49 @@ def test_actual_bridge_rejects_incumbent_bound_certificate_fail_closed() -> None
     assert result.incumbent_bound_rejection_reasons == (
         ("interval-proof-incomplete", 1),
     )
+
+
+def test_actual_bridge_supports_selected_route_terminal_bound_without_frontier_claim() -> None:
+    planner = _configured_planner()
+    request = _research_request()
+    scope = planner.temporal_scope(request)
+    bounds = {}
+    rows, columns = planner.grid.shape
+    direction_codes = {
+        (neighbor[0] - row, neighbor[1] - column)
+        for row in range(rows)
+        for column in range(columns)
+        for neighbor in planner.grid.neighbors((row, column))
+    }
+    for row in range(rows):
+        for column in range(columns):
+            node = (row, column)
+            for heading in (None, *sorted(direction_codes)):
+                bounds[(node, heading)] = (0.0,) * len(TEMPORAL_PARETO_COMPONENTS)
+    certificate = NonFifoParetoTerminalBoundCertificate.certified(
+        scope_digest=scope.digest,
+        goal=(request.goal, None),
+        objective_count=len(TEMPORAL_PARETO_COMPONENTS),
+        node_lower_bounds=bounds,
+        proof_digest="actual-terminal-bound-fixture-v1",
+    )
+    baseline = run_non_fifo_temporal_pareto_search(planner, request)
+    selected = run_non_fifo_temporal_pareto_search(
+        planner,
+        request,
+        incumbent_bound_certificate=certificate,
+    )
+
+    assert baseline.status is NonFifoSearchStatus.GOAL_FOUND
+    assert selected.status is NonFifoSearchStatus.GOAL_FOUND
+    assert selected.semantic_digest == baseline.semantic_digest
+    assert selected.selection_only is True
+    assert selected.frontier_complete is False
+    assert selected.incumbent_bound_rejected == 0
+    # This tiny bridge fixture has one selected route, so zero pruning is
+    # acceptable; the synthetic adversarial test proves the pruning branch.
+    assert selected.incumbent_bound_pruned >= 0
+    assert selected.raw_result.frontier_digest != baseline.raw_result.frontier_digest
 
 
 def test_actual_bridge_maps_evaluator_and_resource_failures_without_partial_route() -> None:

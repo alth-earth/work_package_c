@@ -39,6 +39,7 @@ from .non_fifo_feasibility import (
     NonFifoParetoSearchResult,
     NonFifoParetoSession,
     NonFifoParetoSessionIdentity,
+    NonFifoParetoTerminalBoundCertificate,
     NonFifoParetoTransition,
     NonFifoSearchStatus,
     certify_non_fifo_pareto_frontier,
@@ -250,6 +251,8 @@ class NonFifoTemporalParetoResult:
                 "scope_digest": self.scope_digest,
                 "frontier": self.frontier,
                 "raw_frontier_digest": self.raw_result.frontier_digest,
+                "frontier_complete": self.raw_result.frontier_complete,
+                "selection_only": self.raw_result.selection_only,
             }
         )
 
@@ -280,6 +283,18 @@ class NonFifoTemporalParetoResult:
     @property
     def incumbent_bound_rejection_reasons(self) -> tuple[tuple[str, int], ...]:
         return self.raw_result.incumbent_bound_rejection_reasons
+
+    @property
+    def frontier_complete(self) -> bool:
+        """Whether the result contains a complete exact-arrival frontier."""
+
+        return self.raw_result.frontier_complete
+
+    @property
+    def selection_only(self) -> bool:
+        """Whether an explicit terminal bound limited this to one selection."""
+
+        return self.raw_result.selection_only
 
 
 @dataclass(frozen=True, slots=True)
@@ -460,6 +475,18 @@ class NonFifoTemporalParetoResearchSession:
         return self.session.incumbent_bound_authorized
 
     @property
+    def frontier_complete(self) -> bool:
+        """Whether this session is allowed to claim a complete frontier."""
+
+        return not self.session.incumbent_bound_selection_only
+
+    @property
+    def selection_only(self) -> bool:
+        """Whether this session uses selected-route terminal pruning."""
+
+        return self.session.incumbent_bound_selection_only
+
+    @property
     def frontier_certificate(self) -> NonFifoParetoFrontierCertificate:
         """Return a complete-frontier certificate after terminal completion.
 
@@ -518,7 +545,11 @@ def create_non_fifo_temporal_pareto_session(
     pareto_pruning: bool = False,
     skip_expected_rejections: bool = False,
     state_bound_certificate: TemporalStateBoundCertificate | None = None,
-    incumbent_bound_certificate: NonFifoParetoIncumbentBoundCertificate | None = None,
+    incumbent_bound_certificate: (
+        NonFifoParetoIncumbentBoundCertificate
+        | NonFifoParetoTerminalBoundCertificate
+        | None
+    ) = None,
     identity: NonFifoParetoSessionIdentity | None = None,
 ) -> NonFifoTemporalParetoResearchSession:
     """Create an actual-edge Pareto session for explicit research only."""
@@ -567,7 +598,11 @@ def restore_non_fifo_temporal_pareto_session(
     cancel_check: Any = None,
     skip_expected_rejections: bool = False,
     state_bound_certificate: TemporalStateBoundCertificate | None = None,
-    incumbent_bound_certificate: NonFifoParetoIncumbentBoundCertificate | None = None,
+    incumbent_bound_certificate: (
+        NonFifoParetoIncumbentBoundCertificate
+        | NonFifoParetoTerminalBoundCertificate
+        | None
+    ) = None,
 ) -> NonFifoTemporalParetoResearchSession:
     """Restore an actual-edge Pareto session after all bridge fences."""
 
@@ -623,7 +658,11 @@ def run_non_fifo_temporal_pareto_search(
     pareto_pruning: bool = False,
     skip_expected_rejections: bool = False,
     state_bound_certificate: TemporalStateBoundCertificate | None = None,
-    incumbent_bound_certificate: NonFifoParetoIncumbentBoundCertificate | None = None,
+    incumbent_bound_certificate: (
+        NonFifoParetoIncumbentBoundCertificate
+        | NonFifoParetoTerminalBoundCertificate
+        | None
+    ) = None,
 ) -> NonFifoTemporalParetoResult:
     """Run the actual-edge Pareto sidecar to a terminal state."""
 
@@ -648,7 +687,11 @@ def _state_bound_digest(certificate: TemporalStateBoundCertificate | None) -> st
 
 
 def _incumbent_bound_digest(
-    certificate: NonFifoParetoIncumbentBoundCertificate | None,
+    certificate: (
+        NonFifoParetoIncumbentBoundCertificate
+        | NonFifoParetoTerminalBoundCertificate
+        | None
+    ),
 ) -> str:
     """Return the explicit incumbent-bound identity, or the disabled fence."""
 
@@ -663,7 +706,11 @@ def _validate_bridge(
     planner: TemporalLabelAStar,
     request: PlanningRequest,
     state_bound_certificate: TemporalStateBoundCertificate | None = None,
-    incumbent_bound_certificate: NonFifoParetoIncumbentBoundCertificate | None = None,
+    incumbent_bound_certificate: (
+        NonFifoParetoIncumbentBoundCertificate
+        | NonFifoParetoTerminalBoundCertificate
+        | None
+    ) = None,
 ) -> TemporalScope:
     if not isinstance(planner, TemporalLabelAStar):
         raise NonFifoTemporalParetoError("actual Pareto bridge requires TemporalLabelAStar")
@@ -682,7 +729,8 @@ def _validate_bridge(
         if installed is not None and installed.digest != state_bound_certificate.digest:
             raise NonFifoTemporalParetoError("state-bound certificate digest mismatch")
     if incumbent_bound_certificate is not None and not isinstance(
-        incumbent_bound_certificate, NonFifoParetoIncumbentBoundCertificate
+        incumbent_bound_certificate,
+        (NonFifoParetoIncumbentBoundCertificate, NonFifoParetoTerminalBoundCertificate),
     ):
         raise NonFifoTemporalParetoError("incumbent-bound certificate type is invalid")
     if planner.heuristic_certificate is not None:
@@ -700,7 +748,11 @@ def _callbacks(
     *,
     skip_expected_rejections: bool,
     state_bound_certificate: TemporalStateBoundCertificate | None,
-    incumbent_bound_certificate: NonFifoParetoIncumbentBoundCertificate | None,
+    incumbent_bound_certificate: (
+        NonFifoParetoIncumbentBoundCertificate
+        | NonFifoParetoTerminalBoundCertificate
+        | None
+    ),
 ) -> tuple[_Callbacks, Any, str]:
     component_digest = _digest(
         {
