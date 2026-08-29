@@ -3353,3 +3353,32 @@ stderr 后，holdout `r2` 和 development `r1` 均完整收口。M22 因此仅�
 interval proof、性能回归门、生产资格或 candidate/Winter 授权；真实 FIFO violation、
 M18 queue resource fail、M19 reference、M20/M21、P2.1/P3/ARA* 历史结论保持不变。后续
 只能另立实现审查、corridor/envelope 或非 FIFO 计划，不自动启用 candidate 或重开 Winter。
+
+### 【2026-08-29 | PLANNED】P0.2-M23：proof-carrying multi-objective incumbent bound
+
+M22 已在真实 24h 有界状态域证明 graph-topological state bound 下的完整 Pareto frontier
+等价，但真实 candidate 的同 exact-arrival Pareto pruning 很少，尚未验证一个可安全扩大
+剪枝覆盖面的核心规则。本轮研究 C 内部、默认关闭的 multi-objective incumbent bound：对
+每个新生成 label 绑定一个完整 scope 的保守剩余成本向量下界；只有已有完整 goal label
+严格支配“当前成本 + 剩余下界”时，才丢弃该新 label。不同 exact arrival 永远不直接比较，
+已扩展 label 不删除，缺失/失效证书保持零 bound pruning。
+
+**证书和身份。** 新证书必须绑定 scope/fixture、goal、objective count、节点覆盖、每个
+维度的有限非负下界、evaluator/proof digest 和完整性状态；checkpoint/session identity
+必须包含 bound policy digest。下界缺失、scope/config/evaluator 漂移、非有限值、覆盖不足、
+evaluator failure 或 checkpoint digest 漂移均 fail-closed，记录拒绝原因而不把未知值当成
+零下界。默认 session、actual Pareto bridge、`TemporalDominancePolicy.disabled()` 和正式
+`plan()` 行为保持不变；不接入 ingress/service、不新增合同、不启用 candidate/Winter。
+
+**安全矩阵。** 在 finite non-FIFO fixtures 中覆盖可证明 pruning、两条不同 exact arrival、
+非 FIFO 后缀反例、同成本不同路径、goal 已发现、certificate scope/fixture/objective/节点
+覆盖/下界漂移、checkpoint restore、取消、evaluator failure 和资源上限。reference 使用
+禁用 incumbent bound 的完整 exact-arrival Pareto 搜索；candidate 只允许在新 label 入队前
+使用证书下界判断。路线、完整 frontier、业务字段、确定性和失败语义必须完全一致，并至少
+观察一次真实 bound pruning；失效场景 pruning 必须为零。
+
+**收口。** synthetic 证据全部通过时只标记
+`READY_FOR_P0.2-REAL-INCUMBENT-BOUND-RESOURCE-PLAN`，另立真实 scope/资源审计；任一误
+剪枝、不同 exact arrival 被错误比较、证书失效仍剪枝、恢复身份漂移或 partial route/frontier
+均标记 `NO_PERFORMANCE_PROOF/FAIL`。不提高冻结 `50k/100k/50k/400k` 上限，不重跑
+Winter，不把 M22 的等价证据包装成 production qualification。
