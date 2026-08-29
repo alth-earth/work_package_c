@@ -3434,3 +3434,79 @@ unknown 或 scope 漂移时必须为 `REAL_INPUT_INCUMBENT_BOUND_UNCERTAIN`，pr
 语义、确定性、资源和真实 pruning 全通过，仅标记
 `READY_FOR_SEPARATE_REAL_INCUMBENT_BOUND_PLAN`，仍不启用 candidate/Winter。任何 fail-open、
 partial frontier、identity 漂移或资源证据缺失均为 `INVALID/FAIL`。
+
+### 【2026-08-29 | COMPLETED（real qualification；dominance 仍禁用）】P0.2-M24：real incumbent-bound qualification audit
+
+本轮在隔离分支 `research/p02-m24-real-incumbent-bound-20260829` 完成真实资格审计；最终
+实现提交为 `85ff83869b799351873e3597843277957cd36a5d`，启动时 worktree clean，所有
+实验 identity 均绑定该 commit、实现 tree、`uv.lock`、configs、RiskFrame、route-plan-set、
+scope、request、goal、bounded ETA policy 和 evaluator digest。M24 runner
+`scripts/benchmark_non_fifo_temporal_pareto_incumbent_bound_real.py` 使用 schema
+`c.p0.2-nonfifo-pareto-incumbent-bound-real.v1`，桥接层仅补充 C 内部 session telemetry；
+未修改 B/C、C/D 合同、ingress/service、正式 `plan()` 默认路径或生产接口。
+
+**输入与权威构件。** holdout/development 均复用完整 145 帧 RiskFrame 和冻结的
+`rolling_0_24h` route-plan-set，start 均为 `[5,7]`，分别为：
+
+- holdout：`.runtime/experiments/c-p02-m24-real-incumbent-bound-holdout-20260829-r6/`，
+  experiment id `c.p0.2-nonfifo-pareto-incumbent-bound-real.v1-4ec96a03dc41d1d4`，
+  goal `[14,5]`，departure `2026-02-22T00:00:00Z`；
+- development：`.runtime/experiments/c-p02-m24-real-incumbent-bound-development-20260829-r2/`，
+  experiment id `c.p0.2-nonfifo-pareto-incumbent-bound-real.v1-54cb6f9400e2976b`，
+  goal `[14,6]`，departure `2026-03-22T00:00:00Z`。
+
+两份 manifest 的 frame count 均为 `145`，`dirty=false`，configs digest 为
+`537e1a1d1ef3f8015402e9b57556518b92a2524993074b4ecc1ccf58143cded4`，`uv.lock` digest 为
+`8893cb8387825ca4890ed808f4a98b02ba938337752971dacc3e77f859164f22`。holdout 的 RiskFrame
+commit/content digest 为 `risk-window-sha256-115ad3ab6d7034fabc9428f91c14099b02dff8bb2443569a8d3947187fbb5ff9` /
+`e4b3482b982472d43e5012a020b64d9e7846cf30517609bc621fa6edbac54894`，route-plan-set digest 为
+`572ebbfe04a345005431bc08f852d56538e9eefd414ac56fd02a499827436510`；development 的对应值为
+`risk-window-sha256-bdfd7964df96ffcad7dd78d9830394a0a91d7fbbfde16c0649d2ba2fb68a00ab` /
+`5ce4df565cd9284f32ce6a05cfcb6fd2c64f14b46da78b02e61397d58ddbe82f`，route-plan-set digest 为
+`0b4d4b6a216d34c704de5b6d49d878c326c5ab4f45402435f4b17248670f22be`。
+
+**资格结果。** 每个输入的 `fastest`、`low_risk`、`recommended` 各完成 1 个独立 worker，
+共 `3/3` case；两份 `comparison-summary.json` 均为
+`REAL_INPUT_INCUMBENT_BOUND_UNCERTAIN`、`complete=true`、`identity_clean=true`、
+`fail_closed=true`。每个 case 都安装了与完整 scope 匹配但明确拒绝的证书：
+`status=REJECTED`、`usable=false`、`reason=real_exact_goal_arrival_unproven`；session
+拒绝计数为 1，`incumbent_bound_pruned=0`，`incumbent_bound_authorized=false`，且
+`candidate_started=false`。holdout 三个 scope digest 分别为
+`38ce3576a84b15643847e8c6738ffbbe0e67292f97628fa96cdb93085d5e3da4`、
+`46392067521a90ecf9af1bc2c7a56853e36bd67b56acd7811e7aa9b104cd5e9c`、
+`8047b15ad53663267bc38bb77403c091e08ea450d4dab2c52622710391d2804b`；development 分别为
+`0f83353f6689ceba84b017c710b9144d8d639a850e3b4e3ca286d373136f3c9a`、
+`ff62eb95662958514d6fe43abcfabe7fa20dbf10369ec20fb28441326a338d68`、
+`7a6f5dc8dc4f518cb53ce2834c89481e21398f6ca5c37ea5a559aab4cd061c9f`。
+
+M24 没有把真实 FIFO 状态提升为可用证书；输入仍记录既有
+`REAL_INPUT_FIFO_VIOLATED`，而 incumbent bound 因缺少“exact state 到唯一 exact goal
+arrival”的可审计证明而保持拒绝。没有外部独立 certificate，因此没有运行
+`resource-frontier` candidate/baseline 搜索、没有启动 24h 长任务，也没有由 baseline 或
+reference 反向生成证书。真实搜索的 dominance 继续为 disabled。
+
+**资源与证据。** 最终 r6/r2 均在 systemd scope 下运行，`MemoryMax=4G`、
+`MemorySwapMax=0`、CPU affinity `[0]`；六个 case 的 cgroup `memory_events` 中
+`high/low/max/oom/oom_group_kill/oom_kill` 全为 0，`memory_swap_current=0`，进程
+`process_swap_kib=0`，host `free -h` 与 `/proc/swaps` 均为 `Swap: 0B`。holdout 的
+compute 约 `1672–1838 ms`、RSS `119796–120264 KiB`；development 约 `1585–1788 ms`、
+RSS `120068 KiB`。这些是资格审计的资源证据，不是 candidate 性能收益或资源通过声明。
+
+早期 r1/r2/r3/r4/r5 构件保留在 `.runtime/experiments/` 作为诊断记录：其中包含 worker
+输出路径遗漏、bridge telemetry 暴露错误，以及未进入 4 GiB cgroup 的版本；它们不参与
+权威结论。r6/r2 的 manifest、cases、summary、heartbeat 与 `ALL_DONE` 完整且 identity
+一致。
+
+**验证与结论。** M24 聚焦 runner/bridge 测试 `22 passed`，全量 C 测试为 `578 passed,
+3 skipped`；skip 仅因隔离 worktree 缺少 orchestrator archive fixture。Ruff、等价
+`UV_OFFLINE=1 make check`、lock check、offline sync、CLI smoke、active/archive import
+boundary 和 `git diff --check` 均通过；主机 swap 为 `0B`。本轮状态收口为
+`REAL_INPUT_INCUMBENT_BOUND_UNCERTAIN`：fail-closed 行为正确，但没有真实 dominance
+资格、性能证明或 candidate/Winter 授权。P2.1、P3 SMO-A*、ARA*、M18 queue resource
+fail、M19/M20/M21/M22/M23 历史结论保持不变。
+
+**下一分支。** 在获得独立、可审计的 interval/arrival proof 前，继续保持
+`TemporalDominancePolicy.disabled()`。若要推进，应另立“exact goal-arrival proof 或
+保守 corridor/envelope”计划；若仍无法证明，则转入独立 P0.2 label-correcting/Pareto
+实现计划。不得自动重开 Winter、提高 `50k/100k/50k/400k` 上限、启用 candidate 或写入
+formal latest/replanning baseline/frozen artifact。
