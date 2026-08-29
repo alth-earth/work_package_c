@@ -518,11 +518,14 @@ def _summary(
         and None not in keys
         and len(set(keys)) == len(keys)
     )
-    fail_closed = bool(cases) and all(
-        case.get("incumbent_bound_pruned", 0) == 0
+    qualification_cases = [
+        case for case in cases if case.get("mode") == "qualification"
+    ]
+    fail_closed = bool(qualification_cases) and all(
+        case.get("status") == "REAL_INPUT_INCUMBENT_BOUND_UNCERTAIN"
+        and case.get("incumbent_bound_pruned", 0) == 0
         and case.get("candidate_started") is False
-        for case in cases
-        if case.get("mode") == "qualification"
+        for case in qualification_cases
     )
     identity_clean = bool((identity.get("git") or {}).get("dirty") is False)
     if not complete or not identity_clean:
@@ -658,6 +661,8 @@ def _child_command(
         str(Path(args.config_root).resolve()),
         "--segment",
         args.segment,
+        "--output-dir",
+        str(Path(args.output_dir).resolve()),
         "--objective",
         objective.value,
         "--repetition",
@@ -764,6 +769,8 @@ def _run_parent(args: argparse.Namespace) -> int:
         raise SystemExit("repetitions and worker timeout must be positive")
     if args.mode == "resource-frontier" and args.certificate_dir is None:
         raise SystemExit("resource-frontier requires --certificate-dir")
+    if args.output_dir is None:
+        raise SystemExit("--output-dir is required")
     root = Path(__file__).resolve().parents[1]
     point = _load_point_runner()
     fixture = point._load_fixture(_fixture_args(args))
@@ -887,7 +894,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--route-plan-set", type=Path, required=True)
     parser.add_argument("--config-root", type=Path, required=True)
     parser.add_argument("--segment", choices=SEGMENTS, required=True)
-    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--certificate-dir", type=Path)
     parser.add_argument("--repetitions", type=int, default=1)
     parser.add_argument("--worker-timeout-seconds", type=float, default=900.0)
