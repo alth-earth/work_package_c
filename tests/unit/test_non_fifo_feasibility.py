@@ -691,10 +691,12 @@ def test_pareto_priority_ordering_preserves_complete_frontier() -> None:
 
 
 def test_pareto_priority_checkpoint_binds_callback_and_policy() -> None:
-    graph = {"start": ("goal",), "goal": ()}
+    graph = {"start": ("branch", "goal"), "branch": ("goal",), "goal": ()}
 
-    def evaluate(_start: str, _end: str, arrival: datetime) -> NonFifoParetoTransition:
-        return NonFifoParetoTransition(arrival + timedelta(hours=1), (1.0, 1.0))
+    def evaluate(start: str, end: str, arrival: datetime) -> NonFifoParetoTransition:
+        hours = 2.0 if start == "start" and end == "branch" else 1.0
+        costs = (2.0, 2.0) if hours == 2.0 else (1.0, 1.0)
+        return NonFifoParetoTransition(arrival + timedelta(hours=hours), costs)
 
     def priority(label: NonFifoParetoLabel) -> float:
         return label.costs[0]
@@ -710,7 +712,9 @@ def test_pareto_priority_checkpoint_binds_callback_and_policy() -> None:
         priority_policy_digest="fixture-priority-v1",
         fixture_digest="priority-checkpoint-fixture",
     )
-    assert session.advance(expansion_slice=1) is None
+    # The goal is consumed in this slice; static priority sessions keep the
+    # pre-goal phase for backwards-compatible checkpoint semantics.
+    assert session.advance(expansion_slice=2) is None
     checkpoint = session.checkpoint()
     restored = restore_non_fifo_pareto_session(
         checkpoint,

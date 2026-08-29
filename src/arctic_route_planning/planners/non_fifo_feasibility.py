@@ -1382,11 +1382,19 @@ class NonFifoParetoCheckpoint:
             )
         if self.priority_phase not in {"pre_goal", "post_goal"}:
             raise NonFifoParetoSessionRestoreError("checkpoint priority phase is invalid")
+        post_goal_callback_installed = (
+            self.identity.priority_after_goal_callback_digest
+            != _PARETO_PRIORITY_AFTER_GOAL_NONE_DIGEST
+        )
+        if self.priority_phase == "post_goal" and not post_goal_callback_installed:
+            raise NonFifoParetoSessionRestoreError(
+                "post-goal phase requires a post-goal priority callback"
+            )
         if self.priority_phase == "post_goal" and not self.goals:
             raise NonFifoParetoSessionRestoreError(
                 "post-goal checkpoint is missing its goal evidence"
             )
-        if self.priority_phase == "pre_goal" and self.goals:
+        if self.priority_phase == "pre_goal" and self.goals and post_goal_callback_installed:
             raise NonFifoParetoSessionRestoreError(
                 "pre-goal checkpoint already contains goal evidence"
             )
