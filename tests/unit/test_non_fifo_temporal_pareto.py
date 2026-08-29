@@ -19,7 +19,7 @@ from arctic_route_planning.planners.non_fifo_temporal_pareto import (
     restore_non_fifo_temporal_pareto_session,
     run_non_fifo_temporal_pareto_search,
 )
-from arctic_route_planning.planners.temporal_label_astar import TemporalSearchLimits
+from arctic_route_planning.planners.temporal_label_astar import TemporalSearchLimits, _RejectedEdge
 from arctic_route_planning.planners.time_dependent_astar import _EdgeTraversal
 
 from .test_non_fifo_temporal_adapter import _planner, _research_request
@@ -175,3 +175,19 @@ def test_actual_bridge_rejects_non_research_modes() -> None:
             planner,
             replace(_research_request(), use_heuristic=True),
         )
+
+
+def test_actual_bridge_can_skip_only_classified_domain_rejections() -> None:
+    planner = _planner(
+        edge_evaluator=lambda *_args: (_ for _ in ()).throw(_RejectedEdge("hard"))
+    )
+    result = run_non_fifo_temporal_pareto_search(
+        planner,
+        _research_request(),
+        pareto_pruning=True,
+        skip_expected_rejections=True,
+    )
+    assert result.status is NonFifoSearchStatus.EXHAUSTED
+    assert result.evaluator_errors == ()
+    assert result.selected is None
+    assert result.frontier == ()
