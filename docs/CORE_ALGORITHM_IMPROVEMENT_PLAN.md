@@ -3408,3 +3408,29 @@ check/sync、CLI smoke 和等价 `UV_OFFLINE=1 make check` 均通过；主机和
 `READY-FOR-P0.2-REAL-INCUMBENT-BOUND-RESOURCE-PLAN`，仅允许另立真实 scope/资源审计；
 没有 production qualification、performance proof、candidate 或 Winter 授权。真实 FIFO、
 M22 frontier equivalence、M18 queue resource fail、P2.1/P3/ARA* 历史状态保持不变。
+
+### 【2026-08-29 | PLANNED】P0.2-M24：real incumbent-bound qualification audit
+
+M23 只在有限 synthetic 图上证明了 exact-state incumbent bound 的安全剪枝规则；真实
+145 帧输入仍没有可审计的“每个 exact state 到唯一 exact goal arrival”证明。因此本轮先
+做真实资格审计和资源前沿准备，不把 synthetic 证书迁移到真实输入，也不重跑 Winter。
+
+**输入与隔离。** 从 M23 clean research commit 建立独立 worktree；复用 holdout/development
+完整 RiskFrame 和既有 `rolling_0_24h` route-plan-set，逐项绑定 implementation、lock、
+config、frame/content、scope、request、goal、ETA policy 和 evaluator digest。正式分支、
+历史 M2/M22 构件、合同、ingress/service、formal latest、candidate 和 Winter 均保持不变。
+
+**Runner。** 新增 C 内部 `benchmark_non_fifo_pareto_incumbent_bound_real.py`，采用
+`c.p0.2-nonfifo-pareto-incumbent-bound-real.v1`，支持 `qualification` 与显式
+`resource-frontier` 两种模式。qualification 默认只验证真实 scope/fixture identity，
+并生成 rejected certificate；没有外部独立 proof 时不得启动 candidate worker。只有显式
+提供完全匹配的 proof-carrying certificate，才允许按冻结 `50k/100k/50k/400k` 上限运行
+baseline/candidate，并将 exact frontier、业务字段、bound pruning/rejection、checkpoint
+digest、RSS、swap、OOM、timeout 和 CPU/cgroup 证据逐条 fsync 到 manifest/cases/summary。
+
+**门禁。** 真实输入在证书缺失、goal-arrival 不唯一、FIFO violation、coverage/evaluator
+unknown 或 scope 漂移时必须为 `REAL_INPUT_INCUMBENT_BOUND_UNCERTAIN`，pruning 必须为零；
+不得用 baseline/reference 输出反向生成 candidate certificate。若未来独立证书完整且
+语义、确定性、资源和真实 pruning 全通过，仅标记
+`READY_FOR_SEPARATE_REAL_INCUMBENT_BOUND_PLAN`，仍不启用 candidate/Winter。任何 fail-open、
+partial frontier、identity 漂移或资源证据缺失均为 `INVALID/FAIL`。
