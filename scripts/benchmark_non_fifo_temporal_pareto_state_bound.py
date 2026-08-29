@@ -594,6 +594,15 @@ def _run_parent(args: argparse.Namespace) -> int:
                         records.append(record)
         summary = _summary(records, args, malformed)
         _atomic_json(output / "comparison-summary.json", summary)
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest.update(
+            {
+                "status": summary["status"],
+                "completed_at": datetime.now(UTC),
+                "completed_cases": len(records),
+            }
+        )
+        _atomic_json(manifest_path, manifest)
         _atomic_json(
             output / "heartbeat.json",
             {
