@@ -3785,3 +3785,52 @@ heuristic review 证据”，不是晋级结论。
 资源或完整 frontier 门失败，保持 `NO_HEURISTIC_TERMINAL_GAIN`/`REAL_HEURISTIC_RESOURCE_FAIL`
 或 `INVALID/PENDING`，不得通过放宽资源上限、选择性报告或把 selection-only 结果包装成
 dominance 性能证明。M26、M25 及更早 M0/M1/M2J/M2K、P3、ARA* 历史记录保持不变。
+
+### 【2026-08-30 | COMPLETED（queue-pressure diagnostic；no net terminal gain）】P0.2-M28：goal-gated heuristic ordering
+
+**实现与身份。** M28 在 M27 clean research commit 上建立分支
+`research/p02-m28-queue-aware`，先提交计划 `1f31ff7`，再提交核心实现
+`0538d1b`、测试/runner `adc89e2` 和 runner gate 修复 `8af1a43`。新增的
+`NonFifoParetoSession` goal-gated phase 在首个 goal 出现前使用历史 cost-vector 顺序，
+之后只对尚未扩展的 heap entry 重新计算认证 priority；重排保留 label、exact arrival、
+serial 和所有 tie-break，不删除已扩展 label。priority phase、前后 callback digest、
+checkpoint state digest 均受 identity fence 保护。M27 always-priority 和无 callback 的
+默认行为保持兼容，正式 planner、合同、ingress/service、candidate 和 Winter 未改变。
+
+本轮按资源/时间约束只做 `fastest × 1 repetition` 的 selected-route 诊断；这属于允许的
+研究覆盖放宽，不放宽语义、确定性、scope 或 fail-closed 门禁。两份权威 manifest 均
+`dirty=false`，绑定实现 commit `8af1a437cc2d75f8ab54b7c53c75c14fd177e3ad`、实现树
+digest、configs、`uv.lock`、完整 145 帧 RiskFrame、route-plan-set、scope、certificate
+和 CPU 0。M28 r1 holdout 因 runner 仍检查旧的 `heuristic_policy=certified` 而标为
+`FAIL`，该构件保留为历史诊断；修复后的 r2 才是权威结果。
+
+**真实结果。** 实验 schema 为
+`c.p0.2-nonfifo-pareto-goal-gated-real.v1`，均为 `rolling_0_24h`、baseline 与
+goal-gated ordered 同一冻结 state-bound/selected-route terminal bound、Pareto pruning
+开启、temporal dominance disabled。
+
+| 输入 | 实验目录 | summary | baseline expanded / edge eval / queue | goal-gated expanded / edge eval / queue | terminal pruning | semantic |
+|---|---|---|---:|---:|---:|---|
+| holdout `[5,7]→[14,5]` | `.runtime/experiments/c-p02-m28-goal-gated-holdout-20260830-r2/` | `NO_HEURISTIC_TERMINAL_GAIN` | `10,477 / 83,256 / 3,369` | `10,477 / 83,256 / 3,369` | `0` | 一致 |
+| development `[5,7]→[14,6]` | `.runtime/experiments/c-p02-m28-goal-gated-development-20260830-r1/` | `NO_HEURISTIC_TERMINAL_GAIN` | `5,659 / 45,192 / 1,997` | `5,659 / 45,192 / 1,997` | `0` | 一致 |
+
+两个 case 均 `GOAL_FOUND`、`semantic_match=true`、`heuristic_ok=true`、
+`identity_clean=true`，ordered semantic digest 与 baseline 完全相同；M28 没有
+`terminal_bound_rejected`。与 M27 always-priority 对照（holdout `9,732` expanded、
+queue `6,114`、terminal pruning `745`；development `5,623`、queue `3,347`、terminal
+pruning `40`）相比，goal-gated 模式确实消除了 priority 导致的 queue 峰值膨胀，但也
+回到 baseline 的扩展顺序，未产生 terminal pruning 或净计算收益。结果只能标记
+`NO_HEURISTIC_TERMINAL_GAIN`/`QUEUE_PRESSURE_REDUCED_WITHOUT_NET_PRUNING`，不是完整
+frontier、dominance 或生产性能证明。
+
+两份构件的资源分类均为 `INCONCLUSIVE_CGROUP_BOUNDARY`，`resource_evidence_complete=false`；
+进程/主机 swap 为零，但未置于强制 4 GiB cgroup，故不宣称资源门通过。未启动额外目标、
+24h 复测、full-voyage、Winter、candidate，也未提高 `50k/100k/50k/400k` 限制。
+
+**验证与后续。** M28 新增/修改后聚焦测试为 `54 passed`；此前完整 C 测试为
+`598 passed, 3 skipped`（skip 仍是缺失 orchestrator archive fixture）。离线环境同步后
+`UV_OFFLINE=1 make check`、Ruff（`src/tests`）、lock/sync、CLI、active/archive import
+boundary、compileall 与 `git diff --check` 通过；全仓 Ruff 仅保留既存无关
+`scripts/benchmark_bc_coupling.py:721` E501。下一步应优先研究带独立证明的 queue compaction
+或 corridor/envelope，而不是继续调节 priority 权重；M27/M28 均不得触发 candidate 或
+Winter。M26、M25、M16 及更早历史结论保持不变。
