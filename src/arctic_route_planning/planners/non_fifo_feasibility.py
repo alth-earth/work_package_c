@@ -42,6 +42,15 @@ class NonFifoEvaluationError(RuntimeError):
     """A transition cannot be evaluated in the finite reference domain."""
 
 
+class NonFifoEvaluationSkipped(NonFifoEvaluationError):
+    """A known domain rejection means that one edge is unavailable.
+
+    The actual temporal bridge uses this marker only for classified hard,
+    coverage, speed, or ETA-domain rejections.  Unknown evaluator exceptions
+    remain fatal evidence and are never converted to this marker.
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class NonFifoBusinessEvidence:
     """Optional route-field evidence carried by one research transition.
@@ -840,6 +849,12 @@ def _legacy_search_non_fifo_pareto(
                     raise NonFifoEvaluationError("arrival_not_strictly_later")
                 if transition.arrival_time < departure:
                     raise NonFifoEvaluationError("arrival_before_departure")
+            except NonFifoEvaluationSkipped:
+                # A caller may classify one unavailable edge (for example a
+                # hard mask or incomplete risk coverage) without turning the
+                # entire finite search into an evaluator failure.  Unknown
+                # exceptions still enter ``errors`` below and remain fatal.
+                continue
             except Exception as error:
                 errors.append(f"{type(error).__name__}:{error}")
                 continue
@@ -1180,6 +1195,12 @@ class NonFifoParetoSession:
                         raise NonFifoEvaluationError("arrival_not_strictly_later")
                     if transition.arrival_time < limits.departure_time:
                         raise NonFifoEvaluationError("arrival_before_departure")
+                except NonFifoEvaluationSkipped:
+                    # Classified edge-domain rejections are unavailable
+                    # transitions, not global evaluator failures.  The
+                    # bridge records their reason in its planner diagnostics;
+                    # unknown exceptions remain fail-closed below.
+                    continue
                 except Exception as error:
                     self.evaluator_errors.append(f"{type(error).__name__}:{error}")
                     continue
@@ -1542,6 +1563,7 @@ def _jsonable(value: Any) -> Any:
 __all__ = [
     "NonFifoBusinessEvidence",
     "NonFifoEvaluationError",
+    "NonFifoEvaluationSkipped",
     "NonFifoLabel",
     "NonFifoParetoCheckpoint",
     "NonFifoParetoLabel",

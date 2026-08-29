@@ -24,11 +24,14 @@ from enum import StrEnum
 from math import isfinite
 from typing import Any
 
-from arctic_route_planning.cost import CostBreakdown
+from arctic_route_planning.cost import CostBreakdown, UnnavigableSpeedError
 from arctic_route_planning.domain.models import ObjectiveMode
+from arctic_route_planning.risk import RiskCoverageError, RiskSamplingError
 
+from .eta_refinement import EtaRefinementError
 from .non_fifo_feasibility import (
     NonFifoBusinessEvidence,
+    NonFifoEvaluationSkipped,
     NonFifoParetoCheckpoint,
     NonFifoParetoLabel,
     NonFifoParetoSearchResult,
@@ -39,7 +42,7 @@ from .non_fifo_feasibility import (
     create_non_fifo_pareto_session,
     restore_non_fifo_pareto_session,
 )
-from .temporal_label_astar import TemporalLabelAStar
+from .temporal_label_astar import TemporalLabelAStar, _eta_rejection_reason, _RejectedEdge
 from .temporal_qualification import TemporalScope
 from .time_dependent_astar import PlanningRequest, _EdgeTraversal
 
@@ -362,12 +365,15 @@ def create_non_fifo_temporal_pareto_session(
     request: PlanningRequest,
     *,
     pareto_pruning: bool = False,
+    skip_expected_rejections: bool = False,
     identity: NonFifoParetoSessionIdentity | None = None,
 ) -> NonFifoTemporalParetoResearchSession:
     """Create an actual-edge Pareto session for explicit research only."""
 
     scope = _validate_bridge(planner, request)
-    callbacks, context, component_digest = _callbacks(planner, request, scope)
+    callbacks, context, component_digest = _callbacks(
+        planner, request, scope, skip_expected_rejections=skip_expected_rejections
+    )
     session = create_non_fifo_pareto_session(
         start=(request.start, _HEADING_NONE),
         goal=(request.goal, _HEADING_NONE),
@@ -397,6 +403,7 @@ def restore_non_fifo_temporal_pareto_session(
     checkpoint: NonFifoTemporalParetoCheckpoint,
     *,
     cancel_check: Any = None,
+    skip_expected_rejections: bool = False,
 ) -> NonFifoTemporalParetoResearchSession:
     """Restore an actual-edge Pareto session after all bridge fences."""
 
@@ -404,7 +411,9 @@ def restore_non_fifo_temporal_pareto_session(
         raise NonFifoTemporalParetoError("checkpoint type is invalid")
     checkpoint.assert_valid()
     scope = _validate_bridge(planner, request)
-    callbacks, context, component_digest = _callbacks(planner, request, scope)
+    callbacks, context, component_digest = _callbacks(
+        planner, request, scope, skip_expected_rejections=skip_expected_rejections
+    )
     if checkpoint.scope_digest != scope.digest:
         raise NonFifoTemporalParetoError("actual Pareto checkpoint scope mismatch")
     if checkpoint.component_digest != component_digest:
@@ -425,6 +434,7 @@ def run_non_fifo_temporal_pareto_search(
     request: PlanningRequest,
     *,
     pareto_pruning: bool = False,
+    skip_expected_rejections: bool = False,
 ) -> NonFifoTemporalParetoResult:
     """Run the actual-edge Pareto sidecar to a terminal state."""
 
@@ -432,6 +442,7 @@ def run_non_fifo_temporal_pareto_search(
         planner,
         request,
         pareto_pruning=pareto_pruning,
+        skip_expected_rejections=skip_expected_rejections,
     ).run()
 
 
@@ -464,6 +475,8 @@ def _callbacks(
     planner: TemporalLabelAStar,
     request: PlanningRequest,
     scope: TemporalScope,
+    *,
+    skip_expected_rejections: bool,
 ) -> tuple[_Callbacks, Any, str]:
     component_digest = _digest(
         {
@@ -471,6 +484,7 @@ def _callbacks(
             "components": TEMPORAL_PARETO_COMPONENTS,
             "objective": ObjectiveMode(request.objective),
             "scope": scope.digest,
+            "skip_expected_rejections": skip_expected_rejections,
         }
     )
     context = planner._new_execution_context()
@@ -497,15 +511,22 @@ def _callbacks(
         node, incoming_code = _state_parts(state)
         next_node, _next_heading = _state_parts(next_state)
         previous_heading = planner._previous_heading(node, incoming_code)
-        traversal = planner._evaluate_edge(
-            node,
-            next_node,
-            arrival_time,
-            previous_heading,
-            request,
-            cost_model,
-            context=context,
-        )
+        try:
+            traversal = planner._evaluate_edge(
+                node,
+                next_node,
+                arrival_time,
+                previous_heading,
+                request,
+                cost_model,
+                context=context,
+            )
+        except Exception as error:
+            if skip_expected_rejections:
+                reason = _expected_rejection_reason(error, context)
+                if reason is not None:
+                    raise NonFifoEvaluationSkipped(reason) from error
+            raise
         if not isinstance(traversal, _EdgeTraversal):
             raise NonFifoTemporalParetoError("actual edge evaluator returned an invalid traversal")
         step = TemporalParetoStepEvidence.from_traversal(traversal)
@@ -519,6 +540,29 @@ def _callbacks(
     neighbors.__non_fifo_identity__ = f"neighbors:{token}"
     evaluate_edge.__non_fifo_identity__ = f"evaluator:{token}"
     return _Callbacks(neighbors, evaluate_edge), context, component_digest
+
+
+def _expected_rejection_reason(error: Exception, context: Any) -> str | None:
+    """Classify only known domain rejections as unavailable edges."""
+
+    if isinstance(error, RiskCoverageError):
+        reason = "coverage"
+    elif isinstance(error, RiskSamplingError):
+        reason = "sampling"
+    elif isinstance(error, UnnavigableSpeedError):
+        reason = "speed"
+    elif isinstance(error, EtaRefinementError):
+        context.diagnostics.eta_failures += 1
+        reason = _eta_rejection_reason(error)
+        context.diagnostics.eta_failure_reasons[error.failure_class] = (
+            context.diagnostics.eta_failure_reasons.get(error.failure_class, 0) + 1
+        )
+    elif isinstance(error, _RejectedEdge):
+        reason = error.reason
+    else:
+        return None
+    context.diagnostics.reject(reason)
+    return reason
 
 
 def _state_parts(state: TemporalParetoState) -> tuple[tuple[int, int], tuple[int, int] | None]:
