@@ -2601,3 +2601,42 @@ checks/pruned 均为 0，session identity 与 restored session ID 一致，check
 为 `READY_FOR_P0.2-REAL-SESSION-RECOVERY-REVIEW`，candidate/Winter 仍关闭；下一步另立
 带强制 cgroup/24h 预算的 session 资源计划或 P0.2 非 FIFO label-correcting 实现计划，
 不得自动启动。
+
+### 【2026-08-29 | PLANNED】P0.2-M14：actual temporal Pareto label-correcting bridge
+
+M13 已证明实际 `TemporalSession` 在冻结真实 6h 输入上的 exact-arrival 单目标搜索、分片
+恢复和取消语义可复现，但该会话仍以单一 objective 的标量 equivalent-hours 成本保存每个
+状态。M12.1 的有限 Pareto sidecar 已证明不同 exact arrival 不可交叉剪枝、同一精确状态的
+新生成严格 component-wise 支配 label 可以安全丢弃。本轮把两条研究证据接到同一个实际
+`TemporalLabelAStar` edge evaluator 上，形成可审计的 C 内部 Pareto bridge；它只供 test/
+research 使用，不改变正式 planner、合同、ingress/service 或默认行为。
+
+**实现边界。** 新增未从 `planners.__init__` 导出的
+`non_fifo_temporal_pareto.py`。bridge 把实际 `_EdgeTraversal` 映射为固定顺序的可加向量
+`travel/risk-exposure/distance/turn/deviation/low-confidence/total-equivalent hours`，
+并将 exact `(node, incoming-heading, UTC arrival)` 作为状态。它复用真实 edge geometry、ETA、
+RiskSampler、VesselPerformanceModel、CostModel 和业务字段，但调用前强制
+`use_heuristic=False`、`TemporalDominancePolicy.disabled()`、无 state-bound/heuristic
+certificate。Pareto pruning 只由已有 finite sidecar 执行：仅拒绝同一 exact state 新生成且
+严格被支配的 label；不同 arrival、equal vector、已扩展 label、hard-mask/evaluator failure
+和资源超限均保留或显式失败。
+
+bridge 的 route/frontier 类型只包含研究证据（states、exact UTC arrivals、cost vector、
+speed/risk/confidence/source IDs 和 `CostBreakdown`），不伪造 `PlanningResult` 或 C→D
+route contract。session/checkpoint 通过 scope、request、ETA/search-limit/evaluator digest
+和 callback identity fence 恢复；one-shot、slice→restore、cancelled 和 identity drift
+必须不泄漏 partial route/frontier。冻结 `50k/100k/50k/400k` 上限不变。
+
+**验证与证据。** 增加 actual bridge 的 synthetic adversarial 聚焦测试和独立 runner，覆盖
+later-arrival non-FIFO shortcut、same-exact Pareto pruning、周期/重复 label、业务字段、
+hard-mask/evaluator failure、resource limit、cancel、checkpoint restore 及 planner/request
+scope drift；同一小网格用独立 zero-heuristic exhaustive oracle 对照 route/ETA/业务字段，要求
+determinism、slice 等价、合法 pruning 至少一次、非授权场景 pruning 为零。runner 只写
+`.runtime/experiments/c-p02-m14-actual-pareto-20260829-r1/`，逐记录 fsync，输出 manifest、
+cases、summary、heartbeat 和终态标记；不启动真实 24h，不提高资源限制，不重开 Winter。
+
+**收口分支。** 全部矩阵通过时追加 `READY_FOR_P0.2-REAL-PARETO-REVIEW`，仍不启用
+candidate；任一语义、恢复、fail-closed 或资源证据失败则 `NO_PERFORMANCE_PROOF/FAIL`，
+保留 M13/M12.1 结论。identity 漂移、构件不完整或 dirty evidence 一律
+`INVALID/PENDING`。完成后只在本地集成并移除辅助 worktree，保留研究分支和实验构件，不
+push。
