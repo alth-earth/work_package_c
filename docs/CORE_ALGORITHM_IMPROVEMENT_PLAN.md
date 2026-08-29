@@ -3617,3 +3617,43 @@ terminal 无 pruning，记录 `NO_ADDITIONAL_TERMINAL_PRUNING`，不夸大收益
 **收口。** 本轮任何结果都不授予真实 FIFO/dominance 资格，不自动进入 Winter 或启用
 candidate。实验构件只留在 `.runtime/experiments/`；完成验证后删除辅助 worktree，保留
 本地分支和历史证据。
+
+### 【2026-08-30 | COMPLETED（composition diagnostic；terminal 增量为零）】P0.2-M26：composed certified state-bound + selected-route terminal bound
+
+**实现与审计。** 在 M25 clean commit 上建立隔离分支
+`research/p02-m26-composed-terminal-bound-20260829`，先提交计划 `091e730`，再提交
+组合 runner `f468858` 和 lint/格式修复 `849fc6d`。新增
+`scripts/benchmark_non_fifo_temporal_composed_terminal_bound_real.py` 只在 C 研究侧运行：
+baseline 与 candidate 共享 M18/M22 已审计的拓扑 arrival state-bound；candidate 另外安装
+M25 的 `selection_only=true` terminal certificate。两侧均保留 Pareto pruning，且
+`TemporalDominancePolicy` 仍为 `disabled`。实现、`uv.lock`、配置、RiskFrame、route-plan-set、
+scope 和两份证书 digest 均写入 manifest identity；没有修改合同、ingress/service、正式
+planner、candidate 或 Winter。
+
+**真实 24h 诊断。** 复用完整 145 帧、`rolling_0_24h`、固定 CPU 0、冻结
+`50k/100k/50k/400k` 上限，每个输入三个 objective 各执行一次 baseline/candidate：
+
+| 输入 | 实验目录 | experiment id | 结果 | state-bound pruning | terminal 增量 pruning |
+|---|---|---|---|---:|---:|
+| holdout | `.runtime/experiments/c-p02-m26-composed-terminal-bound-holdout-20260829-r1/` | `c.p0.2-nonfifo-composed-terminal-bound-real.v1-59adfeb0971a4b70` | `NO_ADDITIONAL_TERMINAL_PRUNING` | 214,338 | 0 |
+| development | `.runtime/experiments/c-p02-m26-composed-terminal-bound-development-20260830-r1/` | `c.p0.2-nonfifo-composed-terminal-bound-real.v1-05d878f414f4a24d` | `NO_ADDITIONAL_TERMINAL_PRUNING` | 115,130 | 0 |
+
+两份构件均 `complete=true`、`identity_clean=true`，各 3/3 case 为 `GOAL_FOUND`；baseline
+和 candidate 的路线、精确 arrival、成本及 semantic digest 全部一致，state-bound
+rejected 与 terminal rejected 均为 0。holdout 各目标 queue peak 为 3,369/3,358/3,398，
+development 为 1,997/1,911/1,943；candidate 与 baseline 的 expanded、edge evaluations
+和 Pareto pruning 相同，说明本轮没有观测到 terminal 规则的额外真实剪枝。资源快照显示
+RSS 约 115–133 MiB、进程/主机 swap 为 0B、无 OOM 迹象；由于未在 4 GiB systemd cgroup
+中运行，`resource_evidence_complete=false`，本轮不宣称资源资格或性能通过。
+
+**验证与状态。** 组合/terminal/state-bound/session 聚焦测试 `103 passed`，全量 C 测试
+`591 passed, 3 skipped`（skip 仍仅为缺少 orchestrator archive fixture）；Ruff、离线
+`make check`（显式复用既有 `.mamba-env/bin/uv`）、lock check、offline sync、CLI smoke
+和 `git diff --check` 均通过。M26 结论为 `NO_ADDITIONAL_TERMINAL_PRUNING`：已验证的
+算法改进是拓扑 state-bound 对真实 24h queue 的显著压缩，terminal bound 暂无额外收益；
+这不是完整 frontier 或 dominance 性能证明。candidate、Winter、formal latest、replanning
+baseline 和 frozen artifact 均未启动/写入，P2.1、P3、ARA* 及 M25 历史结论保持不变。
+
+**下一步。** 保留 M26 分支和实验构件，删除本轮辅助 worktree；继续默认关闭真实
+dominance。若要继续降低 24h 成本，应另立有独立 proof 的 corridor/envelope 或 P0.2
+label-correcting 计划，不得把零 terminal pruning 包装成收益，也不得提高冻结资源上限。
