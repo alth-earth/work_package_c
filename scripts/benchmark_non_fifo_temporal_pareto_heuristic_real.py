@@ -272,7 +272,8 @@ def _worker_record(args: argparse.Namespace) -> dict[str, Any]:
         and heuristic.scope.digest == scope.digest
         and _diagnostic_int(ordered_diagnostics, "heuristic_rejected") == 0
         and bool(ordered_diagnostics)
-        and ordered_diagnostics.get("heuristic_policy") == "certified"
+        and ordered_diagnostics.get("heuristic_policy")
+        == ("certified" if heuristic_ordering == "always" else "certified-after-goal")
         and ordered_diagnostics.get("heuristic_scope_match") is True
         and ordered is not None
         and ordered.raw_result.priority_policy_digest
