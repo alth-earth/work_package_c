@@ -4092,3 +4092,59 @@ Dijkstra 只作正确性证据。
 heading heuristic 误称为 FIFO/dominance 证明。若仅改善排序而 24h 仍资源失败，记录
 `SAFE_HEADING_HEURISTIC_NO_24H_PROOF`，停止 priority 调参；若语义、身份或 fail-closed
 失败，记录 `INVALID/FAIL` 并回滚研究调用，不影响 M31/M30 历史结论。
+
+### 【2026-08-30 | COMPLETED（safe semantic diagnostic；no additional real-input gain）】P0.2-M32：proof-carrying heading-aware objective envelope
+
+**实现与身份。** M32 在 M31 研究线之上建立隔离分支
+`research/p02-m32-heading-envelope-20260830`，计划提交为 `b3b98c8`，heading-aware
+certificate 与 planner/session 接线为 `a971192`，真实 runner fixture/service 修复最终
+提交为 `2106e9b`。新增 C 内部 `TemporalHeadingHeuristicCertificate` 和
+`qualify_heading_heuristic`：在完整 finite `(node, incoming_heading)` 状态域上反向求解
+保守 objective lower bound，包含 travel/distance 与不可避免 turn penalty；risk、
+uncertainty、deviation 下界取零并 outward-round。只有完整状态覆盖、非负边权、反向
+一致性、known evaluator、完整 `TemporalScope` 和稳定 digest 同时满足时才授权排序及
+incumbent lower-bound 使用；不删除任何 label，不改变 FIFO/dominance 语义。缺失、非有限、
+scope/policy/checkpoint 漂移或非 admissible 证书均 fail-closed，回退既有安全 heuristic。
+`TemporalSessionIdentity` 与 checkpoint 绑定 heading policy digest；正式
+`TemporalDominancePolicy.disabled()`、`plan()` 默认路径、合同、ingress/service、candidate
+和 Winter 均未改变。
+
+**Synthetic proof matrix。** schema 为 `c.p0.2-temporal-heading-heuristic.v1`，构件位于
+`.runtime/experiments/c-p02-m32-heading-heuristic-matrix-20260830-r1/`，共 `36/36` cases，
+其中 `9` 个 certified cases。small/medium/stress 三 profile、三个 objective 的 certified
+case 均与独立 finite zero-heuristic Dijkstra 的路线、cost、语义和确定性一致，并有实际
+heading-aware expansion reduction（例如 stress fastest `1766→263`、low-risk `1763→427`、
+recommended `1766→268`）；拒绝/不完整/scope-mismatch/non-admissible cases 均未启用证书，
+`pruning=false`，dominance 始终 disabled。队列峰值在部分 synthetic case 上上升，故只记录
+为排序收益与队列代价的研究证据，不宣称资源资格。
+
+**真实 6h 诊断。** holdout 构件为
+`.runtime/experiments/c-p02-m32-heading-real-holdout-6h-20260830-r2/`，development 构件为
+`.runtime/experiments/c-p02-m32-heading-real-development-6h-20260830-r1/`；两者均使用完整
+145 帧、冻结 route-plan-set、单 CPU、`dominance=disabled` 和
+`50k/100k/50k/400k` 搜索上限。两个输入的 fastest/low-risk/recommended 均
+`REAL_HEADING_HEURISTIC_SEMANTIC_PASS`：baseline、heading candidate 与独立 exact-arrival
+reference 的路线、精确 ETA、速度、风险、cost、confidence、source IDs 和失败语义 digest
+一致，deterministic=true，heading certificate authorized=true，且未发生 label pruning。
+由于 M31 edge envelope 已将真实 6h 搜索压缩到极小 frontier，本轮两个输入三个 objective
+的 heading expansion reduction 与 queue delta 均为 `0`，没有可审计的额外真实收益。进程/主机
+swap 为零、无 OOM/timeout、CPU affinity 为 `[0]`，但 cgroup 仍为 `/init.scope` 且
+`memory.max= max`、`memory.swap.max= max`，所以 `resource_evidence_complete=false`，不构成
+资源门或 candidate 资格。
+
+**24h 与结论。** 本轮不启动 24h：6h 没有额外 net gain，且 M31 已证明完整 exact-arrival
+reference/baseline 在冻结 queue `50,000` 附近触及资源边界；继续启动不会增加可判定证据，
+也不能通过放宽上限或择优重跑。M32 状态固定为
+`SAFE_HEADING_HEURISTIC_NO_ADDITIONAL_REAL_6H_GAIN / REAL_24H_NOT_RUN`，不是性能通过。
+M31 的 `REAL_24H_EXACT_LABEL_RESOURCE_FAIL`、M30 的 queue-compaction 结论及更早 M0/M1、
+M2J/M2K、P3、ARA* 历史均保持不变。下一步停止 priority/heading 调参，转向更强独立
+corridor/state envelope 证明或 test-only P0.2 non-FIFO feasibility；在 interval/FIFO 与资源
+证明前 candidate、Winter、formal latest、replanning baseline 和 frozen artifact 继续关闭。
+
+**验证。** M32 全量 C 测试为 `629 passed, 3 skipped`；skip 仅因隔离 worktree 缺少已退休的
+orchestrator archive fixture。P0.1/M32 聚焦测试与新 runner 测试均通过，变更文件及
+`src/tests` Ruff、format check、compileall、`uv lock --offline --check`、offline sync、两项
+CLI smoke、active/archive `temporal_session` import boundary 和 `git diff --check` 均通过。
+原样 `UV_OFFLINE=1 make check` 仅被隔离 worktree 缺少
+`.mamba-env/bin/uv` 阻塞，未修改环境或 lock。所有实验产物留在 `.runtime/experiments/`，
+未写正式 latest/frozen 路径，未 push。
