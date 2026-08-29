@@ -2999,3 +2999,33 @@ state-bound 语义失败；M9 的 24h resource fail、已知 `REAL_INPUT_FIFO_VI
 P3/ARA* 历史结论保持不变。最终状态不授权 dominance/candidate/Winter，也不构成连续海洋
 模型的全局最优性或生产资格。下一步只能另立“带独立 reference/semantic proof 的 24h
 corridor/envelope”或 P0.2 非 FIFO implementation 计划；不自动放宽 queue、不重跑 Winter。
+
+### 【2026-08-29 | PLANNED】P0.2-M19：certificate-aware independent 24h semantic reference
+
+M18 在真实 24h holdout/development 上观察到 graph-topological state bound 将 candidate
+搜索压在较小 queue 内，但 baseline 均触及冻结 `queue=50,000`，因此没有进入独立 Dijkstra
+路线对照。本轮只补齐这一审计缺口：以同一份完整、scope-bound、admissible arrival envelope
+构造独立 exact-arrival Dijkstra reference；不把 reference 当性能基线、不提高任何资源上限、
+不调用 `certified_only(...)`，也不启用 candidate/Winter。
+
+**研究边界。** 从 M18 clean tip `c168c4b` 建立隔离分支
+`research/p02-m19-reference-24h-20260829`。新增 runner 必须独立维护 Dijkstra 的
+`(node, incoming_heading, exact_UTC_arrival)` 状态表，使用冻结 edge evaluator 和同一
+`TemporalStateBoundCertificate` 的 `allows_state(...)` 只拒绝新生成、已证明不可能在
+24h horizon 内到达 goal 的状态；不能删除已扩展 label、合并不同 exact arrival、注入
+candidate route 或使用 beam/近似剪枝。baseline/candidate/reference 的 scope、ETA policy、
+RiskFrame/route-plan-set/config/lock digest 及 `50k/100k/50k/400k` limits 全部写入 identity。
+
+**失败语义。** reference `GOAL_FOUND` 时，逐字段比较 candidate 的节点、精确 ETA、速度、
+风险、成本、confidence、source IDs、CostBreakdown、semantic/frontier digest；reference
+触及冻结 queue/label/expansion/edge 上限时记录 `REFERENCE_RESOURCE_LIMIT`，不将 candidate
+结果包装成 correctness pass；未知 evaluator、scope/proof mismatch、hard-mask 或 coverage
+异常为 `REFERENCE_FAILURE` 并保持 fail-closed。每个输入/目标至少保留 one-shot、
+certificate-aware reference、resource snapshot、heartbeat 与可恢复 marker。
+
+**收口。** 两输入/三目标的 reference 均完成且逐字段一致时仅标记
+`REAL_INPUT_24H_SEMANTIC_REFERENCE_READY`，不代表性能或生产资格；任一 reference resource
+limit 标记 `REAL_INPUT_24H_REFERENCE_RESOURCE_FAIL`；semantic mismatch、fail-open 或
+identity 漂移为 `NO_PERFORMANCE_PROOF/FAIL`；构件不完整为 `INVALID/PENDING`。M18 的
+`REAL_INPUT_24H_STATE_BOUND_RESOURCE_FAIL`、FIFO violation、dominance disabled、P3/ARA* 和
+Winter 历史结论保持不变。完成后只保留本地分支与构件，清理 worktree，不 push、不合并正式分支。
