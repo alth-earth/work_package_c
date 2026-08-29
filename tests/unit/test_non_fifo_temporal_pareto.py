@@ -379,6 +379,32 @@ def test_actual_bridge_supports_goal_gated_heuristic_ordering() -> None:
     assert gated.raw_result.priority_policy_digest
 
 
+def test_actual_bridge_supports_until_goal_heuristic_ordering() -> None:
+    planner = _configured_planner()
+    request = _research_request()
+    certificate = _zero_heuristic_certificate(planner, request)
+
+    baseline = run_non_fifo_temporal_pareto_search(
+        _configured_planner(), request, pareto_pruning=True
+    )
+    seeded = run_non_fifo_temporal_pareto_search(
+        planner,
+        request,
+        pareto_pruning=True,
+        heuristic_certificate=certificate,
+        heuristic_ordering="until_goal",
+    )
+
+    assert baseline.status is NonFifoSearchStatus.GOAL_FOUND
+    assert seeded.status is NonFifoSearchStatus.GOAL_FOUND
+    assert seeded.frontier == baseline.frontier
+    assert seeded.semantic_digest == baseline.semantic_digest
+    assert seeded.diagnostics.heuristic_policy == "certified-until-goal"
+    assert seeded.diagnostics.heuristic_scope_match is True
+    assert seeded.diagnostics.heuristic_rejected == 0
+    assert seeded.raw_result.priority_policy_digest != certificate.digest
+
+
 def test_actual_bridge_rejects_goal_gated_ordering_without_certificate() -> None:
     planner = _configured_planner()
     request = _research_request()
