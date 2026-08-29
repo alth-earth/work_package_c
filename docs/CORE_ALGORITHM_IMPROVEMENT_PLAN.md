@@ -3657,3 +3657,43 @@ baseline 和 frozen artifact 均未启动/写入，P2.1、P3、ARA* 及 M25 历�
 **下一步。** 保留 M26 分支和实验构件，删除本轮辅助 worktree；继续默认关闭真实
 dominance。若要继续降低 24h 成本，应另立有独立 proof 的 corridor/envelope 或 P0.2
 label-correcting 计划，不得把零 terminal pruning 包装成收益，也不得提高冻结资源上限。
+
+### 【2026-08-30 | PLANNED】P0.2-M27：Pareto certified heuristic ordering
+
+M26 证明拓扑 arrival state-bound 能把真实 24h 搜索压到冻结队列上限以内，但
+selected-route terminal bound 没有产生额外真实剪枝。下一步只研究**队列排序**：把已经
+通过 synthetic 审计的 `TemporalHeuristicCertificate` 接入 actual-edge Pareto sidecar，
+让完整 exact-arrival frontier 仍然被枚举，但优先扩展具有较小“已付成本 + 认证剩余下界”
+的 label。排序不是剪枝，不改变可保留 label 集合；它的价值是更早发现可用 terminal
+incumbent，从而让 M25/M26 的 selection-only 证书在后续诊断中有机会产生真实新增剪枝。
+
+**治理与边界。** 从 M26 clean research commit 建立独立 worktree；不修改正式分支、
+历史 M2J/M2K 构件、合同、ingress/service 或生产 planner。`TemporalDominancePolicy`
+仍 disabled，正式 `plan()`、candidate 和 Winter 不变。heuristic certificate 必须显式
+传入、scope/目标/节点覆盖/evaluator/proof digest 完全匹配，且
+`admissible && consistent && coverage_complete`；缺失、漂移或未知证书直接拒绝，不回退
+到猜测值。研究门禁可以把资源/时间不完整记为诊断，但不能放宽语义、确定性、身份或
+fail-closed 规则。
+
+**实现。** 为 `NonFifoParetoSession` 增加可选、身份绑定的 priority callback/digest；
+queue key 在原有 `(costs, arrival, serial)` 之后仅增加确定性的认证排序值，checkpoint
+保存并校验 priority policy digest。actual Pareto bridge 增加显式
+`heuristic_certificate` 参数；将 `total_equivalent_hours + certificate.lower_bound(node)`
+作为排序首键，保留原 vector/arrival/path tie-break。certificate 只影响排序，不能删除
+label，不能跨 exact arrival 比较，也不能成为 dominance 证书。恢复时 scope、certificate、
+callback 和 priority digest 任一不符即 fail-closed。
+
+**验证与诊断。** 新增 synthetic Pareto ordering fixtures：与禁用排序的完整 frontier
+逐项比较路线、exact ETA、成本、业务字段、frontier digest、失败/取消语义和
+determinism；验证 scope/目标/缺失节点/非有限下界/checkpoint drift 均拒绝；确认默认
+无 callback 的历史 API 完全不变。随后只在 M26 已通过的真实 24h state-bound 诊断上，
+串行比较 baseline 与 heuristic ordering（各 objective 一次，冻结
+`50k/100k/50k/400k`，固定 CPU，candidate/Winter false），记录 expansions、queue peak、
+terminal pruning、semantic digest、RSS/swap/OOM/timeout。排序若无收益仍记为
+`NO_HEURISTIC_TERMINAL_GAIN`，有收益只标记 `READY_FOR_SEPARATE_HEURISTIC_REVIEW`，
+绝不宣称完整 frontier 性能或真实 dominance 资格。
+
+**收口。** 运行聚焦测试、Ruff、离线 make/lock/sync、CLI smoke、active/archive import
+boundary 和 `git diff --check`；实验构件仅写入新的 `.runtime/experiments/` 目录。最终
+本地提交并删除辅助 worktree，保留研究分支，不 push；P2.1、P3、ARA* 和所有 production
+candidate 状态保持原结论。
