@@ -21,6 +21,8 @@ from math import isfinite
 from types import CodeType
 from typing import Any
 
+_INCUMBENT_BOUND_DISABLED_DIGEST = "non-fifo-pareto-incumbent-bound-disabled"
+
 
 def _digest(value: Any) -> str:
     """Return a deterministic digest for session/checkpoint evidence."""
@@ -215,6 +217,206 @@ class NonFifoParetoLabel:
         ) and any(left < right for left, right in zip(self.costs, other.costs, strict=True))
 
 
+class NonFifoParetoIncumbentBoundStatus(StrEnum):
+    """Fail-closed states for an explicit multi-objective lower-bound proof."""
+
+    DISABLED = "DISABLED"
+    CERTIFIED = "CERTIFIED"
+    REJECTED = "REJECTED"
+
+
+@dataclass(frozen=True, slots=True)
+class NonFifoParetoIncumbentBoundCertificate:
+    """Proof-carrying lower bounds for safe incumbent Pareto pruning.
+
+    Each ``state_lower_bounds[(node, exact_arrival)]`` entry also names the
+    *exact* goal arrival that every certified suffix must produce.  A lower
+    bound without that arrival proof would incorrectly compare different
+    exact-arrival goal labels in a non-FIFO system, so it is deliberately not
+    accepted here.  The certificate never deletes an expanded label and is
+    only consulted before a newly generated label enters the session.
+    """
+
+    status: NonFifoParetoIncumbentBoundStatus
+    scope_digest: str
+    goal: Any
+    objective_count: int
+    state_lower_bounds: tuple[
+        tuple[tuple[Any, datetime], tuple[datetime, tuple[float, ...]]], ...
+    ]
+    coverage_complete: bool
+    evaluator_certified: bool
+    proof_digest: str
+    reason: str | None = None
+    schema_version: str = "c.p0.2-nonfifo-pareto-incumbent-bound.v1"
+    certificate_digest: str = ""
+
+    def __post_init__(self) -> None:
+        if self.schema_version != "c.p0.2-nonfifo-pareto-incumbent-bound.v1":
+            raise ValueError("unsupported incumbent-bound certificate schema")
+        if not isinstance(self.status, NonFifoParetoIncumbentBoundStatus):
+            raise ValueError("incumbent-bound certificate status is invalid")
+        if not isinstance(self.scope_digest, str) or not self.scope_digest:
+            raise ValueError("incumbent-bound certificate scope is empty")
+        if (
+            isinstance(self.objective_count, bool)
+            or not isinstance(self.objective_count, int)
+            or self.objective_count < 1
+        ):
+            raise ValueError("incumbent-bound objective_count must be positive")
+        if not isinstance(self.coverage_complete, bool) or not isinstance(
+            self.evaluator_certified, bool
+        ):
+            raise ValueError("incumbent-bound coverage/evaluator flags are invalid")
+        if not isinstance(self.proof_digest, str) or not self.proof_digest:
+            raise ValueError("incumbent-bound proof digest is empty")
+        normalized: list[
+            tuple[tuple[Any, datetime], tuple[datetime, tuple[float, ...]]]
+        ] = []
+        seen: set[tuple[Any, datetime]] = set()
+        for state, evidence in self.state_lower_bounds:
+            if not isinstance(state, tuple) or len(state) != 2:
+                raise ValueError("incumbent-bound state key is invalid")
+            node, arrival = state
+            if arrival.tzinfo is None or arrival.utcoffset() is None:
+                raise ValueError("incumbent-bound state arrival must be timezone-aware")
+            arrival = arrival.astimezone(UTC)
+            state = (node, arrival)
+            try:
+                if state in seen:
+                    raise ValueError("incumbent-bound state is duplicated")
+                seen.add(state)
+            except TypeError as error:
+                raise ValueError("incumbent-bound state node is not hashable") from error
+            if not isinstance(evidence, tuple) or len(evidence) != 2:
+                raise ValueError("incumbent-bound evidence is invalid")
+            goal_arrival, values = evidence
+            if goal_arrival.tzinfo is None or goal_arrival.utcoffset() is None:
+                raise ValueError("incumbent-bound goal arrival must be timezone-aware")
+            goal_arrival = goal_arrival.astimezone(UTC)
+            if goal_arrival < arrival:
+                raise ValueError("incumbent-bound goal arrival precedes state arrival")
+            vector = tuple(values)
+            if len(vector) != self.objective_count or any(
+                not isfinite(value) or value < 0.0 for value in vector
+            ):
+                raise ValueError("incumbent-bound lower bounds are invalid")
+            normalized.append((state, (goal_arrival, vector)))
+        normalized.sort(key=lambda item: _canonical_token(item[0]))
+        object.__setattr__(self, "state_lower_bounds", tuple(normalized))
+        expected = self._calculated_digest()
+        if self.certificate_digest and self.certificate_digest != expected:
+            raise ValueError("incumbent-bound certificate digest mismatch")
+        object.__setattr__(self, "certificate_digest", expected)
+
+    @classmethod
+    def certified(
+        cls,
+        *,
+        scope_digest: str,
+        goal: Any,
+        objective_count: int,
+        state_lower_bounds: Mapping[
+            tuple[Any, datetime], tuple[datetime, Iterable[float]]
+        ],
+        proof_digest: str,
+    ) -> NonFifoParetoIncumbentBoundCertificate:
+        """Build a usable certificate after validating all finite bounds."""
+
+        return cls(
+            status=NonFifoParetoIncumbentBoundStatus.CERTIFIED,
+            scope_digest=scope_digest,
+            goal=goal,
+            objective_count=objective_count,
+            state_lower_bounds=tuple(state_lower_bounds.items()),
+            coverage_complete=True,
+            evaluator_certified=True,
+            proof_digest=proof_digest,
+        )
+
+    @classmethod
+    def rejected(
+        cls,
+        *,
+        scope_digest: str,
+        goal: Any,
+        objective_count: int,
+        reason: str,
+        proof_digest: str = "rejected-proof",
+        state_lower_bounds: Mapping[
+            tuple[Any, datetime], tuple[datetime, Iterable[float]]
+        ] | None = None,
+        coverage_complete: bool = False,
+        evaluator_certified: bool = False,
+    ) -> NonFifoParetoIncumbentBoundCertificate:
+        """Build an auditable non-authorizing certificate."""
+
+        return cls(
+            status=NonFifoParetoIncumbentBoundStatus.REJECTED,
+            scope_digest=scope_digest,
+            goal=goal,
+            objective_count=objective_count,
+            state_lower_bounds=tuple(
+                (state, (goal_arrival, tuple(values)))
+                for state, (goal_arrival, values) in (state_lower_bounds or {}).items()
+            ),
+            coverage_complete=coverage_complete,
+            evaluator_certified=evaluator_certified,
+            proof_digest=proof_digest,
+            reason=reason,
+        )
+
+    @property
+    def digest(self) -> str:
+        return self.certificate_digest
+
+    @property
+    def usable(self) -> bool:
+        return (
+            self.status is NonFifoParetoIncumbentBoundStatus.CERTIFIED
+            and self.coverage_complete
+            and self.evaluator_certified
+            and self.reason is None
+        )
+
+    def permits(self, *, scope_digest: str, goal: Any, objective_count: int) -> bool:
+        return (
+            self.usable
+            and self.scope_digest == scope_digest
+            and self.scope_digest != "unspecified-scope"
+            and scope_digest != "unspecified-scope"
+            and self.goal == goal
+            and self.objective_count == objective_count
+        )
+
+    def lower_bound(
+        self, node: Any, arrival_time: datetime
+    ) -> tuple[datetime, tuple[float, ...]] | None:
+        if arrival_time.tzinfo is None or arrival_time.utcoffset() is None:
+            raise ValueError("incumbent-bound lookup arrival must be timezone-aware")
+        key = (node, arrival_time.astimezone(UTC))
+        for candidate, evidence in self.state_lower_bounds:
+            if candidate == key:
+                return evidence
+        return None
+
+    def _calculated_digest(self) -> str:
+        return _digest(
+            {
+                "schema_version": self.schema_version,
+                "status": self.status,
+                "scope_digest": self.scope_digest,
+                "goal": self.goal,
+                "objective_count": self.objective_count,
+                "state_lower_bounds": self.state_lower_bounds,
+                "coverage_complete": self.coverage_complete,
+                "evaluator_certified": self.evaluator_certified,
+                "proof_digest": self.proof_digest,
+                "reason": self.reason,
+            }
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class NonFifoSearchResult:
     status: NonFifoSearchStatus
@@ -260,6 +462,10 @@ class NonFifoParetoSearchResult:
     goal_node: Any | None = None
     pareto_pruning: bool = False
     search_limits: tuple[int, int, int, int] = ()
+    incumbent_bound_digest: str = _INCUMBENT_BOUND_DISABLED_DIGEST
+    incumbent_bound_pruned: int = 0
+    incumbent_bound_rejected: int = 0
+    incumbent_bound_rejection_reasons: tuple[tuple[str, int], ...] = ()
 
     @property
     def goal_labels(self) -> tuple[NonFifoParetoLabel, ...]:
@@ -317,6 +523,7 @@ class NonFifoParetoSearchResult:
             "status": self.status.value,
             "reason": self.reason,
             "pareto_pruning": self.pareto_pruning,
+            "incumbent_bound_digest": self.incumbent_bound_digest,
             "search_limits": self.search_limits,
             "frontier": frontier,
         }
@@ -759,6 +966,8 @@ class NonFifoParetoSessionIdentity:
     evaluator_digest: str
     fixture_digest: str
     config_digest: str = "unspecified-config"
+    scope_digest: str = "unspecified-scope"
+    incumbent_bound_digest: str = _INCUMBENT_BOUND_DISABLED_DIGEST
     schema_version: str = "c.p0.2-nonfifo-pareto-session.v1"
 
     @classmethod
@@ -781,6 +990,8 @@ class NonFifoParetoSessionIdentity:
         ],
         fixture_digest: str,
         config_digest: str = "unspecified-config",
+        scope_digest: str = "unspecified-scope",
+        incumbent_bound_digest: str = _INCUMBENT_BOUND_DISABLED_DIGEST,
     ) -> NonFifoParetoSessionIdentity:
         return cls(
             start=start,
@@ -799,6 +1010,8 @@ class NonFifoParetoSessionIdentity:
             evaluator_digest=_callback_digest(evaluate_edge),
             fixture_digest=fixture_digest,
             config_digest=config_digest,
+            scope_digest=scope_digest,
+            incumbent_bound_digest=incumbent_bound_digest,
         )
 
     @property
@@ -820,6 +1033,8 @@ class NonFifoParetoSessionIdentity:
                 "evaluator_digest": self.evaluator_digest,
                 "fixture_digest": self.fixture_digest,
                 "config_digest": self.config_digest,
+                "scope_digest": self.scope_digest,
+                "incumbent_bound_digest": self.incumbent_bound_digest,
             }
         )
 
@@ -834,6 +1049,8 @@ class NonFifoParetoSessionIdentity:
                 "max_queue": self.max_queue,
                 "max_edge_evaluations": self.max_edge_evaluations,
                 "maximum_elapsed_seconds": self.maximum_elapsed_seconds,
+                "scope_digest": self.scope_digest,
+                "incumbent_bound_digest": self.incumbent_bound_digest,
             }
         )
 
@@ -863,6 +1080,8 @@ class NonFifoParetoSessionIdentity:
                 "maximum_elapsed_seconds": self.maximum_elapsed_seconds,
                 "fixture_digest": self.fixture_digest,
                 "config_digest": self.config_digest,
+                "scope_digest": self.scope_digest,
+                "incumbent_bound_digest": self.incumbent_bound_digest,
             }
         )
 
@@ -901,6 +1120,8 @@ class NonFifoParetoSessionIdentity:
                 self.evaluator_digest,
                 self.fixture_digest,
                 self.config_digest,
+                self.scope_digest,
+                self.incumbent_bound_digest,
             )
         ):
             raise NonFifoParetoSessionIdentityMismatch("session identity digests are incomplete")
@@ -923,6 +1144,9 @@ class NonFifoParetoCheckpoint:
     total_labels: int
     pareto_pruned: int
     evaluator_errors: tuple[str, ...] = ()
+    incumbent_bound_pruned: int = 0
+    incumbent_bound_rejected: int = 0
+    incumbent_bound_rejection_reasons: tuple[tuple[str, int], ...] = ()
     state_digest: str = ""
 
     def __post_init__(self) -> None:
@@ -937,6 +1161,23 @@ class NonFifoParetoCheckpoint:
         expected = self._calculated_state_digest()
         if self.state_digest and self.state_digest != expected:
             raise NonFifoParetoSessionRestoreError("checkpoint state digest mismatch")
+        for name in ("incumbent_bound_pruned", "incumbent_bound_rejected"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise NonFifoParetoSessionRestoreError(f"checkpoint {name} is invalid")
+        reasons = tuple(self.incumbent_bound_rejection_reasons)
+        if any(
+            not isinstance(item, (tuple, list))
+            or len(item) != 2
+            or not isinstance(item[0], str)
+            or not isinstance(item[1], int)
+            or item[1] < 0
+            for item in reasons
+        ):
+            raise NonFifoParetoSessionRestoreError(
+                "checkpoint incumbent-bound rejection reasons are invalid"
+            )
+        object.__setattr__(self, "incumbent_bound_rejection_reasons", reasons)
         object.__setattr__(self, "state_digest", expected)
 
     def _calculated_state_digest(self) -> str:
@@ -963,6 +1204,9 @@ class NonFifoParetoCheckpoint:
                 "total_labels": self.total_labels,
                 "pareto_pruned": self.pareto_pruned,
                 "evaluator_errors": self.evaluator_errors,
+                "incumbent_bound_pruned": self.incumbent_bound_pruned,
+                "incumbent_bound_rejected": self.incumbent_bound_rejected,
+                "incumbent_bound_rejection_reasons": self.incumbent_bound_rejection_reasons,
             }
         )
 
@@ -1386,6 +1630,11 @@ class NonFifoParetoSession:
         "generated",
         "goals",
         "identity",
+        "incumbent_bound_authorized",
+        "incumbent_bound_certificate",
+        "incumbent_bound_pruned",
+        "incumbent_bound_rejected",
+        "incumbent_bound_rejection_reasons",
         "labels_by_key",
         "maximum_elapsed",
         "neighbors",
@@ -1417,6 +1666,8 @@ class NonFifoParetoSession:
         maximum_elapsed: timedelta | None = None,
         fixture_digest: str = "unspecified-fixture",
         config_digest: str = "unspecified-config",
+        scope_digest: str = "unspecified-scope",
+        incumbent_bound_certificate: NonFifoParetoIncumbentBoundCertificate | None = None,
         cancel_check: Callable[[], bool] | None = None,
         identity: NonFifoParetoSessionIdentity | None = None,
     ) -> None:
@@ -1435,6 +1686,12 @@ class NonFifoParetoSession:
             evaluate_edge=evaluate_edge,
             fixture_digest=fixture_digest,
             config_digest=config_digest,
+            scope_digest=scope_digest,
+            incumbent_bound_digest=(
+                incumbent_bound_certificate.digest
+                if incumbent_bound_certificate is not None
+                else _INCUMBENT_BOUND_DISABLED_DIGEST
+            ),
         )
         expected_identity = candidate_identity if identity is None else identity
         expected_identity.assert_valid()
@@ -1443,6 +1700,13 @@ class NonFifoParetoSession:
                 "session parameters or callback digest do not match identity"
             )
         self.identity = expected_identity
+        if incumbent_bound_certificate is not None and not isinstance(
+            incumbent_bound_certificate, NonFifoParetoIncumbentBoundCertificate
+        ):
+            raise NonFifoParetoSessionIdentityMismatch(
+                "incumbent-bound certificate type is invalid"
+            )
+        self.incumbent_bound_certificate = incumbent_bound_certificate
         self.neighbors = neighbors
         self.evaluate_edge = evaluate_edge
         self.cancel_check = cancel_check
@@ -1471,6 +1735,10 @@ class NonFifoParetoSession:
         self.edge_evaluations = 0
         self.total_labels = 1
         self.pareto_pruned = 0
+        self.incumbent_bound_pruned = 0
+        self.incumbent_bound_rejected = 0
+        self.incumbent_bound_rejection_reasons: dict[str, int] = {}
+        self.incumbent_bound_authorized = self._authorize_incumbent_bound()
         self.evaluator_errors = []
         self.goals = []
         self.result = None
@@ -1485,6 +1753,7 @@ class NonFifoParetoSession:
             [Any, Any, datetime], NonFifoTransition | NonFifoParetoTransition
         ],
         cancel_check: Callable[[], bool] | None,
+        incumbent_bound_certificate: NonFifoParetoIncumbentBoundCertificate | None,
     ) -> NonFifoParetoSession:
         checkpoint.assert_valid()
         identity = checkpoint.identity
@@ -1494,6 +1763,22 @@ class NonFifoParetoSession:
             raise NonFifoParetoSessionIdentityMismatch("evaluator callback digest mismatch")
         session = cls.__new__(cls)
         session.identity = identity
+        if incumbent_bound_certificate is not None and not isinstance(
+            incumbent_bound_certificate, NonFifoParetoIncumbentBoundCertificate
+        ):
+            raise NonFifoParetoSessionIdentityMismatch(
+                "incumbent-bound certificate type is invalid"
+            )
+        expected_bound_digest = (
+            incumbent_bound_certificate.digest
+            if incumbent_bound_certificate is not None
+            else _INCUMBENT_BOUND_DISABLED_DIGEST
+        )
+        if identity.incumbent_bound_digest != expected_bound_digest:
+            raise NonFifoParetoSessionIdentityMismatch(
+                "incumbent-bound certificate digest mismatch"
+            )
+        session.incumbent_bound_certificate = incumbent_bound_certificate
         session.neighbors = neighbors
         session.evaluate_edge = evaluate_edge
         session.cancel_check = cancel_check
@@ -1515,10 +1800,87 @@ class NonFifoParetoSession:
         session.edge_evaluations = checkpoint.edge_evaluations
         session.total_labels = checkpoint.total_labels
         session.pareto_pruned = checkpoint.pareto_pruned
+        session.incumbent_bound_pruned = checkpoint.incumbent_bound_pruned
+        session.incumbent_bound_rejected = checkpoint.incumbent_bound_rejected
+        session.incumbent_bound_rejection_reasons = dict(
+            checkpoint.incumbent_bound_rejection_reasons
+        )
+        session.incumbent_bound_authorized = session._authorize_incumbent_bound(record=False)
         session.evaluator_errors = list(checkpoint.evaluator_errors)
         session.goals = list(checkpoint.goals)
         session.result = None
         return session
+
+    def _record_incumbent_bound_rejection(self, reason: str) -> None:
+        self.incumbent_bound_rejected += 1
+        self.incumbent_bound_rejection_reasons[reason] = (
+            self.incumbent_bound_rejection_reasons.get(reason, 0) + 1
+        )
+
+    def _authorize_incumbent_bound(self, *, record: bool = True) -> bool:
+        """Authorize the explicit lower-bound proof, otherwise fail closed."""
+
+        certificate = self.incumbent_bound_certificate
+        if certificate is None:
+            return False
+        if not certificate.usable:
+            if record:
+                self._record_incumbent_bound_rejection(
+                    certificate.reason or "certificate_unusable"
+                )
+            return False
+        if not certificate.permits(
+            scope_digest=self.identity.scope_digest,
+            goal=self.identity.goal,
+            objective_count=self.identity.objective_count,
+        ):
+            if record:
+                self._record_incumbent_bound_rejection("scope_or_policy_mismatch")
+            return False
+        return True
+
+    def _should_prune_incumbent_bound(
+        self,
+        candidate: NonFifoParetoLabel,
+    ) -> bool:
+        """Prune only a new label whose every completion is dominated.
+
+        The lower bound is independent of arrival time and therefore cannot
+        erase non-FIFO exact-arrival alternatives by itself.  It is applied
+        against an already observed goal label only; no label already in the
+        queue or already expanded is removed.
+        """
+
+        if not self.incumbent_bound_authorized:
+            return False
+        certificate = self.incumbent_bound_certificate
+        if certificate is None:  # defensive fence for malformed restores
+            self._record_incumbent_bound_rejection("certificate_missing")
+            self.incumbent_bound_authorized = False
+            return False
+        evidence = certificate.lower_bound(candidate.node, candidate.arrival_time)
+        if evidence is None:
+            self._record_incumbent_bound_rejection("state_uncovered")
+            self.incumbent_bound_authorized = False
+            return False
+        goal_arrival, lower_bound = evidence
+        completion = tuple(
+            current + bound
+            for current, bound in zip(candidate.costs, lower_bound, strict=True)
+        )
+        if any(not isfinite(value) for value in completion):
+            self._record_incumbent_bound_rejection("non_finite_completion")
+            self.incumbent_bound_authorized = False
+            return False
+        if any(
+            goal.arrival_time == goal_arrival
+            and all(left <= right for left, right in zip(goal.costs, completion, strict=True))
+            and any(left < right for left, right in zip(goal.costs, completion, strict=True))
+            for goal in self.goals
+        ):
+            self.incumbent_bound_pruned += 1
+            return True
+        return False
 
     @property
     def session_id(self) -> str:
@@ -1552,6 +1914,12 @@ class NonFifoParetoSession:
                 self.identity.max_labels,
                 self.identity.max_queue,
                 self.identity.max_edge_evaluations,
+            ),
+            incumbent_bound_digest=self.identity.incumbent_bound_digest,
+            incumbent_bound_pruned=self.incumbent_bound_pruned,
+            incumbent_bound_rejected=self.incumbent_bound_rejected,
+            incumbent_bound_rejection_reasons=tuple(
+                sorted(self.incumbent_bound_rejection_reasons.items())
             ),
         )
         return self.result
@@ -1636,6 +2004,8 @@ class NonFifoParetoSession:
                     (*label.path, neighbor),
                     (*label.transitions, transition),
                 )
+                if self._should_prune_incumbent_bound(next_label):
+                    continue
                 frontier = self.labels_by_key.setdefault(next_label.exact_key, [])
                 if self.identity.pareto_pruning and any(
                     existing.dominates(next_label) for existing in frontier
@@ -1692,6 +2062,11 @@ class NonFifoParetoSession:
             total_labels=self.total_labels,
             pareto_pruned=self.pareto_pruned,
             evaluator_errors=tuple(self.evaluator_errors),
+            incumbent_bound_pruned=self.incumbent_bound_pruned,
+            incumbent_bound_rejected=self.incumbent_bound_rejected,
+            incumbent_bound_rejection_reasons=tuple(
+                sorted(self.incumbent_bound_rejection_reasons.items())
+            ),
         )
 
 
@@ -1712,6 +2087,7 @@ def restore_non_fifo_pareto_session(
     ],
     cancel_check: Callable[[], bool] | None = None,
     identity: NonFifoParetoSessionIdentity | None = None,
+    incumbent_bound_certificate: NonFifoParetoIncumbentBoundCertificate | None = None,
 ) -> NonFifoParetoSession:
     """Restore a paused finite session after all identity fences."""
 
@@ -1725,6 +2101,7 @@ def restore_non_fifo_pareto_session(
         neighbors=neighbors,
         evaluate_edge=evaluate_edge,
         cancel_check=cancel_check,
+        incumbent_bound_certificate=incumbent_bound_certificate,
     )
 
 
@@ -1745,6 +2122,8 @@ def search_non_fifo_pareto(
     maximum_elapsed: timedelta | None = None,
     fixture_digest: str = "one-shot-fixture",
     config_digest: str = "one-shot-config",
+    scope_digest: str = "unspecified-scope",
+    incumbent_bound_certificate: NonFifoParetoIncumbentBoundCertificate | None = None,
 ) -> NonFifoParetoSearchResult:
     """Run one finite session to completion with the historical API."""
 
@@ -1764,6 +2143,8 @@ def search_non_fifo_pareto(
         maximum_elapsed=maximum_elapsed,
         fixture_digest=fixture_digest,
         config_digest=config_digest,
+        scope_digest=scope_digest,
+        incumbent_bound_certificate=incumbent_bound_certificate,
     ).run()
 
 
@@ -1873,6 +2254,10 @@ def _pareto_result(
     goal_node: Any | None = None,
     pareto_pruning: bool = False,
     search_limits: tuple[int, int, int, int] = (),
+    incumbent_bound_digest: str = _INCUMBENT_BOUND_DISABLED_DIGEST,
+    incumbent_bound_pruned: int = 0,
+    incumbent_bound_rejected: int = 0,
+    incumbent_bound_rejection_reasons: Iterable[tuple[str, int]] = (),
 ) -> NonFifoParetoSearchResult:
     goal_list = tuple(goals)
     selected = (
@@ -1900,6 +2285,10 @@ def _pareto_result(
         goal_node=goal_node,
         pareto_pruning=pareto_pruning,
         search_limits=search_limits,
+        incumbent_bound_digest=incumbent_bound_digest,
+        incumbent_bound_pruned=incumbent_bound_pruned,
+        incumbent_bound_rejected=incumbent_bound_rejected,
+        incumbent_bound_rejection_reasons=tuple(incumbent_bound_rejection_reasons),
     )
 
 
@@ -1944,6 +2333,20 @@ def _jsonable(value: Any) -> Any:
         return value.value
     if isinstance(value, NonFifoParetoLabel):
         return _pareto_label_payload(value)
+    if isinstance(value, NonFifoParetoIncumbentBoundCertificate):
+        return {
+            "schema_version": value.schema_version,
+            "status": value.status,
+            "scope_digest": value.scope_digest,
+            "goal": _jsonable(value.goal),
+            "objective_count": value.objective_count,
+            "state_lower_bounds": _jsonable(value.state_lower_bounds),
+            "coverage_complete": value.coverage_complete,
+            "evaluator_certified": value.evaluator_certified,
+            "proof_digest": value.proof_digest,
+            "reason": value.reason,
+            "certificate_digest": value.digest,
+        }
     if isinstance(value, NonFifoBusinessEvidence):
         return {
             "speed_knots": value.speed_knots,
@@ -1986,6 +2389,8 @@ __all__ = [
     "NonFifoParetoCheckpoint",
     "NonFifoParetoFrontierCertificate",
     "NonFifoParetoFrontierComparison",
+    "NonFifoParetoIncumbentBoundCertificate",
+    "NonFifoParetoIncumbentBoundStatus",
     "NonFifoParetoLabel",
     "NonFifoParetoSearchResult",
     "NonFifoParetoSession",

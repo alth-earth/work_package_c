@@ -10,7 +10,10 @@ import pytest
 from arctic_route_planning.cost import EdgeCostInput
 from arctic_route_planning.domain.models import ObjectiveMode
 from arctic_route_planning.grid import heading_change_degrees
-from arctic_route_planning.planners.non_fifo_feasibility import NonFifoSearchStatus
+from arctic_route_planning.planners.non_fifo_feasibility import (
+    NonFifoParetoIncumbentBoundCertificate,
+    NonFifoSearchStatus,
+)
 from arctic_route_planning.planners.non_fifo_temporal_pareto import (
     TEMPORAL_PARETO_COMPONENTS,
     NonFifoTemporalParetoCheckpoint,
@@ -172,6 +175,32 @@ def test_actual_bridge_rejects_scope_drift_and_keeps_cancel_fail_closed() -> Non
     assert cancelled.status is NonFifoSearchStatus.CANCELLED
     assert cancelled.selected is None
     assert cancelled.frontier == ()
+
+
+def test_actual_bridge_rejects_incumbent_bound_certificate_fail_closed() -> None:
+    planner = _configured_planner()
+    request = _research_request()
+    scope = planner.temporal_scope(request)
+    certificate = NonFifoParetoIncumbentBoundCertificate.rejected(
+        scope_digest=scope.digest,
+        goal=(request.goal, None),
+        objective_count=len(TEMPORAL_PARETO_COMPONENTS),
+        reason="interval-proof-incomplete",
+    )
+
+    result = run_non_fifo_temporal_pareto_search(
+        planner,
+        request,
+        incumbent_bound_certificate=certificate,
+    )
+
+    assert result.status is NonFifoSearchStatus.GOAL_FOUND
+    assert result.incumbent_bound_pruned == 0
+    assert result.incumbent_bound_rejected >= 1
+    assert result.incumbent_bound_digest == certificate.digest
+    assert result.incumbent_bound_rejection_reasons == (
+        ("interval-proof-incomplete", 1),
+    )
 
 
 def test_actual_bridge_maps_evaluator_and_resource_failures_without_partial_route() -> None:
