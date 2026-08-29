@@ -536,6 +536,7 @@ def _experiment_identity(
         "state_bound_policy": "absent",
         "pareto_pruning": True,
         "skip_expected_rejections": True,
+        "eta_method": args.eta_method,
         "objectives": [objective.value for objective in OBJECTIVES],
         "modes": list(args.modes),
         "repetitions": args.repetitions,

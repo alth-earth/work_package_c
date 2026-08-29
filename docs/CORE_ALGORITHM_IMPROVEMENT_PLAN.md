@@ -2711,3 +2711,59 @@ swap/OOM/timeout 证据完整。通过只标记
 `READY_FOR_P0.2-REAL-PARETO-REVIEW`，失败标记
 `REAL_INPUT_PARETO_RESOURCE_FAIL` 或 `INVALID/PENDING`；任何结果都不授权 dominance、
 candidate 或 Winter。完成后仅本地集成并移除辅助 worktree，保留研究分支和实验构件，不 push。
+
+### 【2026-08-29 | COMPLETED】P0.2-M15：real 6h Pareto qualification audit
+
+本轮从 clean `3056fb3` 建立隔离分支
+`research/p02-m15-real-pareto-20260829` 与 worktree
+`/root/my_project/.runtime/worktrees/c-p02-m15-real-pareto`。提交序列为计划
+`5232bce`、实际 bridge 边拒绝围栏 `d6fb5ca`、真实 runner `dfab593` 和测试
+`a220aed`；最终 evidence 均绑定 `a220aed`，worktree 在启动时 clean。没有修改
+B/C、C/D 合同、ingress/service、公共 planner、formal latest、replanning baseline 或
+frozen artifact，也没有 push。
+
+**实现与安全围栏。** 新增
+`scripts/benchmark_non_fifo_temporal_pareto_real.py`，schema 为
+`c.p0.2-temporal-pareto-real.v1`。runner 复用已审计的完整 145 帧真实 fixture loader，
+以冻结 route-plan-set 自动解析起点/目标，逐 worker 绑定 implementation/lock/config、
+RiskFrame frame digest、route-plan-set、scope/request、bounded ETA policy 和冻结的
+`50k/100k/50k/400k` 搜索上限。正式研究调用固定 `use_heuristic=False`、
+`TemporalDominancePolicy.disabled()`、无 state-bound certificate，仅显式打开
+`pareto_pruning=True`；`--eta-method bounded` 只作用于该研究 worker，正式 planner 的
+历史默认 ETA 策略不变。M14 bridge 新增 `skip_expected_rejections` 围栏：仅将已分类的
+hard/coverage/sampling/speed/ETA 域拒绝作为 unavailable edge 跳过并写入 planner
+diagnostics，未知 evaluator 异常仍进入 `EVALUATOR_FAILURE`；该开关进入
+callback/component/checkpoint digest，默认值保持关闭，因此既有 synthetic bridge 语义不变。
+
+**权威真实 6h 构件。** holdout 输出为
+`.runtime/experiments/c-p02-m15-real-pareto-holdout-6h-20260829-r1/`，experiment id
+`c.p0.2-temporal-pareto-real.v1-d56c690b43c0e19b`；development 输出为
+`.runtime/experiments/c-p02-m15-real-pareto-development-6h-20260829-r1/`，experiment id
+`c.p0.2-temporal-pareto-real.v1-064c058a948c694b`。两组均为
+`executable_0_6h`、`fastest/low_risk/recommended`、`one_shot/slice_restore/cancelled`、
+两次重复，共 `18/18` case，manifest/cases/resource-frontier/summary/heartbeat 和
+`ALL_DONE` 齐全；resume 以完全一致 identity 重读成功。
+
+| 输入 | status | one-shot 与 restore | reference 语义 | deterministic | Pareto pruning | 搜索峰值 |
+|---|---|---|---|---|---:|---|
+| holdout `(5,7)→(7,6)` | `READY_FOR_P0.2-REAL-PARETO-REVIEW` | `6/6` 等价 | `12/12` 匹配 | `true` | `0` | expanded `32`、queue `26` |
+| development `(5,7)→(7,7)` | `READY_FOR_P0.2-REAL-PARETO-REVIEW` | `6/6` 等价 | `12/12` 匹配 | `true` | `0` | expanded `17`、queue `13` |
+
+成功路线的节点、每个 exact UTC ETA、速度、风险、最大风险、confidence、source IDs、
+CostBreakdown 与独立 zero-heuristic reference 一致；slice→restore 的 semantic/frontier
+digest 与 one-shot 一致；`6/6` cancelled case 均为 `CANCELLED`，没有 route/frontier。
+两输入的实际 `pareto_pruned_total=0`，所以本轮没有把真实输入包装成 Pareto pruning 或
+dominance 性能证明；M14 synthetic 的合法 same-exact pruning 证据仍是唯一 pruning 证据。
+真实 bounded ETA 仍观察到域拒绝（holdout 每次完整 run 约 `42` ETA/`40` hard，
+development 约 `26` ETA/`26` hard），这些均按研究桥接规则保留为显式 diagnostics，未被
+静默当作航线。
+
+**资源与边界。** 所有完成 case 固定 CPU `0`，process/host swap 为零，OOM/timeout 为零，
+resource-clean 与 cgroup memory events 证据完整；当前宿主 `/init.scope` 的
+`memory.max`/`memory.swap.max` 为 `max`，因此这不是 4 GiB 强制 cgroup 性能门，只是可审计
+资源观察。未执行真实 24h、full-voyage 或 Winter；已知 `REAL_INPUT_FIFO_VIOLATED` 不变，
+本轮不授权 FIFO dominance，也不启用 candidate/Winter。最终状态为
+`READY_FOR_P0.2-REAL-PARETO-REVIEW`：实际 6h Pareto bridge 的语义、恢复、取消和
+fail-closed 边拒绝具备另立 review 的证据，但不代表连续海洋模型全局最优性、真实 Pareto
+性能通过或生产资格。下一步另立带强制 cgroup/更大真实输入的 Pareto 资源计划，或在
+明确非 FIFO label-correcting 终止/资源语义后制定 P0.2 implementation plan；保持默认关闭。
