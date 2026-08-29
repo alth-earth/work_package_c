@@ -1,9 +1,14 @@
 """Static contract checks for the M28 goal-gated real diagnostic runner."""
 
+from __future__ import annotations
+
 from pathlib import Path
 
-
-_SCRIPT = Path(__file__).parents[2] / "scripts" / "benchmark_non_fifo_temporal_pareto_goal_gated_real.py"
+_SCRIPT = (
+    Path(__file__).parents[2]
+    / "scripts"
+    / "benchmark_non_fifo_temporal_pareto_goal_gated_real.py"
+)
 
 
 def test_m28_runner_uses_a_distinct_schema_and_after_goal_mode() -> None:

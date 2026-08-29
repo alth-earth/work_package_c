@@ -15,7 +15,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-
 SCHEMA_VERSION = "c.p0.2-nonfifo-pareto-until-goal-real.v1"
 os.environ.setdefault("C_PARETO_SCHEMA_VERSION", SCHEMA_VERSION)
 os.environ.setdefault("C_PARETO_MILESTONE", "P0.2-M29")

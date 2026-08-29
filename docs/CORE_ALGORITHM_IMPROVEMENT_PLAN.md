@@ -3856,3 +3856,42 @@ always、after-goal 和 until-goal 的 expanded、edge evaluation、queue peak�
 pruning、semantic digest 及资源观察。诊断结果不构成完整 frontier、dominance、candidate
 或 Winter 资格；搜索上限 `50k/100k/50k/400k` 不变。若 until-goal 仍无净收益，停止继续
 调 priority，转向独立证明的 queue compaction/corridor envelope。
+
+### 【2026-08-30 | COMPLETED（incumbent-seed diagnostic；no additional net gain）】P0.2-M29：heuristic incumbent seed then baseline queue
+
+**实现与身份。** M29 从 M28 clean research commit `dbff10a` 建立隔离分支
+`research/p02-m29-incumbent-seed`，依次提交计划 `027bdc0`、实现
+`768272c` 和 bridge/checkpoint 测试 `0f84a24`。`until_goal` 是显式研究模式：首个
+goal 前使用已认证 heuristic 建立 incumbent，首个 goal 后一次性切换到历史
+cost-vector 优先级；phase、pre/post callback digest、policy 和 checkpoint state
+digest 均受 identity fence 保护。默认无 callback、M27 `always`、M28 `after_goal`
+行为保持兼容。真实实验均使用 `dominance_policy=disabled`、冻结拓扑 arrival
+state-bound 与 selected-route terminal bound、`selection_only=true`，candidate 和
+Winter 均未授权。
+
+**真实 selected-objective 证据。** holdout 与 development 都是冻结
+`rolling_0_24h × fastest × 1`，输入/route-plan-set/145 帧 RiskFrame、配置、lock 和
+implementation identity 完整且 clean；两次 baseline/ordered 均 `GOAL_FOUND`，业务字段、
+路线、精确到达时间和 semantic digest 完全一致，heuristic scope/certificate 授权有效，
+无 heuristic rejection、state-bound rejection 或 terminal-bound rejection。摘要如下：
+
+| input | baseline expanded / edge / queue | until-goal expanded / edge / queue | terminal bound pruned | semantic | resource |
+|---|---:|---:|---:|---|---|
+| holdout | 10,477 / 83,256 / 3,369 | 9,732 / 77,560 / 6,114 | 745 | MATCH | `INCONCLUSIVE_CGROUP_BOUNDARY` |
+| development | 5,659 / 45,192 / 1,997 | 5,623 / 44,912 / 3,347 | 40 | MATCH | `INCONCLUSIVE_CGROUP_BOUNDARY` |
+
+until-goal 与 M27 `always` 在 holdout 上得到相同的扩展、edge 和 queue 结果；与 M28
+`after_goal` 相比，重新产生 terminal pruning，但 queue 压力重新出现。因此本策略
+没有带来额外的净资源收益，不能形成性能资格。两实验均保留完整 manifest、cases、
+comparison summary、heartbeat 和 `ALL_DONE`；资源本身未观察到 swap/OOM/timeout，
+但 cgroup 边界证据不完整，故不把它提升为资源 PASS。这里仅按用户允许的范围放宽
+“诊断可继续”的证据完整性门，不放宽语义、身份、fail-closed、搜索上限或 candidate
+门禁。
+
+**验证与结论。** M29 聚焦测试为 `55 passed`；默认 planner、checkpoint/restore、
+cancel、phase reheapify、scope/policy digest 和 bridge no-certificate 拒绝路径均通过。
+M29 结论为 `NO_ADDITIONAL_NET_GAIN / READY_FOR_SEPARATE_QUEUE_COMPACTION_OR_CORRIDOR_ENVELOPE_RESEARCH`：
+停止继续调 priority 权重，转向具有独立证明的 queue compaction/corridor envelope；
+24h 资源限制 `50k/100k/50k/400k` 不变。M29 不改变 formal contract、ingress/service、
+production planner、P2.1、P3、ARA*、formal latest、replanning baseline 或 frozen
+artifact；M27、M28、M26、M25 及更早历史记录保持不变。

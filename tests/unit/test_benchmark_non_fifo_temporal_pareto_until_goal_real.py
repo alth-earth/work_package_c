@@ -1,9 +1,14 @@
 """Static checks for the M29 incumbent-seed diagnostic wrapper."""
 
+from __future__ import annotations
+
 from pathlib import Path
 
-
-_SCRIPT = Path(__file__).parents[2] / "scripts" / "benchmark_non_fifo_temporal_pareto_until_goal_real.py"
+_SCRIPT = (
+    Path(__file__).parents[2]
+    / "scripts"
+    / "benchmark_non_fifo_temporal_pareto_until_goal_real.py"
+)
 
 
 def test_m29_runner_selects_until_goal_with_distinct_schema() -> None:
