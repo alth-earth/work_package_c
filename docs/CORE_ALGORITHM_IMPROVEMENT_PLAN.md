@@ -2253,6 +2253,50 @@ C 内部 sidecar 使用，不改变 C→D 合同或正式 `plan()` 默认行为�
 candidate/Winter。资源上限继续冻结为 `50k/100k/50k/400k`，M4/M9/M10 真实资源和 FIFO
 violation 历史不覆盖。
 
+### 【2026-08-29 | COMPLETED】P0.2-M11：non-FIFO exact-arrival Pareto frontier audit
+
+本轮在隔离分支 `research/p02-m11-nonfifo-frontier-20260829` 上完成；计划提交为
+`0404dfa`，实现与证据绑定的 clean implementation 为 `910a6fd`（含
+`f5f8f0c` 的 sidecar/runner/test 实现及可恢复 identity 修正）。改动仅限 C 内部
+`non_fifo_feasibility` research sidecar、独立 runner 和单元/runner contract tests；未修改
+B/C、C/D 合同、ingress/service、正式 planner 默认路径或生产接口，`pareto_pruning=False`
+继续是默认值，candidate/Winter 仍关闭。
+
+**Synthetic matrix。** 独立 runner `scripts/benchmark_non_fifo_pareto_frontier.py` 使用
+schema `c.p0.2-nonfifo-pareto-frontier.v1`，在 12 个有限 fixture ×
+`fastest/low_risk/recommended` × baseline/显式 pareto policy × 10 次重复完成 `720/720`
+cases。权威构件位于
+`.runtime/experiments/c-p02-m11-nonfifo-frontier-synthetic-20260829-r2/`，包含
+`manifest.json`、`cases.jsonl`、`comparison-summary.json`、`heartbeat.json` 和 `ALL_DONE`；
+manifest 绑定实现文件、commit、`uv.lock`、配置和 fixture/policy digest，resume 复核不会
+重复追加 case。
+
+| evidence gate | result |
+| --- | --- |
+| expected status / deterministic | PASS / `true` |
+| route/frontier/ETA/cost/business evidence vs independent exhaustive oracle | PASS |
+| fail-closed partial-route suppression | PASS |
+| explicit policy/limit frontier digest binding | PASS |
+| resource evidence / process swap | complete / clean |
+| strict same-exact newly generated pruning | `30` (baseline `0`) |
+
+成功 fixture 为 later-arrival shortcut、同 exact bucket、严格同 exact 支配和 equal-cost
+保留；前两类证明不同精确到达不互相支配，后两类分别证明严格同 exact 新 label 可安全
+剪枝、等成本路径不被删除。hard-mask、evaluator
+failure、non-increasing arrival、objective mismatch、取消、maximum horizon、edge/label
+limit 和周期零成本 cycle 均返回明确 `EVALUATOR_FAILURE`、`CANCELLED`、`EXHAUSTED` 或
+`RESOURCE_LIMIT`，不带成功 label 或 partial route。固定 CPU=0 的 worker 资源快照均无 swap；
+确定性、邻居 canonical ordering、business evidence 和 frontier digest 单元/runner 门均
+通过。
+
+**边界与结论。** 汇总状态为 `TEMPORAL_NONFIFO_PARETO_FRONTIER_MATRIX_PASS`，仅表示有限
+非 FIFO exact-arrival Pareto 语义、终止/取消/资源失败和安全 pruning 规则已通过研究审计，
+不证明连续海洋模型的全局最优性，也不构成真实输入或性能晋级。按 M10 已知
+`REAL_INPUT_FIFO_VIOLATED`，本轮不启动真实 runner、不提高
+`50k/100k/50k/400k` 资源上限、不重跑 24h/Winter；状态只推进为
+`READY_FOR_P0.2-NONFIFO-IMPLEMENTATION-REVIEW`，candidate 继续默认关闭。后续若继续，
+须另立有限非 FIFO 实现/真实资源计划，并保留本轮原始构件和历史结论。
+
 ### 【2026-08-29 | PLANNED】P0.2-M9：certified heuristic long-horizon resource audit
 
 M8 在完整 holdout `executable_0_6h` 上证明了证书化反向图 objective lower bound 可以只改变
