@@ -2640,3 +2640,50 @@ candidate；任一语义、恢复、fail-closed 或资源证据失败则 `NO_PER
 保留 M13/M12.1 结论。identity 漂移、构件不完整或 dirty evidence 一律
 `INVALID/PENDING`。完成后只在本地集成并移除辅助 worktree，保留研究分支和实验构件，不
 push。
+
+### 【2026-08-29 | COMPLETED】P0.2-M14：actual temporal Pareto label-correcting bridge
+
+本轮在隔离分支 `research/p02-m14-actual-pareto-20260829` 完成，计划提交为 `7a7eec7`，
+actual edge bridge 为 `4cd33ab`，runner/测试为 `661e6b4`、`359bab4`、`d047692`。新增的
+`non_fifo_temporal_pareto.py` 是未从 `planners.__init__` 导出的 C 内部研究 sidecar：它把实际
+`TemporalLabelAStar._EdgeTraversal` 接到现有 `NonFifoParetoSession`，保留
+`(node, incoming-heading, exact UTC arrival)` 状态、7 维 additive cost vector、业务 edge
+evidence 和完整 frontier；不伪造 `PlanningResult`，不修改正式 planner、B/C 或 C/D 合同、
+ingress/service、default path、candidate 或 Winter。
+
+**安全与身份围栏。** bridge 创建前强制 `use_heuristic=False`、
+`TemporalDominancePolicy.disabled()`、无 state-bound/heuristic certificate，并拒绝未知
+evaluator identity。Pareto pruning 委托已有有限 sidecar，只有同一 exact state 的新生成且
+严格 component-wise 被支配 label 被丢弃；不同 arrival、equal vector、已扩展 label、
+evaluator/hard-mask failure 和 resource/cancel 均不被包装成成功。checkpoint 额外绑定 bridge
+schema、`TemporalScope` digest、cost-component digest、callback digest 和 nested state
+digest；restore 的 scope/component/callback/state drift 均 fail-closed。
+
+**权威 synthetic evidence。** runner schema 为
+`c.p0.2-temporal-pareto-bridge.v1`，构件位于
+`.runtime/experiments/c-p02-m14-actual-pareto-20260829-r3/`，包含 `manifest.json`、
+`cases.jsonl`、`comparison-summary.json`、`heartbeat.json` 和 `ALL_DONE`。矩阵为
+7 scenarios（same-exact dominance、later-arrival、business evidence、evaluator failure、
+resource limit、scope drift、checkpoint tamper）× 3 objectives × 3 modes
+（one-shot/slice→restore/cancelled）× 2 repetitions，共 `126/126`。摘要为
+`TEMPORAL_NONFIFO_ACTUAL_PARETO_BRIDGE_MATRIX_PASS`：deterministic=true，独立 exhaustive
+small-fixture oracle 的 route/ETA/cost/source IDs 对照通过，slice→restore 等价，观察到
+12 次合法 same-exact pruning，scope/checkpoint drift、cancel、evaluator failure、resource
+limit 均无 partial route/frontier，固定 CPU=0 且无 process swap。r1/r2 分别因 runner 的已修复
+编排缺陷（初始 failure 场景未正确处理 terminal failure、identity 场景误受 cancelled mode
+影响）标记为历史诊断/FAIL，不纳入权威算法证据；r3 绑定最终 clean implementation。
+
+**验证收口。** 新增 9 个 bridge/runner 聚焦测试通过；相关非 FIFO/temporal/session/qualification
+聚焦集合 `101 passed`；全仓 `pytest` 为 `527 passed, 3 skipped`，3 个 skip 是缺失
+orchestrator archive fixture 的既有测试边界。改动文件 Ruff、lock check、offline sync、CLI
+smoke、active/archive import boundary 和 `git diff --check` 均通过；`UV_OFFLINE=1 make check`
+因隔离 worktree 没有 `.mamba-env/bin/uv` 被明确阻塞，未修改环境，使用同一锁定 `.venv` 完成
+等价校验。实验 runner 未执行真实 6h/24h，宿主 cgroup 仅作观察而非 4 GiB 性能门。
+
+**结论与边界。** 状态为 `READY_FOR_P0.2-REAL-PARETO-REVIEW`：有限 actual-edge bridge 的
+Pareto、业务 evidence、恢复/取消和 fail-closed 语义具备继续审计的证据，但不证明连续海洋
+模型全局最优性、不授权真实输入 dominance，不覆盖 24h 资源前沿。M10 的
+`REAL_INPUT_FIFO_VIOLATED`、M9 的 24h resource fail、M13 的真实 6h session evidence 及
+冻结 `50k/100k/50k/400k` 上限保持不变。下一步另立带强制 cgroup/真实输入 scope 的
+P0.2-real Pareto 资格或资源计划；candidate、Winter、formal latest、replanning baseline
+和 frozen artifact 继续关闭。
