@@ -66,7 +66,11 @@ def _timeout_handler(_signum: int, _frame: Any) -> None:
 
 
 def _load_base() -> Any:
-    path = Path(__file__).resolve().with_name("benchmark_temporal_edge_envelope_real.py")
+    # The edge-envelope runner is itself a compatibility wrapper around the
+    # audited frozen-input runner.  Load that canonical fixture module
+    # directly here so this sidecar cannot accidentally depend on a wrapper's
+    # private namespace or silently lose the input-identity fence.
+    path = Path(__file__).resolve().with_name("benchmark_temporal_dominance_real.py")
     spec = importlib.util.spec_from_file_location("c_temporal_environment_real_base", path)
     if spec is None or spec.loader is None:
         raise RuntimeError("cannot load audited real-input fixture runner")
