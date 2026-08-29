@@ -22,6 +22,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Mapping
 from datetime import UTC, datetime
@@ -672,57 +673,67 @@ def _run_child(
     root = Path(__file__).resolve().parents[1]
     env["PYTHONPATH"] = str(root / "src") + os.pathsep + env.get("PYTHONPATH", "")
     started = time.time()
-    try:
-        process = subprocess.Popen(
-            _child_command(args, objective, repetition, mode),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env=env,
-        )
-    except OSError as error:
-        return {
-            "schema_version": SCHEMA_VERSION,
-            "objective": objective.value,
-            "repetition": repetition,
-            "mode": mode,
-            "status": "INVALID/PENDING",
-            "reason": f"worker spawn failed: {type(error).__name__}: {error}",
-            "resource_clean": False,
-            "resource_evidence_complete": False,
-        }
-    while process.poll() is None:
-        elapsed = time.time() - started
-        _atomic_json(
-            heartbeat,
-            {
-                "schema_version": SCHEMA_VERSION,
-                "status": "RUNNING",
-                "updated_at": datetime.now(UTC),
-                "pid": process.pid,
-                "objective": objective.value,
-                "repetition": repetition,
-                "mode": mode,
-                "elapsed_seconds": elapsed,
-            },
-        )
-        if elapsed > args.worker_timeout_seconds:
-            process.kill()
-            stdout, stderr = process.communicate()
-            return {
-                "schema_version": SCHEMA_VERSION,
-                "objective": objective.value,
-                "repetition": repetition,
-                "mode": mode,
-                "status": "TIMEOUT",
-                "reason": "worker_timeout",
-                "stdout": stdout[-4000:],
-                "stderr": stderr[-4000:],
-                "resource_clean": False,
-                "resource_evidence_complete": False,
-            }
-        time.sleep(1.0)
-    stdout, stderr = process.communicate()
+    with (
+        tempfile.TemporaryFile(mode="w+", encoding="utf-8") as stdout_file,
+        tempfile.TemporaryFile(mode="w+", encoding="utf-8") as stderr_file,
+    ):
+            try:
+                process = subprocess.Popen(
+                    _child_command(args, objective, repetition, mode),
+                    stdout=stdout_file,
+                    stderr=stderr_file,
+                    text=True,
+                    env=env,
+                )
+            except OSError as error:
+                return {
+                    "schema_version": SCHEMA_VERSION,
+                    "objective": objective.value,
+                    "repetition": repetition,
+                    "mode": mode,
+                    "status": "INVALID/PENDING",
+                    "reason": f"worker spawn failed: {type(error).__name__}: {error}",
+                    "resource_clean": False,
+                    "resource_evidence_complete": False,
+                }
+            while process.poll() is None:
+                elapsed = time.time() - started
+                _atomic_json(
+                    heartbeat,
+                    {
+                        "schema_version": SCHEMA_VERSION,
+                        "status": "RUNNING",
+                        "updated_at": datetime.now(UTC),
+                        "pid": process.pid,
+                        "objective": objective.value,
+                        "repetition": repetition,
+                        "mode": mode,
+                        "elapsed_seconds": elapsed,
+                    },
+                )
+                if elapsed > args.worker_timeout_seconds:
+                    process.kill()
+                    process.wait()
+                    stdout_file.seek(0)
+                    stderr_file.seek(0)
+                    return {
+                        "schema_version": SCHEMA_VERSION,
+                        "objective": objective.value,
+                        "repetition": repetition,
+                        "mode": mode,
+                        "status": "TIMEOUT",
+                        "reason": "worker_timeout",
+                        "stdout": stdout_file.read()[-4000:],
+                        "stderr": stderr_file.read()[-4000:],
+                        "resource_clean": False,
+                        "resource_evidence_complete": False,
+                    }
+                time.sleep(1.0)
+            process.wait()
+            stdout_file.seek(0)
+            stderr_file.seek(0)
+            stdout = stdout_file.read()
+            stderr = stderr_file.read()
     if process.returncode != 0:
         return {
             "schema_version": SCHEMA_VERSION,
