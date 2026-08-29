@@ -165,12 +165,13 @@ def _set_cpu(cpu: int) -> None:
 
 def _case(base: Any, fixture: Any, objective_name: str, cpu: int) -> dict[str, Any]:
     objective = ObjectiveMode(objective_name)
+    dominance = base._load_base()
     _baseline_probe, request, _topology, corridor = base._build_certificate(
-        base, fixture, objective_name
+        dominance, fixture, objective_name
     )
     # Rebuild both planners so the baseline and candidate share exactly the
     # same M31 edge envelope; heading ordering is the only candidate change.
-    baseline = base._load_base()._build_planner(fixture, objective)
+    baseline = dominance._build_planner(fixture, objective)
     baseline.state_bound_certificate = corridor.certificate
     scope = baseline.temporal_scope(request)
     nodes = base._nodes(fixture)
@@ -196,7 +197,7 @@ def _case(base: Any, fixture: Any, objective_name: str, cpu: int) -> dict[str, A
         errors["baseline"] = f"{type(error).__name__}: {error}"
     if baseline_result is not None:
         try:
-            reference = base._load_base()._reference_search(baseline, request)
+            reference = dominance._reference_search(baseline, request)
         except Exception as error:
             errors["reference"] = f"{type(error).__name__}: {error}"
     try:
@@ -205,7 +206,7 @@ def _case(base: Any, fixture: Any, objective_name: str, cpu: int) -> dict[str, A
         errors["candidate"] = f"{type(error).__name__}: {error}"
     if candidate_result is not None:
         try:
-            repeat = base._load_base()._build_planner(fixture, objective)
+            repeat = dominance._build_planner(fixture, objective)
             repeat.state_bound_certificate = corridor.certificate
             repeat.heading_heuristic_certificate = heading_certificate
             repeat_result = repeat.plan(request)
