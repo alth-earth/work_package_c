@@ -249,12 +249,6 @@ def test_partial_edge_envelope_authorizes_only_listed_pairs() -> None:
 
     assert evidence.certificate.usable
     assert evidence.certificate.edge_bound_partial
-    assert evidence.certificate.allows_transition(
-        (0, 0), (0, 1), T0, T0
-    )
-    assert evidence.certificate.allows_transition(
-        (0, 1), (1, 1), T0 + timedelta(hours=2), T0
-    )
-    assert not evidence.certificate.allows_transition(
-        (0, 0), (0, 1), T0 + timedelta(hours=2), T0
-    )
+    assert evidence.certificate.allows_transition((0, 0), (0, 1), T0, T0)
+    assert evidence.certificate.allows_transition((0, 1), (1, 1), T0 + timedelta(hours=2), T0)
+    assert not evidence.certificate.allows_transition((0, 0), (0, 1), T0 + timedelta(hours=2), T0)
