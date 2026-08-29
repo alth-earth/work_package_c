@@ -147,7 +147,8 @@ def _case(scenario: str, objective: str, mode: str, repetition: int) -> dict[str
             request,
             pareto_pruning=True,
         )
-        if scenario == "checkpoint_drift":
+        mismatch_expected = scenario == "checkpoint_drift" and mode != "cancelled"
+        if mismatch_expected:
             session = create_non_fifo_temporal_pareto_session(
                 candidate_planner,
                 request,
@@ -226,7 +227,7 @@ def _case(scenario: str, objective: str, mode: str, repetition: int) -> dict[str
     edge_pruned = int(candidate_diag.get("state_bound_edge_pruned", 0) or 0)
     edge_checks = int(candidate_diag.get("state_bound_edge_checks", 0) or 0)
     state_pruned = int(candidate_diag.get("state_bound_pruned", 0) or 0)
-    mismatch_expected = scenario == "checkpoint_drift"
+    mismatch_expected = scenario == "checkpoint_drift" and mode != "cancelled"
     if mismatch_expected:
         semantic_match = baseline is not None and restore_error is not None
         status = "MISMATCH_REJECTED" if semantic_match else "FAIL"
