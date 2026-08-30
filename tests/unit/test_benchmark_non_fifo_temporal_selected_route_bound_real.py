@@ -86,4 +86,3 @@ def test_summary_is_invalid_for_incomplete_or_dirty_identity() -> None:
     dirty = _identity()
     dirty["git"] = {"dirty": True}
     assert _RUNNER._summary(cases, dirty, 0)["status"] == "INVALID/PENDING"
-
