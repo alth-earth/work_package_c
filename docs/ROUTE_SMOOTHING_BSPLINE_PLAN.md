@@ -10,7 +10,7 @@ Scope: 受约束局部三次 B 样条航线平滑的 R0.1 问题定义、展示-
 Canonical For: 工作包 C 航点处航向突变和平滑航线研究的详细定义；从属于核心算法 SSOT
 Canonical Current State: NO
 Branch: research-validation-system
-Last Verified: 2026-08-30 23:38 +08:00
+Last Verified: 2026-08-31 00:19 +08:00
 Related Canonical Docs:
   - CORE_ALGORITHM_IMPROVEMENT_PLAN.md
   - ARCHITECTURE_AND_DECISIONS.md
@@ -366,7 +366,7 @@ R0.2 不先改算法，而是对现有路线做统计：
 R0.2 必须使用固定输入和可复现 digest；若没有真实路线中的有效候选转角，R0 应直接
 停止，不为了展示 B 样条而制造 synthetic 收益。
 
-### 8.3 R0.3-D–R0.4-D 展示几何和约束实现（2026-08-30 23:38 +08:00）
+### 8.3 R0.3-D–R0.4-D 展示几何和约束实现（2026-08-31 00:19 +08:00）
 
 本轮已实现的展示-only 实现满足：
 
@@ -378,13 +378,17 @@ R0.2 必须使用固定输入和可复现 digest；若没有真实路线中的�
 6. 所有非有限、重复、短边或约束失败输入都回退到原始折线的线性显示；
 7. 返回值只含显示坐标和诊断状态，不含 ETA、速度、风险或安全资格。
 
-展示-only 默认参数固定在 D 的 `route_smoothing.js`，只代表画面尺度，不代表目标船校准：
+展示-only 默认参数固定在 D 的 `route_smoothing.js`，只代表画面尺度，不代表目标船校准。
+此前 `2,000 m` 在当前约 `40 km` 的网格边上只产生近似亚像素的转角偏离，截图仍近似
+折线；因此本次把展示尺度调整为可见范围。`40,000 m` 不是船舶操纵半径、航行安全限值
+或生产资格参数：
 
 | 参数 | 默认值 | 含义 |
 |---|---:|---|
-| `nominalRadiusM` | `2,000 m` | 局部曲线的显示尺度；沿用 C 中透明的未校准工作数量级 |
-| `maxDeviationM` | `5,000 m` | 曲线采样点到原始折线的最大显示偏离 |
+| `nominalRadiusM` | `40,000 m` | 局部曲线的可见显示尺度；不代表船舶操纵半径 |
+| `maxDeviationM` | `20,000 m` | 曲线采样点到原始折线的最大显示偏离，仅为显示约束 |
 | `cornerAngleThresholdDeg` | `8°` | 小于该变化量的折点保持线性绘制 |
+| `maxTrimFraction` | `0.48` | 单个局部曲线从相邻边切出的最大比例，防止跨越整条边 |
 | `sampleSpacingM` | `750 m` | 曲线采样的显示间距上限 |
 | `maximumDisplayPoints` | `10,000` | 防止异常输入造成无界绘制工作 |
 
@@ -394,6 +398,11 @@ R0.2 必须使用固定输入和可复现 digest；若没有真实路线中的�
 - 使用 `RiskSampler` 的曲线风险和 coverage 重评估；
 - 按曲线弧长重建 ETA、速度、偏航率或横向加速度；
 - 真实船舶操纵性约束、cgroup 资源证据和 production qualification。
+
+旧版独立入口 `work_package_d/web/demo_viewer.html` 不能依赖外部脚本，因此也使用内联的
+局部 cubic path 版本；它同样只改变 SVG paint geometry，并为非法、短边和相邻转角保留
+回退/跳过行为。Replay Viewer 的标准入口仍使用 `viewer/route_smoothing.js` 的局部米制
+实现。两者都不把曲线写回 route artifact。
 
 ### 8.4 R0.5-D–R0.7 验证方案（2026-08-30 23:38 +08:00）
 
@@ -464,6 +473,9 @@ M31–M34 的历史实验结果只能作为当前 C 研究边界的 `INHERITED` 
 focused pytest `13 passed`，D 新增测试 Ruff 通过，`route_smoothing.js` 和 `app.js` 的
 Node syntax 通过。D 的历史全量测试数、此前 Firefox 证据和 Orchestrator 历史测试数继续
 标记为 `INHERITED`，没有在本轮冒充重跑结果。
+
+2026-08-31 的显示尺度修正追加了 D 侧 `11 passed` 的路线平滑/旧版入口聚焦测试，Node
+syntax 继续通过；本轮未进行浏览器截图、真实 replay、长时间实验或船舶可执行性验证。
 
 ## 10. 性能分解（2026-08-30 22:46 +08:00）
 
@@ -558,11 +570,13 @@ Node syntax 通过。D 的历史全量测试数、此前 Firefox 证据和 Orche
 | 55,000 DWT 操纵性研究 | 公开研究 | `REFERENCE_ONLY` | 特定试验条件下的转弯数量级 |
 | Capesize 转弯半径研究 | 公开研究 | `REFERENCE_ONLY` | 舵角相关半径数量级 |
 | IMO MSC.137(76) | 官方标准 | `REFERENCE_ONLY` | 操纵性试验指标，不是路线半径参数 |
-| `work_package_d/viewer/route_smoothing.js` | 展示-only 代码 | `IMPLEMENTED / DISPLAY_ONLY` | 仅把原始路线转换为 Canvas paint coordinates |
+| `work_package_d/viewer/route_smoothing.js` | 展示-only 代码 | `IMPLEMENTED / DISPLAY_ONLY` | 仅把原始路线转换为 Canvas paint coordinates；当前使用可见显示尺度 |
+| `work_package_d/web/demo_viewer.html` | 旧版独立展示入口 | `IMPLEMENTED / DISPLAY_ONLY` | 内联 cubic SVG path；不改原始 waypoints 或指标 |
 | `work_package_d/tests/unit/test_route_smoothing.py` | focused 测试 | `UNIT_PASS` | Node synthetic、加载顺序和 authority 分离检查 |
 
-本轮实现提交：D `efd2ec6ccf38f881ebc39afae195cb9bfdaa36a6`，Orchestrator
-`d22980e816557a16e062fade3e06826aae845e66`。两者均为本地提交，未 push。
+此前展示实现提交：D `efd2ec6ccf38f881ebc39afae195cb9bfdaa36a6`，Orchestrator
+`d22980e816557a16e062fade3e06826aae845e66`；本次可见尺度与旧版入口修正提交为 D
+`66bd4fb4eb3b9333731d6d9e03d970df9d2c00c8`。这些提交均为本地提交，未由本轮 push。
 
 拟议未来实验 identity 前缀为 `c.route-smoothing.bspline.v1-<digest>`，目前只是命名
 建议，不代表已存在构件。
@@ -598,11 +612,12 @@ B 样条具有局部控制和连续导数的潜力，但当前 C 缺少曲线安
 **Consequences：** 研究会增加路线后处理和风险重采样成本；曲线不能自动继承原始路线指标；
 任何失败必须回退；如果最终需要生产发布，将产生新的合同和 D 消费影响评审。
 
-### 15.2 当前决策（2026-08-30 23:38 +08:00）
+### 15.2 当前决策（2026-08-31 00:19 +08:00）
 
 - R0.1：`COMPLETED`，完成问题定义、参数分层和候选路线选择；
-- R0.3-D/R0.4-D：已实现为 D Viewer 展示-only 局部曲线；原始 waypoint、ETA、metrics、
-  active route、船位和船头方向仍是唯一权威语义；
+- R0.3-D/R0.4-D：已实现为 Replay Viewer 与旧版 standalone viewer 的展示-only 局部曲线；
+  原始 waypoint、ETA、metrics、active route、船位和船头方向仍是唯一权威语义；本次仅
+  放大 paint geometry 的可见尺度；
 - R0.5-D：`UNIT_PASS`，D focused pytest、Node syntax、加载/authority 结构检查通过；
 - R0.2：`PLANNED`，尚未运行真实路线统计；
 - R0.3/R0.4 的 C 可执行后处理、风险/硬掩膜/ETA/船舶运动约束：`NOT_IMPLEMENTED`；
