@@ -1,10 +1,12 @@
 """Fail-closed, research-only local cubic B-spline route smoothing.
 
 The formal C route remains a waypoint polyline.  This module creates an
-optional derived geometry for an experiment.  A one-span cubic B-spline is
-evaluated in its equivalent cubic Bezier basis for each local corner; the
-research distinction is that the radius is selected from a bounded candidate
-set and every candidate can be rejected by a caller-owned safety validator.
+optional derived geometry for an experiment.  Each local corner is evaluated
+as a clamped, one-span degree-3 B-spline with Cox--de Boor basis functions;
+its polynomial equivalence to a four-control-point Bezier segment is only a
+mathematical identity.  The research distinction is that the radius is
+selected from a bounded candidate set and every candidate can be rejected by
+a caller-owned safety validator.
 
 The validator is intentionally a callback.  C owns the geometry, while the
 caller owns RiskFrame identity, hard-mask semantics, coverage and ETA
@@ -34,6 +36,12 @@ ValidationCallback = Callable[
     [tuple[Coordinate, ...], float],
     "CandidateDecision",
 ]
+CandidateValidator = Callable[
+    ["CurveSegment", tuple[Coordinate, ...]],
+    "CandidateDecision",
+]
+
+CLAMPED_CUBIC_KNOT_VECTOR = (0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,6 +124,9 @@ class CurveSegment:
             "samples": [list(point) for point in self.samples],
             "minimum_radius_m": self.minimum_radius_m,
             "maximum_deviation_m": self.maximum_deviation_m,
+            "degree": 3,
+            "basis": "clamped_cubic_bspline_cox_de_boor",
+            "knot_vector": list(CLAMPED_CUBIC_KNOT_VECTOR),
             "validator_evidence": (
                 dict(self.validator_evidence) if self.validator_evidence is not None else None
             ),
@@ -266,10 +277,7 @@ def _distance_to_segment(point: Coordinate, start: Coordinate, end: Coordinate) 
 
 
 def _distance_to_polyline(point: Coordinate, polyline: Sequence[Coordinate]) -> float:
-    return min(
-        _distance_to_segment(point, start, end)
-        for start, end in pairwise(polyline)
-    )
+    return min(_distance_to_segment(point, start, end) for start, end in pairwise(polyline))
 
 
 def _canonical_digest(value: Any) -> str:
@@ -363,11 +371,7 @@ def _anchor_indices(
                 if distance < best_distance:
                     best_distance = distance
                     best_index = path_index
-        if (
-            best_index is None
-            or best_index < search_start
-            or best_index > last_search_index
-        ):
+        if best_index is None or best_index < search_start or best_index > last_search_index:
             return None
         anchors.append(best_index)
         search_start = best_index
@@ -393,39 +397,126 @@ def _time_at_distance(
     return anchor_times[-1]
 
 
+def _cox_de_boor(
+    index: int,
+    degree: int,
+    parameter: float,
+    knots: Sequence[float],
+) -> float:
+    """Evaluate one Cox--de Boor basis function on the open endpoint span."""
+
+    if degree == 0:
+        return float(knots[index] <= parameter < knots[index + 1])
+    left_denominator = knots[index + degree] - knots[index]
+    right_denominator = knots[index + degree + 1] - knots[index + 1]
+    left = (
+        (parameter - knots[index])
+        / left_denominator
+        * _cox_de_boor(index, degree - 1, parameter, knots)
+        if left_denominator > 0.0
+        else 0.0
+    )
+    right = (
+        (knots[index + degree + 1] - parameter)
+        / right_denominator
+        * _cox_de_boor(index + 1, degree - 1, parameter, knots)
+        if right_denominator > 0.0
+        else 0.0
+    )
+    return left + right
+
+
+def _clamped_cubic_basis(parameter: float) -> tuple[float, ...]:
+    if parameter <= 0.0:
+        return (1.0, 0.0, 0.0, 0.0)
+    if parameter >= 1.0:
+        return (0.0, 0.0, 0.0, 1.0)
+    return tuple(_cox_de_boor(index, 3, parameter, CLAMPED_CUBIC_KNOT_VECTOR) for index in range(4))
+
+
+def _bspline_point(controls: Sequence[Coordinate], t: float) -> Coordinate:
+    """Evaluate a single-span clamped degree-3 B-spline with Cox--de Boor."""
+
+    basis = _clamped_cubic_basis(t)
+    return (
+        sum(weight * point[0] for weight, point in zip(basis, controls, strict=True)),
+        sum(weight * point[1] for weight, point in zip(basis, controls, strict=True)),
+    )
+
+
+def evaluate_clamped_cubic_bspline(
+    control_points: Sequence[Coordinate],
+    parameter: float,
+) -> Coordinate:
+    """Evaluate a four-control-point clamped cubic B-spline in metres."""
+
+    if len(control_points) != 4:
+        raise ValueError("a clamped cubic B-spline needs exactly four control points")
+    if not math.isfinite(parameter) or not 0.0 <= parameter <= 1.0:
+        raise ValueError("B-spline parameter must be finite and in [0, 1]")
+    return _bspline_point(control_points, parameter)
+
+
 def _bezier_point(controls: Sequence[Coordinate], t: float) -> Coordinate:
+    """Compatibility name; the implementation is the clamped B-spline basis."""
+
+    return _bspline_point(controls, t)
+
+
+def _bspline_first(controls: Sequence[Coordinate], t: float) -> Coordinate:
+    """Analytic first derivative of the clamped cubic B-spline."""
+
     p0, p1, p2, p3 = controls
     one_minus = 1.0 - t
     return (
-        one_minus**3 * p0[0]
-        + 3.0 * one_minus**2 * t * p1[0]
-        + 3.0 * one_minus * t**2 * p2[0]
-        + t**3 * p3[0],
-        one_minus**3 * p0[1]
-        + 3.0 * one_minus**2 * t * p1[1]
-        + 3.0 * one_minus * t**2 * p2[1]
-        + t**3 * p3[1],
+        3.0
+        * (
+            one_minus**2 * (p1[0] - p0[0])
+            + 2.0 * one_minus * t * (p2[0] - p1[0])
+            + t**2 * (p3[0] - p2[0])
+        ),
+        3.0
+        * (
+            one_minus**2 * (p1[1] - p0[1])
+            + 2.0 * one_minus * t * (p2[1] - p1[1])
+            + t**2 * (p3[1] - p2[1])
+        ),
     )
 
 
 def _bezier_first(controls: Sequence[Coordinate], t: float) -> Coordinate:
+    """Compatibility name; derivative remains analytic, not finite-difference."""
+
+    return _bspline_first(controls, t)
+
+
+def _bspline_second(controls: Sequence[Coordinate], t: float) -> Coordinate:
+    """Analytic second derivative of the clamped cubic B-spline."""
+
     p0, p1, p2, p3 = controls
-    one_minus = 1.0 - t
-    return _add(
-        _add(
-            _mul(_sub(p1, p0), 3.0 * one_minus**2),
-            _mul(_sub(p2, p1), 6.0 * one_minus * t),
-        ),
-        _mul(_sub(p3, p2), 3.0 * t**2),
+    return (
+        6.0 * ((1.0 - t) * (p2[0] - 2.0 * p1[0] + p0[0]) + t * (p3[0] - 2.0 * p2[0] + p1[0])),
+        6.0 * ((1.0 - t) * (p2[1] - 2.0 * p1[1] + p0[1]) + t * (p3[1] - 2.0 * p2[1] + p1[1])),
     )
+
+
+def evaluate_clamped_cubic_bspline_derivatives(
+    control_points: Sequence[Coordinate],
+    parameter: float,
+) -> tuple[Coordinate, Coordinate]:
+    """Return analytic first and second derivatives in local metres."""
+
+    if len(control_points) != 4:
+        raise ValueError("a clamped cubic B-spline needs exactly four control points")
+    if not math.isfinite(parameter) or not 0.0 <= parameter <= 1.0:
+        raise ValueError("B-spline parameter must be finite and in [0, 1]")
+    return _bspline_first(control_points, parameter), _bspline_second(control_points, parameter)
 
 
 def _bezier_second(controls: Sequence[Coordinate], t: float) -> Coordinate:
-    p0, p1, p2, p3 = controls
-    return _add(
-        _mul(_add(_sub(p2, _mul(p1, 2.0)), p0), 6.0 * (1.0 - t)),
-        _mul(_add(_sub(p3, _mul(p2, 2.0)), p1), 6.0 * t),
-    )
+    """Compatibility name; derivative remains analytic, not finite-difference."""
+
+    return _bspline_second(controls, t)
 
 
 def _radius_at(controls: Sequence[Coordinate], t: float) -> float:
@@ -487,10 +578,15 @@ def _curve_for_radius(
 ) -> CurveSegment | None:
     vertex = local_points[candidate.index]
     trim = radius_m * math.tan(candidate.angle_rad / 2.0)
-    if trim > policy.max_trim_fraction * min(
-        candidate.incoming_length_m,
-        candidate.outgoing_length_m,
-    ) + 1e-6:
+    if (
+        trim
+        > policy.max_trim_fraction
+        * min(
+            candidate.incoming_length_m,
+            candidate.outgoing_length_m,
+        )
+        + 1e-6
+    ):
         return None
     tangent_radius = trim / math.tan(candidate.angle_rad / 2.0)
     handle = (4.0 / 3.0) * tangent_radius * math.tan(candidate.angle_rad / 4.0)
@@ -502,16 +598,13 @@ def _curve_for_radius(
         _sub(exit, _mul(candidate.outgoing, handle)),
         exit,
     )
-    control_length = sum(
-        _norm(_sub(controls[index + 1], controls[index])) for index in range(3)
-    )
+    control_length = sum(_norm(_sub(controls[index + 1], controls[index])) for index in range(3))
     sample_count = max(
         policy.minimum_curve_samples,
         min(policy.maximum_curve_samples, math.ceil(control_length / policy.sample_spacing_m) + 1),
     )
     samples = tuple(
-        _bezier_point(controls, index / (sample_count - 1))
-        for index in range(sample_count)
+        _bezier_point(controls, index / (sample_count - 1)) for index in range(sample_count)
     )
     minimum_radius = min(
         _radius_at(controls, index / (sample_count - 1)) for index in range(sample_count)
@@ -519,7 +612,7 @@ def _curve_for_radius(
     maximum_deviation = max(_distance_to_polyline(point, local_points) for point in samples)
     if (
         not math.isfinite(minimum_radius)
-        or minimum_radius + 1e-6 < radius_m * 0.90
+        or minimum_radius + 1e-6 < policy.minimum_radius_m
         or not math.isfinite(maximum_deviation)
     ):
         return None
@@ -562,6 +655,7 @@ def build_route_smoothing(
     *,
     policy: RouteSmoothingPolicy | None = None,
     validator: ValidationCallback | None = None,
+    candidate_validator: CandidateValidator | None = None,
 ) -> RouteSmoothingResult:
     """Build a local adaptive smoothing result without changing the route.
 
@@ -571,16 +665,19 @@ def build_route_smoothing(
     explicitly marked ``geometry_only=True``.
     """
 
+    if validator is not None and candidate_validator is not None:
+        raise ValueError("validator and candidate_validator are mutually exclusive")
     chosen_policy = policy or RouteSmoothingPolicy()
+    has_validator = validator is not None or candidate_validator is not None
     if not isinstance(points, Sequence) or isinstance(points, (str, bytes)):
-        return _fallback((), "invalid_points", geometry_only=validator is None)
+        return _fallback((), "invalid_points", geometry_only=not has_validator)
     raw_points = _normalise_points(points)
     if raw_points is None:
-        return _fallback((), "invalid_coordinate", geometry_only=validator is None)
+        return _fallback((), "invalid_coordinate", geometry_only=not has_validator)
     if len(raw_points) < 3:
-        return _fallback(raw_points, "insufficient_points", geometry_only=validator is None)
+        return _fallback(raw_points, "insufficient_points", geometry_only=not has_validator)
     if any(first == second for first, second in pairwise(raw_points)):
-        return _fallback(raw_points, "duplicate_point", geometry_only=validator is None)
+        return _fallback(raw_points, "duplicate_point", geometry_only=not has_validator)
 
     frame = _Frame(
         lon0=raw_points[0][0],
@@ -588,7 +685,7 @@ def build_route_smoothing(
         cos_lat0=math.cos(math.radians(raw_points[0][1])),
     )
     if abs(frame.cos_lat0) < 1e-6:
-        return _fallback(raw_points, "invalid_local_frame", geometry_only=validator is None)
+        return _fallback(raw_points, "invalid_local_frame", geometry_only=not has_validator)
     local_points = tuple(frame.to_local(point) for point in raw_points)
     candidates = tuple(
         candidate
@@ -596,7 +693,7 @@ def build_route_smoothing(
         if (candidate := _candidate_for_corner(local_points, index, chosen_policy)) is not None
     )
     if not candidates:
-        return _fallback(raw_points, "no_eligible_corner", geometry_only=validator is None)
+        return _fallback(raw_points, "no_eligible_corner", geometry_only=not has_validator)
 
     accepted: list[CurveSegment] = []
     rejected: list[dict[str, Any]] = []
@@ -606,9 +703,20 @@ def build_route_smoothing(
         for radius in _radius_candidates(candidate, chosen_policy):
             curve = _curve_for_radius(local_points, candidate, radius, chosen_policy)
             if curve is None:
-                last_reason = "geometry_constraint"
+                if last_reason == "all_radius_candidates_rejected":
+                    last_reason = "geometry_constraint"
                 continue
-            if validator is None:
+            if candidate_validator is not None:
+                try:
+                    decision = candidate_validator(curve, tuple(local_points))
+                except Exception:
+                    return _fallback(
+                        raw_points,
+                        "validator_error",
+                        rejected,
+                        geometry_only=False,
+                    )
+            elif validator is None:
                 decision = CandidateDecision(accepted=True)
             else:
                 try:
@@ -627,6 +735,13 @@ def build_route_smoothing(
                         rejected,
                         geometry_only=False,
                     )
+            if not isinstance(decision, CandidateDecision):
+                return _fallback(
+                    raw_points,
+                    "invalid_validator_decision",
+                    rejected,
+                    geometry_only=False,
+                )
             if decision.accepted and accepted and candidate.index == accepted[-1].corner_index + 1:
                 shared_length = _norm(
                     _sub(local_points[candidate.index], local_points[accepted[-1].corner_index])
@@ -687,7 +802,7 @@ def build_route_smoothing(
             raw_points,
             "all_curves_rejected",
             rejected,
-            geometry_only=validator is None,
+            geometry_only=not has_validator,
         )
 
     display_local: list[Coordinate] = [local_points[0]]
@@ -703,7 +818,7 @@ def build_route_smoothing(
             raw_points,
             "route_point_limit",
             rejected,
-            geometry_only=validator is None,
+            geometry_only=not has_validator,
         )
     output_points = tuple(frame.to_geo(point) for point in display_local)
     raw_digest = _canonical_digest([list(point) for point in raw_points])
@@ -718,7 +833,7 @@ def build_route_smoothing(
         raw_points=raw_points,
         segments=tuple(accepted),
         rejected_corners=tuple(rejected),
-        geometry_only=validator is None,
+        geometry_only=not has_validator,
         fallback_reason=None,
         raw_route_digest=raw_digest,
         curve_digest=_canonical_digest(curve_payload),
@@ -731,6 +846,7 @@ def build_route_smoothing_sidecar(
     experiment_id: str,
     policy: RouteSmoothingPolicy | None = None,
     validator: ValidationCallback | None = None,
+    candidate_validator: CandidateValidator | None = None,
     input_identity: Mapping[str, Any] | None = None,
     radius_sensitivity_m: Sequence[float] = (),
 ) -> dict[str, Any]:
@@ -748,6 +864,8 @@ def build_route_smoothing_sidecar(
         raise ValueError("experiment_id must be a non-empty string")
     if input_identity is not None and not isinstance(input_identity, Mapping):
         raise TypeError("input_identity must be a mapping when supplied")
+    if validator is not None and candidate_validator is not None:
+        raise ValueError("validator and candidate_validator are mutually exclusive")
     sensitivity_values = tuple(float(value) for value in radius_sensitivity_m)
     if any(not math.isfinite(value) or value <= 0 for value in sensitivity_values):
         raise ValueError("radius_sensitivity_m must contain positive finite values")
@@ -757,6 +875,24 @@ def build_route_smoothing_sidecar(
 
     route_id = _route_member(route, "plan_id") or _route_member(route, "route_id")
     route_id = str(route_id) if route_id is not None else None
+    identity = dict(input_identity) if input_identity is not None else {}
+    plan_revision = identity.get("plan_revision", _route_member(route, "revision"))
+    adoption_time = identity.get("adoption_time", _route_member(route, "effective_adoption_time"))
+    scenario_id = identity.get("scenario_id", _route_member(route, "scenario_id"))
+    corridor_id = identity.get("corridor_id", _route_member(route, "corridor_id"))
+    vessel_profile_id = identity.get("vessel_profile_id", _route_member(route, "vessel_profile_id"))
+    risk_frame_identity = identity.get("risk_frame_identity")
+    model_config_digest = identity.get("model_config_digest")
+
+    def sidecar_identity(raw_digest: str | None) -> dict[str, Any]:
+        return {
+            "route_id": route_id,
+            "route_digest": raw_digest,
+            "route_digest_scope": "waypoint_coordinates_only",
+            "semantic_digest": identity.get("route_semantic_digest", raw_digest),
+            "plan_revision": plan_revision,
+            "adoption_time": adoption_time,
+        }
 
     def fallback_sidecar(
         reason: str,
@@ -776,10 +912,41 @@ def build_route_smoothing_sidecar(
             "motion_samples": [],
             "anchor_samples": [],
             "input_identity": dict(input_identity) if input_identity is not None else None,
+            "route_identity": sidecar_identity(None),
+            "route_semantic_digest": identity.get("route_semantic_digest"),
+            "plan_id": route_id,
+            "plan_revision": plan_revision,
+            "adoption_time": adoption_time,
+            "scenario_id": scenario_id,
+            "corridor_id": corridor_id,
+            "vessel_profile_id": vessel_profile_id,
+            "risk_frame_identity": risk_frame_identity,
+            "model_config_digest": model_config_digest,
+            "policy_version": POLICY,
+            "primary_min_radius_m": chosen_policy.minimum_radius_m,
+            "sensitivity_results": [],
+            "curve_status": "FALLBACK",
+            "control_points": [],
+            "knot_vector": list(CLAMPED_CUBIC_KNOT_VECTOR),
+            "curve_samples": [],
+            "sample_eta": [],
+            "cumulative_distance_m": [],
+            "minimum_radius_m": None,
+            "maximum_deviation_m": None,
+            "maximum_yaw_rate": None,
+            "maximum_lateral_acceleration": None,
+            "risk_evidence": None,
+            "hard_mask_evidence": None,
+            "coverage_evidence": None,
+            "eta_evidence": None,
+            "determinism_digest": None,
+            "research_eligible": False,
         }
         if raw_points:
-            payload["raw_route_digest"] = _canonical_digest(
-                [list(point) for point in raw_points]
+            payload["raw_route_digest"] = _canonical_digest([list(point) for point in raw_points])
+            payload["route_identity"] = sidecar_identity(payload["raw_route_digest"])
+            payload["route_semantic_digest"] = identity.get(
+                "route_semantic_digest", payload["raw_route_digest"]
             )
         payload["sidecar_digest"] = _canonical_digest(payload)
         return payload
@@ -801,7 +968,12 @@ def build_route_smoothing_sidecar(
         )
 
     raw_mapping = [{"lon": point[0], "lat": point[1]} for point in raw_points]
-    result = build_route_smoothing(raw_mapping, policy=chosen_policy, validator=validator)
+    result = build_route_smoothing(
+        raw_mapping,
+        policy=chosen_policy,
+        validator=validator,
+        candidate_validator=candidate_validator,
+    )
     sidecar: dict[str, Any] = {
         "schema_version": SIDECAR_SCHEMA_VERSION,
         "policy": SIDECAR_POLICY,
@@ -816,7 +988,7 @@ def build_route_smoothing_sidecar(
         "curve_digest": result.curve_digest,
         "curve_model": {
             "degree": 3,
-            "basis": "clamped_cubic_bspline_equivalent_bezier_one_span",
+            "basis": "clamped_cubic_bspline_cox_de_boor_one_span",
             "coordinate_frame": "local_equirectangular_east_north_m",
             "origin": {"lon": raw_points[0][0], "lat": raw_points[0][1]},
             "earth_radius_m": EARTH_RADIUS_M,
@@ -834,11 +1006,47 @@ def build_route_smoothing_sidecar(
         },
         "geometry": result.to_dict(),
         "input_identity": dict(input_identity) if input_identity is not None else None,
+        "route_identity": sidecar_identity(result.raw_route_digest),
+        "route_semantic_digest": identity.get("route_semantic_digest", result.raw_route_digest),
+        "plan_id": route_id,
+        "plan_revision": plan_revision,
+        "scenario_id": scenario_id,
+        "corridor_id": corridor_id,
+        "vessel_profile_id": vessel_profile_id,
+        "risk_frame_identity": risk_frame_identity,
+        "model_config_digest": model_config_digest,
+        "policy_version": POLICY,
+        "primary_min_radius_m": chosen_policy.minimum_radius_m,
+        "sensitivity_results": [],
+        "curve_status": result.status,
+        "control_points": [],
+        "knot_vector": list(CLAMPED_CUBIC_KNOT_VECTOR),
+        "curve_samples": [],
+        "sample_eta": [],
+        "cumulative_distance_m": [],
+        "minimum_radius_m": None,
+        "maximum_deviation_m": None,
+        "maximum_yaw_rate": None,
+        "maximum_lateral_acceleration": None,
+        "risk_evidence": None,
+        "hard_mask_evidence": None,
+        "coverage_evidence": None,
+        "eta_evidence": None,
+        "determinism_digest": result.curve_digest,
+        "research_eligible": False,
         "validation": {
-            "mode": "CALLER_SUPPLIED" if validator is not None else "GEOMETRY_ONLY",
+            "mode": (
+                "CALLER_SUPPLIED"
+                if validator is not None or candidate_validator is not None
+                else "GEOMETRY_ONLY"
+            ),
             "risk_rechecked": False,
             "hard_mask_rechecked": False,
             "coverage_complete": False,
+            "eta_recomputed": False,
+            "speed_checked": False,
+            "curvature_checked": result.applied,
+            "research_gate_passed": False,
             "resource_evidence_complete": False,
             "production_qualified": False,
         },
@@ -885,6 +1093,11 @@ def build_route_smoothing_sidecar(
                 "anchor_distances_m": list(anchor_distances),
             }
             sidecar["motion_samples"] = samples
+            sidecar["curve_samples"] = [
+                {"lon": point[0], "lat": point[1]} for point in result.points
+            ]
+            sidecar["sample_eta"] = [sample["eta"] for sample in samples]
+            sidecar["cumulative_distance_m"] = list(path_distances)
             sidecar["anchor_samples"] = [
                 {
                     "waypoint_index": index,
@@ -892,9 +1105,7 @@ def build_route_smoothing_sidecar(
                     "eta": _format_utc(eta),
                     "distance_m": anchor_distances[index],
                 }
-                for index, (sample_index, eta) in enumerate(
-                    zip(anchors, raw_times, strict=True)
-                )
+                for index, (sample_index, eta) in enumerate(zip(anchors, raw_times, strict=True))
             ]
 
     if sensitivity_values:
@@ -908,6 +1119,7 @@ def build_route_smoothing_sidecar(
                 raw_mapping,
                 policy=sensitivity_policy,
                 validator=validator,
+                candidate_validator=candidate_validator,
             )
             sensitivity.append(
                 {
@@ -915,9 +1127,7 @@ def build_route_smoothing_sidecar(
                     "status": scenario.status,
                     "applied": scenario.applied,
                     "fallback_reason": scenario.fallback_reason,
-                    "selected_radius_m": [
-                        segment.radius_m for segment in scenario.segments
-                    ],
+                    "selected_radius_m": [segment.radius_m for segment in scenario.segments],
                     "curve_digest": scenario.curve_digest,
                 }
             )
@@ -925,15 +1135,37 @@ def build_route_smoothing_sidecar(
             "selection": "largest_feasible_radius_per_minimum_radius_scenario",
             "scenarios": sensitivity,
         }
+        sidecar["sensitivity_results"] = list(sensitivity)
+    sidecar["curve_status"] = sidecar["status"]
+    sidecar["control_points"] = [
+        {
+            "corner_index": segment.corner_index,
+            "points_m": [list(point) for point in segment.control_points_m],
+        }
+        for segment in result.segments
+    ]
+    sidecar["minimum_radius_m"] = min(
+        (segment.minimum_radius_m for segment in result.segments),
+        default=None,
+    )
+    sidecar["maximum_deviation_m"] = max(
+        (segment.maximum_deviation_m for segment in result.segments),
+        default=None,
+    )
+    sidecar["research_eligible"] = False
     sidecar["sidecar_digest"] = _canonical_digest(sidecar)
     return sidecar
 
 
 __all__ = [
+    "CLAMPED_CUBIC_KNOT_VECTOR",
     "CandidateDecision",
+    "CandidateValidator",
     "CurveSegment",
     "RouteSmoothingPolicy",
     "RouteSmoothingResult",
     "build_route_smoothing",
     "build_route_smoothing_sidecar",
+    "evaluate_clamped_cubic_bspline",
+    "evaluate_clamped_cubic_bspline_derivatives",
 ]

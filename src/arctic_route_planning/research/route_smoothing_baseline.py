@@ -6,7 +6,7 @@ import argparse
 import json
 import math
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from itertools import pairwise
 from pathlib import Path
 from typing import Any
@@ -48,10 +48,12 @@ def build_route_geometry_baseline(
     route: Any,
     *,
     policy: RouteSmoothingPolicy | None = None,
+    context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return reproducible corner and roughness facts without changing a route."""
 
     chosen_policy = policy or RouteSmoothingPolicy()
+    context_values = dict(context or {})
     route_id = _route_member(route, "plan_id") or _route_member(route, "route_id")
     route_id = str(route_id) if route_id is not None else None
     values = _route_member(route, "waypoints")
@@ -119,6 +121,14 @@ def build_route_geometry_baseline(
         available_trim = chosen_policy.max_trim_fraction * min(
             leg_lengths[index - 1], leg_lengths[index]
         )
+        geometric_max_radius = (
+            available_trim / math.tan(angle / 2.0)
+            if angle > 0 and angle < math.radians(179.0)
+            else 0.0
+        )
+        corner_risk = context_values.get("risk_by_corner", {}).get(str(index), {})
+        if not isinstance(corner_risk, Mapping):
+            corner_risk = {}
         eligible = (
             angle >= chosen_policy.corner_angle_threshold_deg
             and angle < 179.0
@@ -138,10 +148,28 @@ def build_route_geometry_baseline(
                 "reference_turn_arc_m": chosen_policy.minimum_radius_m * math.radians(angle),
                 "minimum_radius_trim_m": trim,
                 "available_trim_m": available_trim,
+                "geometric_max_radius_m": geometric_max_radius,
                 "eligible_by_geometry": eligible,
+                "local_space_sufficient": eligible,
+                "hard_mask_distance_m": corner_risk.get("hard_mask_distance_m"),
+                "hard_mask_status": corner_risk.get("hard_mask_status", "NOT_EVALUATED"),
+                "risk_value": corner_risk.get("risk_value"),
+                "risk_level": corner_risk.get("risk_level"),
+                "risk_status": corner_risk.get("risk_status", "NOT_EVALUATED"),
+                "coverage_status": corner_risk.get("coverage_status", "NOT_EVALUATED"),
             }
         )
     valid_corners = [item for item in corners if item["classification"] == "CORNER_PRESENT"]
+    for left, right in pairwise(valid_corners):
+        if right["corner_index"] != left["corner_index"] + 1:
+            continue
+        shared_length = leg_lengths[left["corner_index"]]
+        conflict = (
+            float(left["minimum_radius_trim_m"]) + float(right["minimum_radius_trim_m"])
+            > shared_length * chosen_policy.maximum_overlap_fraction
+        )
+        left["adjacent_corner_conflict"] = conflict
+        right["adjacent_corner_conflict"] = conflict
     absolute_turns = [abs(float(item["delta_heading_deg"])) for item in valid_corners]
     average_adjacent_leg_m = [
         (float(item["incoming_leg_m"]) + float(item["outgoing_leg_m"])) / 2.0
@@ -156,6 +184,11 @@ def build_route_geometry_baseline(
         "schema_version": BASELINE_SCHEMA_VERSION,
         "status": "PASS",
         "route_id": route_id,
+        "route_identity": context_values.get("route_identity", {"route_id": route_id}),
+        "route_semantic_digest": context_values.get("route_semantic_digest"),
+        "input_identity": context_values.get("input_identity"),
+        "vessel_profile_id": context_values.get("vessel_profile_id"),
+        "risk_frame_identity": context_values.get("risk_frame_identity"),
         "raw_route_digest": _canonical_digest([list(point) for point in raw_points]),
         "waypoint_count": len(raw_points),
         "leg_count": len(leg_lengths),
@@ -169,6 +202,22 @@ def build_route_geometry_baseline(
         "maximum_turn_angle_deg": max(absolute_turns, default=0.0),
         "total_absolute_turn_deg": sum(absolute_turns),
         "maximum_turn_deg_per_km_of_adjacent_leg": max(roughness_values, default=0.0),
+        "risk_evidence": context_values.get(
+            "risk_evidence",
+            {
+                "status": "NOT_EVALUATED",
+                "coverage_complete": False,
+                "reason": "R0.2 geometry-only baseline",
+            },
+        ),
+        "hard_mask_evidence": context_values.get(
+            "hard_mask_evidence",
+            {"status": "NOT_EVALUATED", "violations": None},
+        ),
+        "coverage_evidence": context_values.get(
+            "coverage_evidence",
+            {"status": "NOT_EVALUATED", "complete": False},
+        ),
         "corners": corners,
     }
     payload["baseline_digest"] = _canonical_digest(payload)
@@ -196,10 +245,22 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--minimum-radius-m", type=float, default=2_000.0)
+    parser.add_argument(
+        "--context",
+        type=Path,
+        default=None,
+        help="optional JSON evidence context; omitted means risk/hard-mask NOT_EVALUATED",
+    )
     args = parser.parse_args(argv)
+    context = None
+    if args.context is not None:
+        context = json.loads(args.context.read_text(encoding="utf-8"))
+        if not isinstance(context, dict):
+            raise ValueError("baseline context must be a JSON object")
     baseline = build_route_geometry_baseline(
         _read_route(args.input),
         policy=RouteSmoothingPolicy(minimum_radius_m=args.minimum_radius_m),
+        context=context,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(

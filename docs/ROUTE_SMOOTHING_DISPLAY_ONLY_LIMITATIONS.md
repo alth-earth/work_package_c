@@ -8,7 +8,7 @@ Scope: 当前 D Viewer 视觉平滑实现的事实、限制和与可执行研究
 Canonical For: 当前 Viewer 绘制捷径的限制说明；不取代核心算法 SSOT
 Canonical Current State: NO
 Branch: research-validation-system
-Last Verified: 2026-08-31 02:33 +08:00
+Last Verified: 2026-08-31 03:32 +08:00
 Related Canonical Docs:
   - "CORE_ALGORITHM_IMPROVEMENT_PLAN.md"
   - "ROUTE_SMOOTHING_BSPLINE_PLAN.md"
@@ -55,7 +55,7 @@ Related Canonical Docs:
 `40,000 m` 不是目标船的操纵半径、最小安全转弯半径、航线安全边界或生产资格参数。
 它是为了解决当前约 40 km 网格边在整张地图上仍显示为折线的问题而采用的展示尺度。
 
-当前 C geometry-only sidecar 在固定 Viewer bundle 上选择约 `41.439 km` 的最大可行几何
+当前 C geometry-only sidecar 在固定 Viewer bundle 上选择约 `41.412 km` 的最大可行几何
 半径，并提供 `1000/2000/4000 m` 最小半径敏感性摘要。这只是说明自适应几何能够脱离
 固定 `2 km` 下界产生可见尺度，不能替代风险、硬掩膜、覆盖、船舶操纵性或 ETA 证明。
 
