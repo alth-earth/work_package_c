@@ -8,7 +8,7 @@ Document Role: CANONICAL
 Scope: C 核心算法现状、证据、正确性边界、改进设计与实施计划
 Canonical For: 工作包 C 核心算法改进实现的首要参考
 Branch: research-validation-system
-Last Verified: 2026-08-30 19:25 +08:00
+Last Verified: 2026-08-30 21:09 +08:00
 Related Canonical Docs:
   - "README.md"
   - "docs/ARCHITECTURE_AND_DECISIONS.md"
@@ -21,16 +21,19 @@ Related Canonical Docs:
 
 # 工作包 C 核心算法现状、改进方案与实施计划
 
-> 本文档将“工作包 C 核心算法实现审计报告”与后续改进方案合并为一个持续维护的计划文档。当前正式基线仍是带风险、速度和 ETA 耦合、默认固定两轮 ETA 精化的时间依赖 A*。P2.1 控制轨迹复用保留约 48% 总耗时改善这一历史工程观察，但正式 M2 仍为 `FORMAL_M2_FAIL_UNCHANGED`，统计复测收口为 `MEASUREMENT_INCONCLUSIVE`；P3 SMO-A* 为 `DEFERRED/RETIRED`，ARA* 为 `M0_FAIL/DEFERRED`。P0.1 的 synthetic M1 曾达到 `M1_PASS_READY_FOR_SEPARATE_REAL_INPUT_PLAN`，但后续 M1.12 在 holdout/development 真实输入上均发现 interval 级负 travel-operator jump，当前真实资格已更新为 `REAL_INPUT_FIFO_VIOLATED`，FIFO dominance 不得启用。P0.2-M0～M34 已完成 C 内部、默认关闭的 non-FIFO exact-arrival/Pareto、session、state-bound 与 envelope 研究；M34 证明真实 24h 语义/frontier 等价，但没有新增 transition pruning，且该次运行缺少强 cgroup 资源证据，因此最终为 `REAL_INPUT_STATE_BOUND_SEMANTIC_PASS_RESOURCE_EVIDENCE_INCOMPLETE_NO_ADDITIONAL_TRANSITION_GAIN`。当前没有 `IN_PROGRESS` 的算法里程碑，也没有 P0.2-M35 计划；所有 candidate/Winter 路径继续关闭，尚不能声明生产级稳定优势或连续模型全局最优。
+> 本文档将“工作包 C 核心算法实现审计报告”与后续改进方案合并为一个持续维护的计划文档。当前正式基线仍是带风险、速度和 ETA 耦合、默认固定两轮 ETA 精化的时间依赖 A*。P2.1 控制轨迹复用保留约 48% 总耗时改善这一历史工程观察，但正式 M2 仍为 `FORMAL_M2_FAIL_UNCHANGED`，统计复测收口为 `MEASUREMENT_INCONCLUSIVE`；P3 SMO-A* 为 `DEFERRED/RETIRED`，ARA* 为 `M0_FAIL/DEFERRED`。P0.1 的 synthetic M1 曾达到 `M1_PASS_READY_FOR_SEPARATE_REAL_INPUT_PLAN`，但后续 M1.12 在 holdout/development 真实输入上均发现 interval 级负 travel-operator jump，当前真实资格已更新为 `REAL_INPUT_FIFO_VIOLATED`，FIFO dominance 不得启用。P0.2-M0～M34 已完成 C 内部、默认关闭的 non-FIFO exact-arrival/Pareto、session、state-bound 与 envelope 研究；M34 证明真实 24h 语义/frontier 等价，但没有新增 transition pruning，且该次运行缺少强 cgroup 资源证据，因此最终为 `REAL_INPUT_STATE_BOUND_SEMANTIC_PASS_RESOURCE_EVIDENCE_INCOMPLETE_NO_ADDITIONAL_TRANSITION_GAIN`。P0.2 当前研究范围已在 M34 收束并冻结，不启动 M35；当前没有 `IN_PROGRESS` 的算法里程碑，所有 candidate/Winter 路径继续关闭，尚不能声明生产级稳定优势或连续模型全局最优。
 
-**当前集成快照（2026-08-30 19:25 +08:00）：** 本次 SSOT 修订所核对的已提交正式基线为
-`research-validation-system` 的 `98e7a11d53836d9c8cd8d3449dd03ee75f9bef31`，并与
-`origin/research-validation-system` 一致；修订开始前工作树 clean，M17～M34 已正式集成。
-本文件的审计修正属于该基线之上的文档变更，在提交前不应再把工作树描述为 clean。集成前的本地提交
-`ceeca4c` 经后续 pull/rebase 重写为当前线性历史，但二者 tree 均为
-`0842b9b789b7b635e7dad94e613f4407229caff2`，内容没有漂移。后文各阶段的“未 push/未合并”
-仅描述该阶段原始隔离运行当时的发布边界，不再代表当前仓库包含关系；当前仓库状态以本快照、
-Git 和最后一个完成里程碑为准。
+**当前集成快照（2026-08-30 21:09 +08:00）：** 本次评审写回前实际核对到
+`research-validation-system` 的 HEAD 为 `67c4f79c3ebc143ac4e036f3d5ec59146423c591`，父提交为
+`98e7a11d53836d9c8cd8d3449dd03ee75f9bef31`，并与 `origin/research-validation-system` 一致；
+写回前工作树 clean，M17～M34 已正式集成。写回前 HEAD 的完整 tree 为
+`30879059b1739d36a72a63d56b3fcb6f1f40b317`，其中包含此前的 SSOT 文档提交。
+`98e7a11d53836d9c8cd8d3449dd03ee75f9bef31` 与集成前本地提交 `ceeca4c` 的 tree 均为
+`0842b9b789b7b635e7dad94e613f4407229caff2`，这是已完成集成的历史基线事实，不是当前完整
+Git tree 仍与之相同。当前代码与测试 tree 相对该集成基线未漂移；本轮只会再写入本文档，
+提交前工作树因此会暂时出现文档变更。后文各阶段的“未 push/未合并”仅描述该阶段原始隔离
+运行当时的发布边界，不再代表当前仓库包含关系；当前仓库状态以本快照、Git 和最后一个
+完成里程碑为准。
 
 ## 1. 文档定位与更新规则（2026-08-24 20:52 +08:00）
 
@@ -97,10 +100,10 @@ RiskSourcePlanningIngress.execute
 | 正式 B→C 输入与 fail-closed | `AUTHORITATIVE_PASS` | committed-window lease、identity/digest 校验、覆盖和硬约束拒绝 |
 | Winter 四层三目标生产 | `AUTHORITATIVE_PASS` | 145 个正式小时帧、4 层 × 3 目标、12/12 route integrity、hard violation 0 |
 | C→D 路线合同 | `FROZEN_BASELINE` | route v2 / four-layer v3 schema、digest 和来源字段保持冻结 |
-| 单元/合同回归 | `UNIT_PASS` | 本次正式工作树复核的 `UV_OFFLINE=1 make check` 为 `657 passed`、无 skip；Ruff、lock check、sync check 和 CLI smoke 全部通过。各隔离分支较早的 pass/skip 数保留为历史执行证据 |
+| 单元/合同回归 | `UNIT_PASS (INHERITED)` | 历史正式工作树复核的 `UV_OFFLINE=1 make check` 为 `657 passed`、无 skip；Ruff、lock check、sync check 和 CLI smoke 全部通过。各隔离分支较早的 pass/skip 数同样是历史执行证据；本轮只做静态/文档核验，未重新运行测试 |
 | 当前 A* 的全局最优性 | `NOT_IMPLEMENTED`（未证明） | 时间桶合并、FIFO、ETA 迭代和连续时间误差均无通用证明 |
 | P0.1 FIFO 资格与 exact-arrival 安全支配 | `SYNTHETIC_M1_PASS / REAL_INPUT_FIFO_VIOLATED` | synthetic M1 通过；M1.12 在两套真实 145 帧输入发现 interval 级负 jump，真实 FIFO dominance 禁用，`TemporalDominancePolicy.disabled()` 仍是默认 |
-| P0.2 non-FIFO exact-arrival/Pareto 研究 | `M34_COMPLETED_NO_PRODUCTION_QUALIFICATION` | M0～M34 已覆盖 bounded adapter、session/checkpoint、完整 Pareto frontier、state/arrival/corridor/envelope；M22/M34 真实 24h 语义/frontier 等价，M34 无新增 transition pruning且资源证据不完整 |
+| P0.2 non-FIFO exact-arrival/Pareto 研究 | `COMPLETED_TO_M34` | M0～M34 已覆盖 bounded adapter、session/checkpoint、完整 Pareto frontier、state/arrival/corridor/envelope；M22/M34 真实 24h 语义/frontier 等价，M34 无新增 transition pruning 且资源证据不完整；当前研究范围已冻结，不构成生产资格 |
 | P2.1 相对独立 cold control 的受限重复查询优势 | `EXPERIMENTAL_M1_PASS / FORMAL_M2_FAIL` | clean M0/M1 与 Winter formal 均观测到约 47%–79% 总耗时改善；只适用于同 goal 收紧查询，不等于跨 workload 稳定优势，正式资格未通过 |
 | 相对于传统算法的生产级稳定性能优势 | `NOT_IMPLEMENTED`（未证明） | P2.1 Winter M2 因 `rolling_0_24h × fastest` 中位回归 `5.94% > 5%` 失败；M2J/M2K 与短复测的中心估计接近零并支持“测量伪影”诊断，但 n=2/短复测证据不足以估计真实回归或改写冻结门禁，P2.1 收口 `MEASUREMENT_INCONCLUSIVE / FORMAL_M2_FAIL_UNCHANGED`；候选未默认启用 |
 | P3 SMO-A* 共享记忆化多目标搜索 | `DEFERRED/RETIRED` | 语义/诊断回归通过；P3.2 holdout/development M1 分别因 hit rate `14.27%/19.19%`、RSS ratio `3.367/3.380` 失败；P3.3 synthetic medium exact-key hit `47.87%`，主要为 objective 路径差异，未形成安全修复路径 |
@@ -192,7 +195,7 @@ target.maximum_risk    >= R_trace
 |---|---|---|---|
 | LTCR-TDA* / P2.1 control trace | 同一 goal/objective 的收紧约束轨迹等价证书和安全回退 | 历史上针对 full/main 重复取得约 48% 工程观察 | `MEASUREMENT_INCONCLUSIVE / FORMAL_M2_FAIL_UNCHANGED`，停止追加 Winter 复测，candidate 关闭 |
 | P0.1 certified FIFO dominance | synthetic 有限域的 exact-arrival 安全支配 | synthetic M1 通过，但真实 M1.12 已发现 FIFO violation | 真实输入禁用；仅保留 synthetic/fail-closed 研究证据 |
-| P0.2 non-FIFO exact-arrival/Pareto | 在有限非 FIFO 状态域保留 exact arrival、完整 Pareto frontier、恢复和证明型限界 | 已完成 M0～M34；M22/M34 有真实 24h 语义/frontier 证据 | 当前研究主线已到决策点；没有 M35，先评估是否收束或另立真正新增证明的计划 |
+| P0.2 non-FIFO exact-arrival/Pareto | 在有限非 FIFO 状态域保留 exact arrival、完整 Pareto frontier、恢复和证明型限界 | 已完成 M0～M34；M22/M34 有真实 24h 语义/frontier 证据 | `COMPLETED_TO_M34`；当前范围冻结，不启动 M35；只有满足独立重启门槛的实质新命题才可另立计划 |
 | SIPP-like safe-interval search | 将 hard-mask 时间区间显式放入状态，可表达等待 | 需先定义等待动作与保守 safe interval，涉及正式语义变化 | `DEFERRED`；未经合同/语义提案不实施 |
 | SMO-A*（Shared-Memoization Objective-A*） | 三个目标共享 per-call 边遍历缓存，跳过重复风险采样 | 已实现，但 hit rate/RSS 联合门禁失败 | `DEFERRED/RETIRED`，不再作为当前优先级 |
 | ARA*/Anytime weighted A* | 先求可行解，再用 epsilon 收敛换取时间预算内的质量 | synthetic M0 首解改善未达冻结门禁 | `M0_FAIL/DEFERRED`，不因 SMO 退出自动重启 |
@@ -212,13 +215,13 @@ target.maximum_risk    >= R_trace
 | P0 正确性语义 | `TemporalLabel`/时间展开 reference oracle；FIFO 与非 FIFO fixture；ETA 残差、最大迭代、周期检测和最终重采样 | 反例全部命中预期；control 与 oracle 在小图上路线/代价一致；不收敛显式失败 | `UNIT_PASS` |
 | P1 会话骨架 | 在 C 内实现 per-objective 可恢复 session、OPEN/前驱/标签快照和 input/config/model digest fence | 不跨目标/代际复用；取消、generation、revision、fail-closed 回归通过 | `UNIT_PASS` |
 | P0.1 有限域 FIFO 与 exact-arrival 支配 | `qualify_fifo`、完整 `TemporalScope`、证书化安全支配和独立 M1 runner | synthetic small/medium/stress 已通过；真实 holdout/development 的 interval 反例优先于局部分区证书 | `SYNTHETIC_M1_PASS / REAL_INPUT_FIFO_VIOLATED`；真实 dominance 禁用 |
-| P0.2 non-FIFO bounded/Pareto | exact-arrival label-correcting、actual adapter/session、完整 frontier、state/arrival/corridor/envelope 和 transition pre-gate | M0～M34 的 oracle、fail-closed、恢复、真实 6h/24h 语义/frontier 证据；生产默认不得改变 | `M34_COMPLETED_NO_PRODUCTION_QUALIFICATION`；无 M35、candidate 关闭 |
+| P0.2 non-FIFO bounded/Pareto | exact-arrival label-correcting、actual adapter/session、完整 frontier、state/arrival/corridor/envelope 和 transition pre-gate | M0～M34 的 oracle、fail-closed、恢复、真实 6h/24h 语义/frontier 证据；生产默认不得改变 | `COMPLETED_TO_M34`；当前范围冻结，无 M35，candidate 关闭 |
 | P2 same-goal monotonic reuse | 实现同一目标、同一输入下 exact hit 与收紧时域/风险约束的证书迁移，保留 baseline 回退 | M0/M1 与 control 语义一致；证书可重算；命中零搜索扩展；失败自动回退 | `UNIT_PASS`（M0 性能 FAIL） |
 | P2.1 control trace reuse | 为正式 control 增加默认关闭的历史写入轨迹证书；只在同 goal 收紧约束保持整段执行轨迹时复用 | transient-label 反例 fail-closed；M0 总耗时至少改善 20%；M1 两规模 median 至少改善 15% | `EXPERIMENTAL_M1_PASS`；原始 Winter M2 `FAIL`，M2K 对称预热诊断仍有 order-gap 失败；当前为 `MEASUREMENT_INCONCLUSIVE / FORMAL_M2_FAIL_UNCHANGED`，candidate 默认关闭 |
 | P3 SMO-A* / full-anchor reuse | SMO-A* 共享记忆化已实现但 P3.3 诊断后退出；full-anchor 未形成独立资格 | SMO-A*: 路线一致 PASS、cache hit rate >= 50%、wall >= 15%；full-anchor 如重启需新计划 | SMO-A* `DEFERRED/RETIRED`；ARA* `M0_FAIL/DEFERRED`；full-anchor parked，不再等待真实 FIFO dominance 自动解锁 |
 | P4 formal shadow | Winter 正式 ingress、4×3、12 路线，control/candidate 双轨 | M2 通过确定性、合同、资源和性能阈值；不覆盖冻结 artifact | `IMPLEMENTED`；原始 M2 `FAIL`，M2H holdout `PASS`、development `FAIL` |
 | P5 默认启用评审 | 仅在重复正式证据支持时改变默认开关，并更新本文档/CHANGELOG | 通过审批、回滚演练和新 experiment identity；否则保持 baseline | `DEFERRED`；当前没有具备资格的 candidate |
-| P6 多目标/自适应后续 | P0.2 已覆盖研究型 Pareto；MOPBD*/自适应网格仍需独立提案 | 必须证明相对 M31～M34 有新增安全/资源证据且合同必要性成立 | Pareto research `COMPLETED_TO_M34`；生产化/自适应仍 `DEFERRED` |
+| P6 多目标/自适应后续 | P0.2 已覆盖研究型 Pareto；MOPBD*/自适应网格仍需独立提案 | 必须证明相对 M31～M34 有新增安全/资源证据且合同必要性成立 | Pareto research `COMPLETED_TO_M34`，当前范围冻结；生产化/自适应仍 `DEFERRED` |
 
 ### P2.1 Winter M2 冻结门禁与执行结论（2026-08-25 16:19 +08:00）
 
@@ -4362,11 +4365,11 @@ summary 均为 `REAL_INPUT_24H_STATE_BOUND_FRONTIER_INCONCLUSIVE`，这是资源
 `REAL_INPUT_STATE_BOUND_SEMANTIC_PASS_RESOURCE_EVIDENCE_INCOMPLETE_NO_ADDITIONAL_TRANSITION_GAIN`：
 synthetic 安全性已证明，真实 24h 语义与 frontier 等价已证明，但没有新的可审计性能/资源
 资格。M0～M33 已经覆盖 test-only label-correcting、corridor、heading 与 environment
-envelope，不能把重复这些路径写成“新下一步”。当前仅保留两个决策分支：若先提出可证的新增
-pruning/资源假设，可另立 M35；否则收束本轮核心算法研究。无论哪一分支，都不自动进入
+envelope，不能把重复这些路径写成“新下一步”。基于本次新增证明价值评审，P0.2 当前研究
+范围在 M34 收束并冻结，不启动 M35；未来若满足独立重启门槛，须另行立项，且不自动进入
 Winter、P2.1、P3、ARA* 或 candidate。
 
-**验证。** M34 分支全量 pytest 为 `645 passed, 3 skipped`；skip 仅因隔离 worktree 缺少
+**历史验证记录（INHERITED，不是本轮运行）。** M34 分支全量 pytest 为 `645 passed, 3 skipped`；skip 仅因隔离 worktree 缺少
 已退休的 orchestrator archive fixture。去重后的 M34/Pareto/state-bound/相关 reference
 聚焦测试为 `189 passed`，其中 M34 transition runner 为 `24 passed`（19 个现有 Pareto +
 5 个 runner tests）。变更文件 Ruff check、compileall、`uv lock --offline --check`、offline
@@ -4376,7 +4379,59 @@ import boundary、CLI smoke 和 `git diff --check` 均通过；原样 `UV_OFFLIN
 `.runtime/experiments/`。上述“未合并”仅是 M34 原隔离分支完成时的历史状态；M17～M34
 随后已正式集成并经 pull/rebase 形成已提交正式基线 `research-validation-system` 的
 `98e7a11d53836d9c8cd8d3449dd03ee75f9bef31`。M34 集成当时的
-`UV_OFFLINE=1 make check` 为 `654 passed, 3 skipped`；本次在正式工作树复核为
+`UV_OFFLINE=1 make check` 为 `654 passed, 3 skipped`；上一份正式工作树复核为
 `657 passed`、无 skip，Ruff、lock check、sync check、CLI smoke 与 `git diff --check` 均通过。
-当前已提交正式 tree 与集成前 `ceeca4c` tree 相同，未写 formal latest、replanning baseline
-或 frozen artifact。
+这些计数均为历史执行证据；本轮不重新运行测试、实验或 real replay。`98e7a11` 与集成前
+`ceeca4c` 的相同 tree 仍仅表示历史集成基线；当前 HEAD 已包含文档提交，故只能表述为
+代码与测试 tree 未漂移。未写 formal latest、replanning baseline 或 frozen artifact。
+
+### 【2026-08-30 | COMPLETED】P0.2 新增证明价值评审与当前范围收束
+
+**评审结论。** 本轮以当前 Git、本文档、M31～M34 的目标 manifest、
+`comparison-summary.json` 和终态 `ALL_DONE` 为准，只做静态证据复核，不重新运行测试、实验、
+真实 replay 或 cgroup 资源复核。P0.2 状态固定为 `COMPLETED_TO_M34`，当前研究范围在
+M34 收束并冻结；本文档仍保持 `Overall Status: ACTIVE`、`Document Role: CANONICAL`，因为
+SSOT 仍需维护。该收束不改变 `TemporalDominancePolicy.disabled()` 正式默认、candidate
+关闭、B/C 与 C/D 合同、ingress/service、搜索上限、formal latest、replanning baseline
+或 frozen artifact。Dijkstra 继续只作为正确性 oracle，不作为性能基线。
+
+**M31～M34 及后续方向决策矩阵。** 矩阵中的历史实验结果和测试计数均为
+`INHERITED`；`all_resource_clean=true` 仅表示运行期间未观察到 OOM、swap 或 timeout，
+不等价于 `resource_evidence_complete=true`。
+
+| 路径/方向 | synthetic 安全性 | real semantic/frontier 等价 | real pruning 或 edge-evaluation 减少 | label/queue/resource 是否改善 | cgroup 证据是否完整 | 是否构成生产资格 | 是否属于 M31～M34 已覆盖路径 | 评审决策 |
+|---|---|---|---|---|---|---|---|---|
+| M31 edge corridor envelope | 已通过 synthetic 与 fail-closed 证据；edge corridor envelope 命题已覆盖 | real 6h 语义/确定性一致；24h 仍是资源边界 | real 6h edge-evaluation 减少 | 未形成新的 label/queue 资源证明；24h 未越过资源边界 | 否 | 否 | 是，edge corridor | 已有证明价值，不重复同一命题 |
+| M32 heading-aware envelope | `36/36` 通过 | real 6h 语义通过；24h 未运行 | 额外 expansion/queue 收益为 `0`，未形成新的可归因 pruning 收益 | 否 | 否 | 否 | 是，heading | 不重跑，不创建同路径里程碑 |
+| M33 environmental speed envelope | `45/45` 通过，拒绝场景保持 fail-closed | real 6h 语义通过，但 coverage 为 partial；24h 未启动 | real 6h edge-evaluation 减少，但 coverage partial | 未形成新的 label/queue 资源证明 | 否 | 否 | 是，environment | 已覆盖；不把 partial 6h 诊断升级为资格 |
+| M34 state-bound + transition pre-gate | `90/90`；certified `18`，synthetic transition pruning `12` | development/holdout real 24h 均 frontier、semantic、deterministic、fail-closed 通过 | 两套 real 24h transition pruning 均为 `0` | 已有 node/arrival state-bound pruning，但没有新增 transition 带来的 label/queue/resource 收益 | 否，`resource_evidence_complete=false` | 否 | 是，state-bound + transition | 最终结论为 `REAL_INPUT_STATE_BOUND_SEMANTIC_PASS_RESOURCE_EVIDENCE_INCOMPLETE_NO_ADDITIONAL_TRANSITION_GAIN` |
+| 强制 cgroup 资源复核 | 不适用 | 不改变既有语义/frontier 证据 | NOT RUN；M34 real 新增 transition pruning 已为 `0` | 不产生新的收益证据 | 现有证据仍不完整；本轮不补跑 | 否 | 否；这是证据限制，不是新增算法路径 | 保留为非资格化限制，不因零收益路径单独重跑 |
+| 进一步 corridor/envelope | 尚未提出实质不同的新安全命题 | 未运行 | 未运行 | 未运行 | 不改变现有不完整状态 | 否 | 是；M31 edge、M32 heading、M33 environment、M34 state-bound/transition 已覆盖既有路径 | 没有新命题不得重复，不启动 M35 |
+| test-only non-FIFO label-correcting/Pareto | M0～M34 已覆盖可行性、actual Pareto、session/checkpoint、frontier 和 proof-carrying bounds | M22/M34 已有 real 24h frontier/semantic 证据；M34 transition pruning 仍为 `0` | 没有新的 real pruning | 没有新的 label/queue/resource 收益证明 | 否 | 否 | 是，M0～M34 已覆盖 | 不再把同一可行性路径立为 M35 |
+
+M34 两套 real summary 的 `all_case_gates=true`、`all_resource_clean=true`、
+`resource_limited_case_count=0` 不足以改变上表的 cgroup 判定；`memory.max=max`、
+`memory.swap.max=max` 使强制资源证据仍不完整。由此，cgroup 复核是限制记录而不是新的
+收益命题，不能单独触发重复运行。
+
+**构件与本轮证据标签。** 本轮静态核对确认 M31～M34 权威目标构件仍保留在 workspace 根目录
+`.runtime/experiments/`，并具有对应的 `manifest.json`、`comparison-summary.json` 和
+`ALL_DONE`，包括 M31 edge-envelope 6h/24h、M32 heading real 6h、M33 environmental
+real 6h，以及 M34 synthetic matrix、real development 24h 和 real holdout 24h。manifest
+中的实现身份、输入身份和终态 marker 未被本轮修改。本文此前章节和上述矩阵中的所有历史测试
+数量、历史 real/synthetic 结果以及实验 summary 统一标记为 `INHERITED`；本轮 `RUN` 仅限 Git/SSOT/manifest/summary/
+marker 的静态核验，新的 tests、实验、real replay 和 cgroup recheck 均为 `NOT RUN`。
+
+**当前范围收束规则。**
+
+- P0.2 当前研究范围在 M34 结束；保留代码、测试、manifest、summary、终态 marker 和审计记录，
+  不新增 M35，不把旧路径改名为新贡献。
+- 只有提出实质不同且可形式化的新 pruning/resource 命题时，才允许重新立项。重启前必须同时
+  给出安全性证明、相对 M31～M34 的非重复性、预期可在真实输入观测到的收益（非零 real
+  pruning，或固定上限下可归因的 label/queue/RSS/wall 改善）、强制 cgroup 方案和独立
+  experiment identity；仍须保持默认关闭、合同不变和 fail-closed。
+- 仅因 `resource_evidence_complete=false` 而重跑一个已证明 real transition pruning 为零的
+  路径，不满足重启条件。
+
+因此本轮决策是：`P0.2 = COMPLETED_TO_M34`、当前范围 `FROZEN`、不启动 M35；不构成
+candidate 晋级、生产资格、全局最优性或稳定性能优势声明。
