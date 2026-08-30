@@ -8,7 +8,7 @@ Document Role: CANONICAL
 Scope: C 核心算法现状、证据、正确性边界、改进设计与实施计划
 Canonical For: 工作包 C 核心算法改进实现的首要参考
 Branch: research-validation-system
-Last Verified: 2026-08-30 22:51 +08:00
+Last Verified: 2026-08-30 23:38 +08:00
 Related Canonical Docs:
   - "README.md"
   - "docs/ARCHITECTURE_AND_DECISIONS.md"
@@ -25,15 +25,16 @@ Related Research Docs:
 
 > 本文档将“工作包 C 核心算法实现审计报告”与后续改进方案合并为一个持续维护的计划文档。当前正式基线仍是带风险、速度和 ETA 耦合、默认固定两轮 ETA 精化的时间依赖 A*。P2.1 控制轨迹复用保留约 48% 总耗时改善这一历史工程观察，但正式 M2 仍为 `FORMAL_M2_FAIL_UNCHANGED`，统计复测收口为 `MEASUREMENT_INCONCLUSIVE`；P3 SMO-A* 为 `DEFERRED/RETIRED`，ARA* 为 `M0_FAIL/DEFERRED`。P0.1 的 synthetic M1 曾达到 `M1_PASS_READY_FOR_SEPARATE_REAL_INPUT_PLAN`，但后续 M1.12 在 holdout/development 真实输入上均发现 interval 级负 travel-operator jump，当前真实资格已更新为 `REAL_INPUT_FIFO_VIOLATED`，FIFO dominance 不得启用。P0.2-M0～M34 已完成 C 内部、默认关闭的 non-FIFO exact-arrival/Pareto、session、state-bound 与 envelope 研究；M34 证明真实 24h 语义/frontier 等价，但没有新增 transition pruning，且该次运行缺少强 cgroup 资源证据，因此最终为 `REAL_INPUT_STATE_BOUND_SEMANTIC_PASS_RESOURCE_EVIDENCE_INCOMPLETE_NO_ADDITIONAL_TRANSITION_GAIN`。P0.2 当前研究范围已在 M34 收束并冻结，不启动 M35；当前没有 `IN_PROGRESS` 的算法里程碑，所有 candidate/Winter 路径继续关闭，尚不能声明生产级稳定优势或连续模型全局最优。
 
-**当前集成快照（2026-08-30 21:09 +08:00）：** 本次评审写回前实际核对到
-`research-validation-system` 的 HEAD 为 `67c4f79c3ebc143ac4e036f3d5ec59146423c591`，父提交为
-`98e7a11d53836d9c8cd8d3449dd03ee75f9bef31`，并与 `origin/research-validation-system` 一致；
-写回前工作树 clean，M17～M34 已正式集成。写回前 HEAD 的完整 tree 为
-`30879059b1739d36a72a63d56b3fcb6f1f40b317`，其中包含此前的 SSOT 文档提交。
+**当前集成快照（2026-08-30 23:22 +08:00）：** 本轮开始执行时实际核对到
+`research-validation-system` 的 HEAD 为 `f49aca70b10946ce75e362f4b3d889e0654d91d1`，父提交为
+`d6a8e06b57881aeb89c42fd185a056e2d39382c5`，并与 `origin/research-validation-system` 一致；
+开始写回前工作树 clean，M17～M34 已正式集成。该执行时 HEAD 的完整 tree 为
+`486dcbb711960d97cea7eea39fdc6aa1caa4c746`，其中包含此前的 SSOT 和平滑研究文档提交。
 `98e7a11d53836d9c8cd8d3449dd03ee75f9bef31` 与集成前本地提交 `ceeca4c` 的 tree 均为
 `0842b9b789b7b635e7dad94e613f4407229caff2`，这是已完成集成的历史基线事实，不是当前完整
 Git tree 仍与之相同。当前代码与测试 tree 相对该集成基线未漂移；本轮只会再写入本文档，
-提交前工作树因此会暂时出现文档变更。后文各阶段的“未 push/未合并”仅描述该阶段原始隔离
+并在独立的 Viewer/Orchestrator 仓库写入展示层实现；提交前各工作树因此会暂时出现相应变更。
+后文各阶段的“未 push/未合并”仅描述该阶段原始隔离
 运行当时的发布边界，不再代表当前仓库包含关系；当前仓库状态以本快照、Git 和最后一个
 完成里程碑为准。
 
@@ -205,7 +206,7 @@ target.maximum_risk    >= R_trace
 | MOPBD* | 在局部风险变化和稳定状态下复用多目标搜索树 | 需要增量差分索引、局部变化假设和更强证明 | 远期研究 |
 | D* Lite/LPA* | 借鉴增量队列和边成本变化更新 | 经典假设不直接覆盖时变 RiskFrame；不能只改名 | 仅作理论参考 |
 | 自适应/非均匀网格 | 在风险梯度/障碍附近细化，均质区域粗化 | 需新的网格版本、cell→RiskFrame 映射和保守聚合合同 | **上一版 2.2.2 对应方向暂不实施** |
-| [受约束局部三次 B 样条航线平滑](ROUTE_SMOOTHING_BSPLINE_PLAN.md) | 对网格 waypoint 的航点处航向突变做局部曲线/可执行性研究 | 需局部米制坐标、端点/硬点、曲率、走廊、风险和 ETA 重新验证；不改变搜索或合同 | 独立 `R0`、`RESEARCH_ONLY`；R0.1 已完成问题定义，R0.2 `PLANNED`；不属于 P0.2-M35 |
+| [受约束局部三次 B 样条航线平滑](ROUTE_SMOOTHING_BSPLINE_PLAN.md) | 对网格 waypoint 的航点处航向突变做局部曲线/可执行性研究；当前已落地 D 展示-only 绘制 | 展示层只改 paint geometry；可执行候选仍需局部米制坐标、端点/硬点、曲率、走廊、风险和 ETA 重新验证；不改变搜索或合同 | 独立 `R0`、`RESEARCH_ONLY`；R0.1 已完成，R0.3-D/R0.4-D 为展示实现，R0.2 及 C 可执行资格仍 `PLANNED/NOT_IMPLEMENTED`；不属于 P0.2-M35 |
 
 **2.2.2 暂缓声明：** 上一版编号 2.2.2 所对应的自适应/非均匀网格方案全部保留为后备研究方向，但本轮不实现、不改合同、不引入 PolarRoute/MeshiPhi 的网格依赖。只有当固定网格在 M1/M2 中被重复证据证明为主要瓶颈，且 C 侧无法通过 LTCR-TDA*、缓存或搜索标签改进达到目标，才启动该方向的必要性评审和跨包合同提案。
 

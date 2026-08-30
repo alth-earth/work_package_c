@@ -3,13 +3,14 @@ Overall Status: ACTIVE
 Content Status:
   - COMPLETED
   - PLANNED
+  - EXPERIMENTAL
 Document Role: SUPPORTING
 Applicability: RESEARCH_ONLY
-Scope: 受约束局部三次 B 样条航线平滑的 R0.1 问题定义、参数依据、研究设计与验证门禁
+Scope: 受约束局部三次 B 样条航线平滑的 R0.1 问题定义、展示-only 实现、研究设计与验证门禁
 Canonical For: 工作包 C 航点处航向突变和平滑航线研究的详细定义；从属于核心算法 SSOT
 Canonical Current State: NO
 Branch: research-validation-system
-Last Verified: 2026-08-30 22:50 +08:00
+Last Verified: 2026-08-30 23:38 +08:00
 Related Canonical Docs:
   - CORE_ALGORITHM_IMPROVEMENT_PLAN.md
   - ARCHITECTURE_AND_DECISIONS.md
@@ -17,7 +18,7 @@ Related Canonical Docs:
   - ../../arctic_route_governance/standards/AGENT_DOCUMENTATION_RULES.md
 ---
 
-# 受约束局部三次 B 样条航线平滑：R0.1 问题定义与研究计划
+# 受约束局部三次 B 样条航线平滑：R0.1 问题定义、展示实现与研究计划
 
 ## 0. 文档定位与更新规则（2026-08-30 22:46 +08:00）
 
@@ -31,10 +32,12 @@ SSOT。本文档不能取代 C 核心 SSOT、`cd.route-plan.v2`、四层 v3 或�
 
 - 先更新本文档，再实施与本文档一致的研究代码、测试或实验；实现后必须记录 commit、
   输入身份、实验 identity、结果摘要和验证成熟度。
-- R0.1 只完成问题定义和研究边界；当前没有 B 样条实现、synthetic 运行、真实 replay 或
-  生产资格证据，相关状态必须分别写成 `PLANNED`、`NOT RUN` 或 `NOT_IMPLEMENTED`。
-- 原始网格折线继续是 C 的正式 control；研究曲线只能作为默认关闭的 research sidecar，
-  不得静默进入 ingress、service、合同、formal latest、replanning baseline 或 frozen artifact。
+- R0.1 的问题定义已经完成。本轮只实现 D Viewer 的展示-only 局部曲线绘制；C 的可执行
+  后处理、风险/硬掩膜/ETA 重评估、真实 replay 和生产资格仍分别写成
+  `NOT_IMPLEMENTED`、`NOT RUN` 或 `NOT_QUALIFIED`。
+- 原始网格折线继续是 C 的正式 control；D 的展示曲线可以作为 Viewer 的默认绘制策略，
+  但只能存在于非权威 paint layer，不得静默进入 ingress、service、合同、formal latest、
+  replanning baseline 或 frozen artifact。
 - 任何风险、硬掩膜、ETA、来源身份和船舶参数均须复用现有正式语义；缺失、越界、身份不匹配
   或无法证明的曲线必须 fail-closed 回退原始路线。
 - 若未来改变 `cd.route-plan.v2`、四层 v3 或 D 的权威几何语义，必须另走跨包合同提案，
@@ -60,7 +63,8 @@ R0.1 的目标是具体确认“当前航线在航点处存在航向突变”这
    航点可能被控制器解释为航路指导点，船舶也可能提前转向；该行为目前不在 C 路线几何中
    被显式表达。
 4. 三次 B 样条适合作为候选表达和局部平滑方法，但无约束插值不自动避开陆地、硬掩膜或
-   风险，也不自动满足最小转弯半径、速度、偏航率和 ETA 约束。
+   风险，也不自动满足最小转弯半径、速度、偏航率和 ETA 约束。本轮因此只把它用于
+   D 的展示几何；不会把视觉曲线当成可执行路线。
 
 ### R0.1 关键增量表（2026-08-30 22:50 +08:00）
 
@@ -69,7 +73,7 @@ R0.1 的目标是具体确认“当前航线在航点处存在航向突变”这
 | 当前路线几何 | 网格航点 `LineString` | 明确定义为离散折线基线 | 问题口径被固定 | `COMPLETED`；代码未改变 |
 | 航点处航向突变 | 只有 `turn_count` 等间接计数 | 定义入射/出射航向差 `Δψ` 与转弯长度需求 | 新增可审计问题指标 | `COMPLETED_AS_DEFINITION`；尚无路线统计 |
 | 船舶参考参数 | C 内部未校准演示值 | 公开 Nordic Odyssey 尺度/速度 + 明确的 2,000 m 工作假设 | 来源和假设分离 | `RESEARCH_ONLY`；不是实船校准 |
-| B 样条实现 | 不存在 | 选定“局部、受约束、默认关闭”的候选路线 | 研究方向明确 | `NOT_IMPLEMENTED` |
+| B 样条实现 | 不存在 | D 已实现局部米制、端点保持、偏离限界和 fail-closed 的展示-only 曲线 | 仅改善画面，不改变权威路线 | `IMPLEMENTED / DISPLAY_ONLY` |
 | 真实航线平滑收益 | 未证明 | 未运行 | 无新增真实证据 | `NOT RUN` |
 | 正式合同与生产路线 | `cd.route-plan.v2` / v3 冻结 | 保持不变 | 无语义变化 | `UNCHANGED` |
 
@@ -87,12 +91,13 @@ R0.1 的目标是具体确认“当前航线在航点处存在航向突变”这
 **本轮非范围：**
 
 - 不修改 Python API、schema、合同、搜索上限或生产数据流；
-- 不实现 B 样条、不新增测试、不运行 replay、不运行长时间实验；
+- 不把展示曲线接入 C planner、ingress、service、风险采样、ETA、船舶运动或生产发布；
+- 不运行 real replay、不运行长时间实验、不宣称真实操纵性或生产资格；
 - 不把地图显示加密当作权威路线平滑；
 - 不修改 `demo_bulk_carrier_v1` 或 `nordic_odyssey_reference_v1` 配置；
 - 不将公开船舶资料当作当前船舶的实测操纵性；
 - 不启动 P0.2-M35，不重开 M31–M34 的剪枝/资源研究；
-- 不接入 D、ingress、service、formal latest、replanning baseline 或 frozen artifact。
+- 不修改 formal latest、replanning baseline 或 frozen artifact；D 只增加非权威绘制层。
 
 ## 3. 起始基线与问题定义（2026-08-30 22:46 +08:00）
 
@@ -280,18 +285,31 @@ C(u)=\sum_i N_{i,3}(u)P_i
 
 ## 6. 代码 / 架构设计边界（2026-08-30 22:46 +08:00）
 
-R0 的第一阶段不改代码。未来若获准实现，只能先放在 C 内部 research sidecar：
+本轮实现采用展示-only 路径。D 是 Viewer 的唯一运行时 owner，曲线只由浏览器绘制层从
+原始 waypoint/候选 geometry 计算，不写回 C 或 Orchestrator 的路线数据：
 
 ```text
 formal C route (authoritative waypoint polyline)
-        |
-        +--> research-only constrained spline post-processor
+        |  (raw waypoints / ETA / route metrics remain unchanged)
+        +--> D display-only constrained local cubic B-spline renderer
                     |
-                    +--> valid smoothed sidecar
-                    +--> rejected / fallback reason
+                    +--> smoothed pixels for route lines
+                    +--> raw polyline fallback on invalid geometry
+
+future, separately approved:
+formal C route --> executable post-processor --> risk/ETA/motion qualification
 ```
 
-sidecar 至少需要记录：
+展示-only renderer 的约束是几何约束，不是航行安全证书：
+
+- 局部米制坐标，不在经纬度度数上拟合；
+- 保留原始路线首尾点，内部只替换足够长且转角超过阈值的局部折点；
+- 使用端点切向控制的 clamped cubic B-spline（等价的四控制点 Bézier 段）；
+- 对相邻转角避免局部曲线重叠，检查最大显示偏离、有限值和最小显示曲率半径；
+- 任一检查失败时，绘制原始折线/线性加密结果；
+- 不生成 ETA、速度、风险、hard mask、航向或船位字段。
+
+若未来实现可执行 research sidecar，仍至少需要记录：
 
 - 原始 `plan_id`、原始路线 semantic digest、输入/模型/规划配置 digest；
 - vessel profile、工作半径、速度场景和约束版本；
@@ -315,7 +333,7 @@ R0.1 没有业务语义和合同变更。未来研究必须维持以下不变量
 | C 搜索 | 原始网格折线为正式 control | 后处理不能篡改搜索结果或伪造 expansion/edge 收益 |
 | 路线风险 | 按实际位置和 ETA 采样 | 曲线改变位置后必须重新采样，不能复用旧折线风险指标 |
 | ETA / 速度 | waypoint ETA 严格递增，速度来自 C 船模/边评估 | 按弧长重新参数化，失败则回退 |
-| C → D | waypoint 和指标为当前权威几何 | research curve 不进入 D 权威路线；显示曲线若存在必须非权威标识 |
+| C → D | waypoint 和指标为当前权威几何 | D 可从原始字段计算展示-only 曲线，但不得替换权威 geometry、ETA、metrics 或船位语义 |
 | 重规划 | adopted route 受现有 generation/request/revision 围栏保护 | 每次新路线重新生成 sidecar，不允许瞬移 |
 | 失败语义 | 未知、缺测、不匹配必须 fail-closed | 曲线无效时返回原始路线，并保留拒绝原因 |
 
@@ -327,12 +345,12 @@ R0.1 没有业务语义和合同变更。未来研究必须维持以下不变量
 |---|---|---|---|---|
 | R0.1 | 固定航向突变问题、公开参考和工作假设 | 本文档、`Δψ`/`s_turn` 定义、约束边界 | 代码和当前文档只读核验完成 | `COMPLETED` |
 | R0.2 | 统计当前 synthetic/冻结路线的转角、可用空间和基线粗糙度 | baseline report、候选点清单 | R0.1 完成；不改生产路径 | `PLANNED` |
-| R0.3 | 实现局部米制坐标、三次 B 样条、端点切向和局部控制点 | research-only geometry module | R0.2 证明存在实际候选点 | `PLANNED` |
-| R0.4 | 建立曲率、走廊、硬掩膜、风险、ETA 和船舶运动约束 | fail-closed validator、sidecar 结构 | R0.3 synthetic 几何输出可重复 | `PLANNED` |
-| R0.5 | adversarial synthetic 安全矩阵 | unit/semantic/fail-closed 证据 | R0.4 所有拒绝条件可观测 | `PLANNED` |
+| R0.3-D | 在 D Viewer 实现局部米制、clamped cubic B-spline 和端点保持 | `viewer/route_smoothing.js`、`app.js` 绘制接入 | R0.1 完成；不改变权威路线 | `COMPLETED / DISPLAY_ONLY` |
+| R0.4-D | 建立显示几何的转角、重叠、偏离、曲率和 fail-closed 约束 | 展示-only validator、原始折线回退 | R0.3-D 输出可重复 | `COMPLETED / DISPLAY_ONLY` |
+| R0.5-D | display-only synthetic/unit/source regression 矩阵 | D focused tests、Node syntax、C/D 语义回归 | R0.4-D 拒绝条件可观测 | `UNIT_PASS` |
 | R0.6 | 固定输入真实 6h shadow 对比原始折线 | real route quality/resource summary | R0.5 全通过且存在 real 候选点 | `PLANNED` |
 | R0.7 | 仅在 R0.6 有真实收益且资源方案完整时做 24h | cgroup-complete qualification evidence | 预注册门禁全部通过 | `PLANNED` |
-| R0.8 | 决定显示-only、研究保留、合同提案或收束 | final decision record | R0.6/R0.7 证据完成或明确停止 | `PLANNED` |
+| R0.8 | 决定展示-only、研究保留、合同提案或收束 | final decision record | 展示目标已明确；可执行资格仍需独立证据 | `COMPLETED / DISPLAY_ONLY_SCOPE` |
 
 ### 8.2 R0.2 基线统计（2026-08-30 22:46 +08:00）
 
@@ -348,26 +366,42 @@ R0.2 不先改算法，而是对现有路线做统计：
 R0.2 必须使用固定输入和可复现 digest；若没有真实路线中的有效候选转角，R0 应直接
 停止，不为了展示 B 样条而制造 synthetic 收益。
 
-### 8.3 R0.3–R0.4 几何和约束实现（2026-08-30 22:46 +08:00）
+### 8.3 R0.3-D–R0.4-D 展示几何和约束实现（2026-08-30 23:38 +08:00）
 
-候选实现必须满足：
+本轮已实现的展示-only 实现满足：
 
 1. 不在原始经纬度度数上计算曲率；
-2. 支持端点和硬航点保持；
-3. 端点切向使用路线方向或显式船舶航向，不使用不适用的零导数默认值；
-4. 控制点移动有最大横向偏离；
-5. 曲线采样间距由曲率、风险帧时间变化和安全边界自适应决定；
-6. 风险沿曲线位置和重新计算的 ETA 重新采样；
-7. 曲率约束至少检查 `κ <= 1 / R_min`；若船舶资料提供偏航率或横向加速度，还必须检查
-   `v * κ` 和 `v² * κ`；
-8. 不能证明连续走廊包含关系时，结果只能标记为诊断，不得标记为安全资格；
-9. 任一非有限值、采样缺失、风险身份不一致、硬掩膜碰撞、ETA 失败、曲率失败或 digest
-   漂移都必须回退。
+2. 保持路线首尾点；内部仅替换有足够转弯空间且超过阈值的折点；
+3. 使用入射/出射线段方向作为 cubic B-spline 的端点切向；
+4. 控制点和曲线采样受相邻转角不重叠、最大显示偏离和最小显示曲率半径约束；
+5. 采样间距按局部曲线长度和固定显示上限确定；
+6. 所有非有限、重复、短边或约束失败输入都回退到原始折线的线性显示；
+7. 返回值只含显示坐标和诊断状态，不含 ETA、速度、风险或安全资格。
 
-### 8.4 R0.5–R0.7 验证方案（2026-08-30 22:46 +08:00）
+展示-only 默认参数固定在 D 的 `route_smoothing.js`，只代表画面尺度，不代表目标船校准：
 
-synthetic 至少包括：单个 45°/90° 转角、连续锯齿、狭窄通道、陆地边界、曲线过冲、重复点、
-短边、端点切向、风险 coverage 缺失、时间身份不匹配和重规划身份变化。
+| 参数 | 默认值 | 含义 |
+|---|---:|---|
+| `nominalRadiusM` | `2,000 m` | 局部曲线的显示尺度；沿用 C 中透明的未校准工作数量级 |
+| `maxDeviationM` | `5,000 m` | 曲线采样点到原始折线的最大显示偏离 |
+| `cornerAngleThresholdDeg` | `8°` | 小于该变化量的折点保持线性绘制 |
+| `sampleSpacingM` | `750 m` | 曲线采样的显示间距上限 |
+| `maximumDisplayPoints` | `10,000` | 防止异常输入造成无界绘制工作 |
+
+以下仍未实现，不能从本轮 Viewer 代码推出：
+
+- corridor/hard mask 连续包含关系；
+- 使用 `RiskSampler` 的曲线风险和 coverage 重评估；
+- 按曲线弧长重建 ETA、速度、偏航率或横向加速度；
+- 真实船舶操纵性约束、cgroup 资源证据和 production qualification。
+
+### 8.4 R0.5-D–R0.7 验证方案（2026-08-30 23:38 +08:00）
+
+display-only synthetic 至少包括：单个 45°/90° 转角、连续锯齿、重复点、短边、端点保持、
+相邻转角重叠、超出偏离限界和非法坐标回退。它只验证画面几何，不验证海图安全。
+
+可执行研究的原始 adversarial 集合仍包括狭窄通道、陆地边界、风险 coverage 缺失、时间身份
+不匹配和重规划身份变化；本轮不运行这些 C 侧验证。
 
 真实 6h 使用与原始路线相同的输入、时间窗口、船模、RiskFrame、目标和搜索上限，只做
 shadow，不改正式发布。每条路线记录平滑成功率、回退率、曲率、航向变化率、最大偏离、
@@ -396,12 +430,12 @@ shadow，不改正式发布。每条路线记录平滑成功率、回退率、�
 |---|---|---|
 | 先区分显示平滑、几何平滑和可执行平滑 | 第 1、2、3.3、7 节 | 已归纳；R0.1 已完成定义 |
 | 先做现有路线几何审计，不先写代码 | 第 8.2 节 | `R0.2 PLANNED` |
-| 使用局部米制坐标和局部受约束 cubic B-spline | 第 5.1、5.2、8.3 节 | 研究设计已确定，未实现 |
+| 使用局部米制坐标和局部受约束 cubic B-spline | 第 5.1、5.2、8.3 节 | D 展示-only 已实现；C 可执行 sidecar 未实现 |
 | 保留端点、端点方向和必要硬点 | 第 5.2、6、11.1 节 | 设计约束已确定 |
-| 同时约束 corridor、hard mask、risk、curvature、ETA 和速度 | 第 6、7、8.3、11.1 节 | 设计约束已确定，未验证 |
-| 采用自适应采样并重新计算曲线风险和时间 | 第 5.2、7、8.3 节 | 设计要求已确定，未实现 |
-| 所有失败 fail-closed，回退原始折线 | 第 5.2、7、11.1 节 | 设计要求已确定，未验证 |
-| synthetic adversarial 矩阵 | 第 8.4 节 | `R0.5 PLANNED` |
+| 同时约束 corridor、hard mask、risk、curvature、ETA 和速度 | 第 6、7、8.3、11.1 节 | 仅显示几何约束已实现；安全/时间约束未实现 |
+| 采用自适应采样并重新计算曲线风险和时间 | 第 5.2、7、8.3 节 | 显示采样已实现；风险/时间重算未实现 |
+| 所有失败 fail-closed，回退原始折线 | 第 5.2、7、11.1 节 | display-only 几何失败回退已实现；安全失败仍未实现 |
+| synthetic adversarial 矩阵 | 第 8.4 节 | display-only 单元矩阵 `UNIT_PASS`；完整安全矩阵未运行 |
 | 固定输入 real 6h shadow，24h 条件性启动 | 第 8.4 节、9 节 | `R0.6/R0.7 PLANNED`，当前 `NOT RUN` |
 | 若仅有视觉收益则不改 C 权威路线 | 第 2、7、15.2 节 | 已确定 |
 | 若要生产化则另走合同和消费者提案 | 第 0、6、7、15.1 节 | 已确定，未启动 |
@@ -410,20 +444,26 @@ shadow，不改正式发布。每条路线记录平滑成功率、回退率、�
 非零真实质量收益、风险/硬掩膜/ETA 不能保持，或新增资源成本超过预注册预算时，均不得
 通过增加采样点、改变显示方式、放宽约束或重复 synthetic 来制造成功结论。
 
-## 9. 权威运行 / 真实验证（2026-08-30 22:46 +08:00）
+## 9. 权威运行 / 真实验证（2026-08-30 23:38 +08:00）
 
-`NOT RUN`。本轮只完成代码、配置、SSOT、治理规则和公开资料的静态核对，没有运行：
+本轮只验证 D 展示-only 几何和接口边界，不运行 replay 或长时间实验。以下仍为
+`NOT RUN`：
 
-- synthetic B 样条生成；
+- C 侧 synthetic B 样条安全生成；
 - R0.2 路线统计；
 - C 单元测试或完整 `make check`；
 - real 6h/24h replay；
 - cgroup 资源资格复核；
-- D Viewer 变化；
+- C 侧风险、hard mask、ETA 和船舶运动重评估；
 - 生产 ingress/service。
 
 M31–M34 的历史实验结果只能作为当前 C 研究边界的 `INHERITED` 背景，不能作为 B 样条
-平滑的验证证据。
+平滑的验证证据；本轮 display-only 测试也不能作为船舶安全或生产资格证据。
+
+本轮新增 `RUN` 证据为：D display-only focused pytest `25 passed`，Orchestrator 展示策略
+focused pytest `13 passed`，D 新增测试 Ruff 通过，`route_smoothing.js` 和 `app.js` 的
+Node syntax 通过。D 的历史全量测试数、此前 Firefox 证据和 Orchestrator 历史测试数继续
+标记为 `INHERITED`，没有在本轮冒充重跑结果。
 
 ## 10. 性能分解（2026-08-30 22:46 +08:00）
 
@@ -437,8 +477,9 @@ M31–M34 的历史实验结果只能作为当前 C 研究边界的 `INHERITED` 
 | edge/risk 评估次数 | 原折线评估 | 可能增加曲线采样 | `UNKNOWN` | 不能把额外采样隐藏在旧指标中 |
 | 航线长度/ETA/风险 | 原始路线指标 | 未计算 | `UNKNOWN` | 曲线改变空间后必须重新计算 |
 
-R0 的首要收益目标是减少航点处的几何航向突变和改善可执行性，不是减少 A* expansion。
-如果平滑只增加计算成本而没有真实可观测质量收益，R0 必须停止。
+本轮展示 track 的首要收益目标是减少航点处的几何锐角观感，不是减少 A* expansion，也不是
+证明可执行性。若未来进入可执行 track，必须另行测量真实质量、风险、ETA、资源和船舶约束；
+不能把本轮画面改善当作这些证据。
 
 ## 11. 正确性 / 验证门禁（2026-08-30 22:46 +08:00）
 
@@ -470,13 +511,25 @@ R0 的首要收益目标是减少航点处的几何航向突变和改善可执�
 
 如果 R0.2 显示真实路线没有可平滑转角，或者 R0.6 的收益低于测量噪声，则不启动 R0.7。
 
+### 11.3 本轮展示-only 验收门禁（2026-08-30 23:38 +08:00）
+
+| 门禁 | 本轮要求 | 结果口径 |
+|---|---|---|
+| 路线 authority | 原始 waypoint、候选 geometry、ETA、metrics 和 route revision 不被改写 | 代码结构检查；通过后仍只称 `DISPLAY_ONLY` |
+| 几何坐标 | 使用局部米制坐标，首尾点保持，局部曲线不跨相邻转角 | Node synthetic checks；通过 |
+| 视觉约束 | 有限值、最小显示曲率半径、最大显示偏离和显示点数受限 | Node synthetic checks；通过 |
+| 失败语义 | 非法坐标、重复点、短边、无候选角或曲线约束失败回退原始折线加密 | Node synthetic checks；通过 |
+| 物理语义 | vessel position、heading、completed track 不读平滑后的点 | Viewer source checks；通过 |
+| 安全/资格 | 不得由显示曲线推出 hard mask、风险、ETA、操纵性或生产资格 | 文档与 metadata 明确；未资格化 |
+
 ## 12. 确定性 / 可复现性（2026-08-30 22:46 +08:00）
 
 当前状态：
 
 - R0.1 文档定义：`RUN`；
-- B 样条实现：`NOT_IMPLEMENTED`；
-- synthetic/real 平滑：`NOT RUN`；
+- D Viewer B 样条展示实现：`IMPLEMENTED / DISPLAY_ONLY`；
+- D display-only synthetic/结构验证：`UNIT_PASS`（本轮）；
+- C 侧安全 B 样条与 real 平滑：`NOT_IMPLEMENTED / NOT RUN`；
 - M31–M34 结果：`INHERITED`，仅用于研究边界背景。
 
 未来实验必须绑定：
@@ -493,7 +546,8 @@ R0 的首要收益目标是减少航点处的几何航向突变和改善可执�
 
 ## 13. 构件 / 溯源（2026-08-30 22:46 +08:00）
 
-本轮没有生成新的 runtime 构件。公开资料和当前配置的溯源如下：
+本轮没有生成新的 real replay/runtime 实验构件；新增 Viewer 源文件和 focused 测试属于代码
+构件，公开资料和当前配置的溯源如下：
 
 | 构件/来源 | 类型 | 状态 | 说明 |
 |---|---|---|---|
@@ -504,6 +558,11 @@ R0 的首要收益目标是减少航点处的几何航向突变和改善可执�
 | 55,000 DWT 操纵性研究 | 公开研究 | `REFERENCE_ONLY` | 特定试验条件下的转弯数量级 |
 | Capesize 转弯半径研究 | 公开研究 | `REFERENCE_ONLY` | 舵角相关半径数量级 |
 | IMO MSC.137(76) | 官方标准 | `REFERENCE_ONLY` | 操纵性试验指标，不是路线半径参数 |
+| `work_package_d/viewer/route_smoothing.js` | 展示-only 代码 | `IMPLEMENTED / DISPLAY_ONLY` | 仅把原始路线转换为 Canvas paint coordinates |
+| `work_package_d/tests/unit/test_route_smoothing.py` | focused 测试 | `UNIT_PASS` | Node synthetic、加载顺序和 authority 分离检查 |
+
+本轮实现提交：D `efd2ec6ccf38f881ebc39afae195cb9bfdaa36a6`，Orchestrator
+`d22980e816557a16e062fade3e06826aae845e66`。两者均为本地提交，未 push。
 
 拟议未来实验 identity 前缀为 `c.route-smoothing.bspline.v1-<digest>`，目前只是命名
 建议，不代表已存在构件。
@@ -539,17 +598,21 @@ B 样条具有局部控制和连续导数的潜力，但当前 C 缺少曲线安
 **Consequences：** 研究会增加路线后处理和风险重采样成本；曲线不能自动继承原始路线指标；
 任何失败必须回退；如果最终需要生产发布，将产生新的合同和 D 消费影响评审。
 
-### 15.2 当前决策（2026-08-30 22:46 +08:00）
+### 15.2 当前决策（2026-08-30 23:38 +08:00）
 
 - R0.1：`COMPLETED`，完成问题定义、参数分层和候选路线选择；
-- R0.2：`PLANNED`，尚未运行路线统计；
-- R0.3 及以后：`PLANNED`，不得提前宣称实现或通过；
+- R0.3-D/R0.4-D：已实现为 D Viewer 展示-only 局部曲线；原始 waypoint、ETA、metrics、
+  active route、船位和船头方向仍是唯一权威语义；
+- R0.5-D：`UNIT_PASS`，D focused pytest、Node syntax、加载/authority 结构检查通过；
+- R0.2：`PLANNED`，尚未运行真实路线统计；
+- R0.3/R0.4 的 C 可执行后处理、风险/硬掩膜/ETA/船舶运动约束：`NOT_IMPLEMENTED`；
 - P0.2：继续 `COMPLETED_TO_M34`，不创建 M35；
 - 正式 planner、默认配置、candidate、合同和生产数据流：保持不变；
-- 下一步只允许先做 R0.2 基线统计；若没有真实候选转角，应收束 R0，不实现 B 样条。
+- 当前展示目标已完成；不以展示效果推导真实可执行性或生产资格。只有未来提出实质不同、
+  可形式化且有真实可观测收益的新命题，才另立可执行研究计划。
 
 最终只能在 R0.8 选择以下结果之一：
 
-1. 仅显示平滑：留在非权威显示层；
+1. 仅显示平滑：留在非权威显示层（本轮已选择）；
 2. 研究型可执行改善：另立合同和生产资格计划；
 3. 没有真实价值：关闭 R0，保留本文档作为审计记录。
