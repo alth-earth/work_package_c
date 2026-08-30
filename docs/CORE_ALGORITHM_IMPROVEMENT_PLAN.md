@@ -8,7 +8,7 @@ Document Role: CANONICAL
 Scope: C 核心算法现状、证据、正确性边界、改进设计与实施计划
 Canonical For: 工作包 C 核心算法改进实现的首要参考
 Branch: research-validation-system
-Last Verified: 2026-08-30 21:09 +08:00
+Last Verified: 2026-08-30 22:51 +08:00
 Related Canonical Docs:
   - "README.md"
   - "docs/ARCHITECTURE_AND_DECISIONS.md"
@@ -17,6 +17,8 @@ Related Canonical Docs:
   - "/root/my_project/arctic_route_governance/current/RESEARCH_VALIDATION_GAP_ANALYSIS.md"
   - "/root/my_project/arctic_route_governance/current/decisions/RESEARCH_VALIDATION_DECISIONS.md"
   - "/root/my_project/arctic_route_governance/current/reference/CONTRACT_OWNERSHIP_REGISTRY.md"
+Related Research Docs:
+  - "docs/ROUTE_SMOOTHING_BSPLINE_PLAN.md"
 ---
 
 # 工作包 C 核心算法现状、改进方案与实施计划
@@ -203,6 +205,7 @@ target.maximum_risk    >= R_trace
 | MOPBD* | 在局部风险变化和稳定状态下复用多目标搜索树 | 需要增量差分索引、局部变化假设和更强证明 | 远期研究 |
 | D* Lite/LPA* | 借鉴增量队列和边成本变化更新 | 经典假设不直接覆盖时变 RiskFrame；不能只改名 | 仅作理论参考 |
 | 自适应/非均匀网格 | 在风险梯度/障碍附近细化，均质区域粗化 | 需新的网格版本、cell→RiskFrame 映射和保守聚合合同 | **上一版 2.2.2 对应方向暂不实施** |
+| [受约束局部三次 B 样条航线平滑](ROUTE_SMOOTHING_BSPLINE_PLAN.md) | 对网格 waypoint 的航点处航向突变做局部曲线/可执行性研究 | 需局部米制坐标、端点/硬点、曲率、走廊、风险和 ETA 重新验证；不改变搜索或合同 | 独立 `R0`、`RESEARCH_ONLY`；R0.1 已完成问题定义，R0.2 `PLANNED`；不属于 P0.2-M35 |
 
 **2.2.2 暂缓声明：** 上一版编号 2.2.2 所对应的自适应/非均匀网格方案全部保留为后备研究方向，但本轮不实现、不改合同、不引入 PolarRoute/MeshiPhi 的网格依赖。只有当固定网格在 M1/M2 中被重复证据证明为主要瓶颈，且 C 侧无法通过 LTCR-TDA*、缓存或搜索标签改进达到目标，才启动该方向的必要性评审和跨包合同提案。
 
