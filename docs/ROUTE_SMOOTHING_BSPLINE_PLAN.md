@@ -10,7 +10,7 @@ Scope: 受约束局部三次 B 样条航线平滑的 R0.1 问题定义、展示-
 Canonical For: 工作包 C 航点处航向突变和平滑航线研究的详细定义；从属于核心算法 SSOT
 Canonical Current State: NO
 Branch: research-validation-system
-Last Verified: 2026-08-31 00:19 +08:00
+Last Verified: 2026-08-31 00:56 +08:00
 Related Canonical Docs:
   - CORE_ALGORITHM_IMPROVEMENT_PLAN.md
   - ARCHITECTURE_AND_DECISIONS.md
@@ -32,9 +32,10 @@ SSOT。本文档不能取代 C 核心 SSOT、`cd.route-plan.v2`、四层 v3 或�
 
 - 先更新本文档，再实施与本文档一致的研究代码、测试或实验；实现后必须记录 commit、
   输入身份、实验 identity、结果摘要和验证成熟度。
-- R0.1 的问题定义已经完成。本轮只实现 D Viewer 的展示-only 局部曲线绘制；C 的可执行
-  后处理、风险/硬掩膜/ETA 重评估、真实 replay 和生产资格仍分别写成
-  `NOT_IMPLEMENTED`、`NOT RUN` 或 `NOT_QUALIFIED`。
+- R0.1 的问题定义已经完成。D Viewer 目前实现展示-only 的局部曲线绘制，并让 Viewer
+  仿真船位、航向、近期轨迹和 completed-track 绘制跟随该曲线；原始 waypoint ETA 只作为
+  时间锚点。C 的可执行后处理、风险/硬掩膜/ETA 重评估、真实 replay 和生产资格仍分别
+  写成 `NOT_IMPLEMENTED`、`NOT RUN` 或 `NOT_QUALIFIED`。
 - 原始网格折线继续是 C 的正式 control；D 的展示曲线可以作为 Viewer 的默认绘制策略，
   但只能存在于非权威 paint layer，不得静默进入 ingress、service、合同、formal latest、
   replanning baseline 或 frozen artifact。
@@ -64,7 +65,7 @@ R0.1 的目标是具体确认“当前航线在航点处存在航向突变”这
    被显式表达。
 4. 三次 B 样条适合作为候选表达和局部平滑方法，但无约束插值不自动避开陆地、硬掩膜或
    风险，也不自动满足最小转弯半径、速度、偏航率和 ETA 约束。本轮因此只把它用于
-   D 的展示几何；不会把视觉曲线当成可执行路线。
+   D 的展示几何和 Viewer 仿真绘制；不会把视觉曲线当成可执行路线。
 
 ### R0.1 关键增量表（2026-08-30 22:50 +08:00）
 
@@ -73,7 +74,7 @@ R0.1 的目标是具体确认“当前航线在航点处存在航向突变”这
 | 当前路线几何 | 网格航点 `LineString` | 明确定义为离散折线基线 | 问题口径被固定 | `COMPLETED`；代码未改变 |
 | 航点处航向突变 | 只有 `turn_count` 等间接计数 | 定义入射/出射航向差 `Δψ` 与转弯长度需求 | 新增可审计问题指标 | `COMPLETED_AS_DEFINITION`；尚无路线统计 |
 | 船舶参考参数 | C 内部未校准演示值 | 公开 Nordic Odyssey 尺度/速度 + 明确的 2,000 m 工作假设 | 来源和假设分离 | `RESEARCH_ONLY`；不是实船校准 |
-| B 样条实现 | 不存在 | D 已实现局部米制、端点保持、偏离限界和 fail-closed 的展示-only 曲线 | 仅改善画面，不改变权威路线 | `IMPLEMENTED / DISPLAY_ONLY` |
+| B 样条实现 | 不存在 | D 已实现局部米制、端点保持、偏离限界和 fail-closed 的展示-only 曲线，并让 Viewer 仿真船沿曲线绘制 | 仅改善画面，不改变权威路线 | `IMPLEMENTED / DISPLAY_ONLY` |
 | 真实航线平滑收益 | 未证明 | 未运行 | 无新增真实证据 | `NOT RUN` |
 | 正式合同与生产路线 | `cd.route-plan.v2` / v3 冻结 | 保持不变 | 无语义变化 | `UNCHANGED` |
 
@@ -91,7 +92,9 @@ R0.1 的目标是具体确认“当前航线在航点处存在航向突变”这
 **本轮非范围：**
 
 - 不修改 Python API、schema、合同、搜索上限或生产数据流；
-- 不把展示曲线接入 C planner、ingress、service、风险采样、ETA、船舶运动或生产发布；
+- 不把展示曲线接入 C planner、ingress、service、风险采样、ETA、生产船舶运动或生产发布；
+  D Viewer 仿真层可用曲线和原始 ETA 时间锚点驱动画面中的船位/航向，但不得将其写回
+  C 或 Orchestrator artifact；
 - 不运行 real replay、不运行长时间实验、不宣称真实操纵性或生产资格；
 - 不把地图显示加密当作权威路线平滑；
 - 不修改 `demo_bulk_carrier_v1` 或 `nordic_odyssey_reference_v1` 配置；
@@ -294,6 +297,7 @@ formal C route (authoritative waypoint polyline)
         +--> D display-only constrained local cubic B-spline renderer
                     |
                     +--> smoothed pixels for route lines
+                    +--> Viewer-only vessel position/heading/trail/track paint motion
                     +--> raw polyline fallback on invalid geometry
 
 future, separately approved:
@@ -307,7 +311,8 @@ formal C route --> executable post-processor --> risk/ETA/motion qualification
 - 使用端点切向控制的 clamped cubic B-spline（等价的四控制点 Bézier 段）；
 - 对相邻转角避免局部曲线重叠，检查最大显示偏离、有限值和最小显示曲率半径；
 - 任一检查失败时，绘制原始折线/线性加密结果；
-- 不生成 ETA、速度、风险、hard mask、航向或船位字段。
+- 不生成或回写 C 的 ETA、速度、风险、hard mask、航向或船位字段；D Viewer 仅在本地
+  仿真显示层从曲线和原始 ETA 时间锚点派生绘制位置/航向，异常时回退 timeline。
 
 若未来实现可执行 research sidecar，仍至少需要记录：
 
@@ -333,7 +338,7 @@ R0.1 没有业务语义和合同变更。未来研究必须维持以下不变量
 | C 搜索 | 原始网格折线为正式 control | 后处理不能篡改搜索结果或伪造 expansion/edge 收益 |
 | 路线风险 | 按实际位置和 ETA 采样 | 曲线改变位置后必须重新采样，不能复用旧折线风险指标 |
 | ETA / 速度 | waypoint ETA 严格递增，速度来自 C 船模/边评估 | 按弧长重新参数化，失败则回退 |
-| C → D | waypoint 和指标为当前权威几何 | D 可从原始字段计算展示-only 曲线，但不得替换权威 geometry、ETA、metrics 或船位语义 |
+| C → D | waypoint 和指标为当前权威几何 | D 可从原始字段计算展示-only 曲线，并在 Viewer 仿真层派生位置/航向/轨迹绘制；不得替换权威 geometry、ETA、metrics 或生产船舶运动语义 |
 | 重规划 | adopted route 受现有 generation/request/revision 围栏保护 | 每次新路线重新生成 sidecar，不允许瞬移 |
 | 失败语义 | 未知、缺测、不匹配必须 fail-closed | 曲线无效时返回原始路线，并保留拒绝原因 |
 
@@ -366,7 +371,7 @@ R0.2 不先改算法，而是对现有路线做统计：
 R0.2 必须使用固定输入和可复现 digest；若没有真实路线中的有效候选转角，R0 应直接
 停止，不为了展示 B 样条而制造 synthetic 收益。
 
-### 8.3 R0.3-D–R0.4-D 展示几何和约束实现（2026-08-31 00:19 +08:00）
+### 8.3 R0.3-D–R0.4-D 展示几何和约束实现（2026-08-31 00:56 +08:00）
 
 本轮已实现的展示-only 实现满足：
 
@@ -392,11 +397,22 @@ R0.2 必须使用固定输入和可复现 digest；若没有真实路线中的�
 | `sampleSpacingM` | `750 m` | 曲线采样的显示间距上限 |
 | `maximumDisplayPoints` | `10,000` | 防止异常输入造成无界绘制工作 |
 
+2026-08-31 的 Viewer 运动呈现补充如下：
+
+- 蓝色平滑曲线是主路线绘制层，白色原始折线由独立图层控制且默认隐藏；打开该图层只
+  用于几何对照；
+- Viewer 仿真船位、航向、近期轨迹和 completed-track 的绘制使用同一条已接受的曲线，
+  以原始 waypoint ETA 作为时间锚点；不重新计算或写回权威 ETA；
+- 如果 route identity、ETA 顺序、几何约束无效，或曲线位置与 timeline 位置超过保护
+  阈值，运动层 fail-closed 回退 timeline；这不是生产船舶控制或实际航行指令；
+- 该行为只存在于 D Viewer 的本地 simulation/presentation layer，C 路线 artifact、
+  metrics、replan adoption 和 C→D 合同不变。
+
 以下仍未实现，不能从本轮 Viewer 代码推出：
 
 - corridor/hard mask 连续包含关系；
 - 使用 `RiskSampler` 的曲线风险和 coverage 重评估；
-- 按曲线弧长重建 ETA、速度、偏航率或横向加速度；
+- 在 C 侧按曲线弧长重建权威 ETA、速度、偏航率或横向加速度；
 - 真实船舶操纵性约束、cgroup 资源证据和 production qualification。
 
 旧版独立入口 `work_package_d/web/demo_viewer.html` 不能依赖外部脚本，因此也使用内联的
@@ -453,7 +469,7 @@ shadow，不改正式发布。每条路线记录平滑成功率、回退率、�
 非零真实质量收益、风险/硬掩膜/ETA 不能保持，或新增资源成本超过预注册预算时，均不得
 通过增加采样点、改变显示方式、放宽约束或重复 synthetic 来制造成功结论。
 
-## 9. 权威运行 / 真实验证（2026-08-30 23:38 +08:00）
+## 9. 权威运行 / 真实验证（2026-08-31 00:56 +08:00）
 
 本轮只验证 D 展示-only 几何和接口边界，不运行 replay 或长时间实验。以下仍为
 `NOT RUN`：
@@ -469,13 +485,15 @@ shadow，不改正式发布。每条路线记录平滑成功率、回退率、�
 M31–M34 的历史实验结果只能作为当前 C 研究边界的 `INHERITED` 背景，不能作为 B 样条
 平滑的验证证据；本轮 display-only 测试也不能作为船舶安全或生产资格证据。
 
-本轮新增 `RUN` 证据为：D display-only focused pytest `25 passed`，Orchestrator 展示策略
-focused pytest `13 passed`，D 新增测试 Ruff 通过，`route_smoothing.js` 和 `app.js` 的
-Node syntax 通过。D 的历史全量测试数、此前 Firefox 证据和 Orchestrator 历史测试数继续
-标记为 `INHERITED`，没有在本轮冒充重跑结果。
+此前展示阶段的 D `25 passed`、Orchestrator `13 passed` 和显示尺度修正的 D `11 passed`
+均为 `INHERITED`；D 的历史全量测试数、此前 Firefox 证据和 Orchestrator 历史测试数也
+继续标记为 `INHERITED`，不得冒充本轮运行结果。
 
-2026-08-31 的显示尺度修正追加了 D 侧 `11 passed` 的路线平滑/旧版入口聚焦测试，Node
-syntax 继续通过；本轮未进行浏览器截图、真实 replay、长时间实验或船舶可执行性验证。
+2026-08-31 当前实现的 `RUN` 证据为：D 路线平滑/导航聚焦测试 `12 passed`，D
+`route_smoothing.js` 与 `app.js` Node syntax 通过，离线 VM 检查确认当前 active route
+由 `22` 个权威 waypoint 生成 `298` 个显示点，船位与航向在转角附近使用曲线；原始折线
+图层默认为隐藏。该证据仅证明 Viewer display/simulation 行为，不证明 C 侧安全约束。
+本次未进行浏览器截图、真实 replay、长时间实验或船舶可执行性验证。
 
 ## 10. 性能分解（2026-08-30 22:46 +08:00）
 
@@ -531,7 +549,7 @@ syntax 继续通过；本轮未进行浏览器截图、真实 replay、长时间
 | 几何坐标 | 使用局部米制坐标，首尾点保持，局部曲线不跨相邻转角 | Node synthetic checks；通过 |
 | 视觉约束 | 有限值、最小显示曲率半径、最大显示偏离和显示点数受限 | Node synthetic checks；通过 |
 | 失败语义 | 非法坐标、重复点、短边、无候选角或曲线约束失败回退原始折线加密 | Node synthetic checks；通过 |
-| 物理语义 | vessel position、heading、completed track 不读平滑后的点 | Viewer source checks；通过 |
+| 仿真呈现语义 | Viewer vessel position、heading、近期轨迹和 completed-track 绘制沿平滑曲线；原始 ETA 仍作时间锚点，异常时回退 timeline；权威 artifact 语义不变 | Viewer source/离线 VM motion checks；通过；仍为 `DISPLAY_ONLY` |
 | 安全/资格 | 不得由显示曲线推出 hard mask、风险、ETA、操纵性或生产资格 | 文档与 metadata 明确；未资格化 |
 
 ## 12. 确定性 / 可复现性（2026-08-30 22:46 +08:00）
@@ -570,13 +588,15 @@ syntax 继续通过；本轮未进行浏览器截图、真实 replay、长时间
 | 55,000 DWT 操纵性研究 | 公开研究 | `REFERENCE_ONLY` | 特定试验条件下的转弯数量级 |
 | Capesize 转弯半径研究 | 公开研究 | `REFERENCE_ONLY` | 舵角相关半径数量级 |
 | IMO MSC.137(76) | 官方标准 | `REFERENCE_ONLY` | 操纵性试验指标，不是路线半径参数 |
-| `work_package_d/viewer/route_smoothing.js` | 展示-only 代码 | `IMPLEMENTED / DISPLAY_ONLY` | 仅把原始路线转换为 Canvas paint coordinates；当前使用可见显示尺度 |
+| `work_package_d/viewer/route_smoothing.js` | 展示-only 代码 | `IMPLEMENTED / DISPLAY_ONLY` | 把原始路线转换为 Canvas paint coordinates；Viewer 运动层复用该曲线，当前使用可见显示尺度 |
 | `work_package_d/web/demo_viewer.html` | 旧版独立展示入口 | `IMPLEMENTED / DISPLAY_ONLY` | 内联 cubic SVG path；不改原始 waypoints 或指标 |
 | `work_package_d/tests/unit/test_route_smoothing.py` | focused 测试 | `UNIT_PASS` | Node synthetic、加载顺序和 authority 分离检查 |
 
 此前展示实现提交：D `efd2ec6ccf38f881ebc39afae195cb9bfdaa36a6`，Orchestrator
-`d22980e816557a16e062fade3e06826aae845e66`；本次可见尺度与旧版入口修正提交为 D
-`66bd4fb4eb3b9333731d6d9e03d970df9d2c00c8`。这些提交均为本地提交，未由本轮 push。
+`d22980e816557a16e062fade3e06826aae845e66`；可见尺度与旧版入口修正提交为 D
+`66bd4fb4eb3b9333731d6d9e03d970df9d2c00c8`。本次曲线主图层、原始折线开关和 Viewer
+仿真曲线运动提交为 D `b9375982ba1b1807ffb7329a68b3829199d144fd`，Orchestrator 说明
+同步提交为 `72d81081695ecebd8b68614e081ef6c05905ed87`。这些提交均为本地提交，未 push。
 
 拟议未来实验 identity 前缀为 `c.route-smoothing.bspline.v1-<digest>`，目前只是命名
 建议，不代表已存在构件。
@@ -612,12 +632,13 @@ B 样条具有局部控制和连续导数的潜力，但当前 C 缺少曲线安
 **Consequences：** 研究会增加路线后处理和风险重采样成本；曲线不能自动继承原始路线指标；
 任何失败必须回退；如果最终需要生产发布，将产生新的合同和 D 消费影响评审。
 
-### 15.2 当前决策（2026-08-31 00:19 +08:00）
+### 15.2 当前决策（2026-08-31 00:56 +08:00）
 
 - R0.1：`COMPLETED`，完成问题定义、参数分层和候选路线选择；
 - R0.3-D/R0.4-D：已实现为 Replay Viewer 与旧版 standalone viewer 的展示-only 局部曲线；
-  原始 waypoint、ETA、metrics、active route、船位和船头方向仍是唯一权威语义；本次仅
-  放大 paint geometry 的可见尺度；
+  Replay Viewer 仿真船位、航向、近期轨迹和 completed-track 绘制沿曲线，原始 waypoint
+  ETA 作为时间锚点；原始 waypoint、ETA、metrics、active route 和 adoption 事件仍是
+  唯一权威语义；
 - R0.5-D：`UNIT_PASS`，D focused pytest、Node syntax、加载/authority 结构检查通过；
 - R0.2：`PLANNED`，尚未运行真实路线统计；
 - R0.3/R0.4 的 C 可执行后处理、风险/硬掩膜/ETA/船舶运动约束：`NOT_IMPLEMENTED`；
