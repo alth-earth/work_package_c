@@ -10,7 +10,7 @@ Scope: 受约束局部三次 B 样条航线平滑的 R0.1 问题定义、展示-
 Canonical For: 工作包 C 航点处航向突变和平滑航线研究的详细定义；从属于核心算法 SSOT
 Canonical Current State: NO
 Branch: research-validation-system
-Last Verified: 2026-08-31 03:26 +08:00
+Last Verified: 2026-08-31 03:45 +08:00
 Related Canonical Docs:
   - CORE_ALGORITHM_IMPROVEMENT_PLAN.md
   - ARCHITECTURE_AND_DECISIONS.md
@@ -717,7 +717,7 @@ motion/export focused tests `20 passed`；D route smoothing focused tests `7 pas
 `compute_ms`、进程耗时等 wall-clock 字段允许变化，但曲线几何 digest、端点、约束结果、
 风险来源身份和失败语义必须稳定。
 
-## 13. 构件 / 溯源（2026-08-31 03:32 +08:00）
+## 13. 构件 / 溯源（2026-08-31 03:45 +08:00）
 
 本轮没有生成新的 real replay/runtime 实验构件；新增 Viewer 源文件、C/Orchestrator research
 sidecar 代码和 focused 测试属于代码构件。R0.2 静态几何产物留在 workspace 根目录
@@ -747,6 +747,10 @@ sidecar 代码和 focused 测试属于代码构件。R0.2 静态几何产物留�
 `66bd4fb4eb3b9333731d6d9e03d970df9d2c00c8`。本次曲线主图层、原始折线开关和 Viewer
 仿真曲线运动提交为 D `b9375982ba1b1807ffb7329a68b3829199d144fd`，Orchestrator 说明
 同步提交为 `72d81081695ecebd8b68614e081ef6c05905ed87`。这些提交均为本地提交，未 push。
+
+本轮研究旁路和文档收束提交为 C `5a9af953ab7d6258ce0d4c9547c77d832e91a0af`、Orchestrator
+`356b9dc9b301029ad7304f98e6b3893186c918c7`、D
+`0d122c359440e1522a2a3724df84b1c7548bfc5f`；这些提交均未 push。
 
 拟议未来实验 identity 前缀为 `c.route-smoothing.bspline.v1-<digest>`，目前只是命名
 建议，不代表已存在构件。

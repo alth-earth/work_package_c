@@ -9,7 +9,7 @@ Applicability: CURRENT
 Scope: C 核心算法现状、证据、正确性边界、改进设计与实施计划
 Canonical For: 工作包 C 核心算法改进实现的首要参考
 Branch: research-validation-system
-Last Verified: 2026-08-31 03:32 +08:00
+Last Verified: 2026-08-31 03:45 +08:00
 Related Canonical Docs:
   - "README.md"
   - "docs/ARCHITECTURE_AND_DECISIONS.md"
@@ -210,6 +210,11 @@ target.maximum_risk    >= R_trace
 | D* Lite/LPA* | 借鉴增量队列和边成本变化更新 | 经典假设不直接覆盖时变 RiskFrame；不能只改名 | 仅作理论参考 |
 | 自适应/非均匀网格 | 在风险梯度/障碍附近细化，均质区域粗化 | 需新的网格版本、cell→RiskFrame 映射和保守聚合合同 | **上一版 2.2.2 对应方向暂不实施** |
 | [受约束局部三次 B 样条航线平滑](ROUTE_SMOOTHING_BSPLINE_PLAN.md) | 对网格 waypoint 的航点处航向突变做局部曲线/可执行性研究；当前已有 D 展示-only 绘制、C geometry-only sidecar 和 C synthetic qualification API | 展示层只改 paint geometry；research sidecar 不改变搜索或合同，C qualifier 只在显式同一 RiskSampler/船模/corridor proof 下运行；真实连续安全、操纵性和资源资格仍未形成；不把 geometry-only 或 synthetic pass 当安全证据 | 独立 `R0`、`RESEARCH_ONLY`；R0.1/R0.2 已完成，R0.3-C/R0.4-C/R0.5-C 已实现并通过 focused/synthetic 门禁但未真实资格化，R0.6/R0.7 当前收束不运行；不属于 P0.2-M35 |
+
+本轮受约束航线平滑研究实现的本地提交为 C `5a9af953ab7d6258ce0d4c9547c77d832e91a0af`、
+Orchestrator `356b9dc9b301029ad7304f98e6b3893186c918c7`、D
+`0d122c359440e1522a2a3724df84b1c7548bfc5f`；均未 push。提交后的 C 研究构件仍只写入
+workspace 根目录 `.runtime/experiments/`，不进入正式数据流。
 
 **2.2.2 暂缓声明：** 上一版编号 2.2.2 所对应的自适应/非均匀网格方案全部保留为后备研究方向，但本轮不实现、不改合同、不引入 PolarRoute/MeshiPhi 的网格依赖。只有当固定网格在 M1/M2 中被重复证据证明为主要瓶颈，且 C 侧无法通过 LTCR-TDA*、缓存或搜索标签改进达到目标，才启动该方向的必要性评审和跨包合同提案。
 
