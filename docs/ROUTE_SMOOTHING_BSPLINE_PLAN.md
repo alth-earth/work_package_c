@@ -59,6 +59,9 @@ SSOT。本文档不能取代 C 核心 SSOT、`cd.route-plan.v2`、四层 v3 或�
   运动。R1 最终结论是 `DISPLAY_ONLY_RETAINED; NO_PRODUCTION_CUTOVER`：语义、视觉和
   有限 cgroup 证据形成，但相对 raw-route 重算的附加 wall-time 门禁失败。第 16 节覆盖
   本文其他位置仍写为 `NOT RUN` 的 R0 历史口径。
+- R2 仅按第 16.5 节允许的新性能命题完成分段归因、prepared raster 和 exact sample cache
+  复核；语义 digest 一致，但冷/暖附加 wall-time 仍约为 raw baseline 的 `132×/67×`，终态
+  `R2_PROFILE_ONLY_PERFORMANCE_GATE_FAIL_NO_PRODUCTION_CUTOVER`。详见第 16.6 节。
 
 **治理和证据依据：** 本文档遵循
 [`AGENT_DOCUMENTATION_RULES.md`](../../arctic_route_governance/standards/AGENT_DOCUMENTATION_RULES.md)
@@ -996,3 +999,48 @@ R1 的权威终态固定为：
 
 重启前仍须说明与 R0/R1、P0.2-M31～M34 的非重复性、预期真实可观测收益、强制 cgroup
 方案和独立 artifact identity。不得只因想让曲线进入生产运动而重复运行同一 R1。
+
+### 16.6 R2 性能归因、ETA 诊断与再次停止（2026-08-31 13:35 +08:00）
+
+R2 只实施第 16.5 节第一项性能命题，不修改 R1/v1/v2 历史 artifact、正式 RoutePlan、生产
+replay 或 D 默认开关。正式构件为：
+
+`/root/my_project/.runtime/experiments/c-r2-route-smoothing-performance-profile-20260831-r3/`
+
+本轮新增内容均保持 research-only：C 的 v2 qualifier 可通过 out-of-band observer 记录候选
+corridor、RiskSampler、ETA 和最终复核分段耗时，计时值不进入 sidecar digest；Orchestrator
+将静态 raster bounds/cell classification 编译为 caller-scoped prepared index；现有
+`ExperimentalRiskSampler` 只以 RiskWindow fingerprint、时间和坐标 IEEE-754 bits 作精确
+bounded-LRU 复用。另新增 ETA drift 逐航段诊断和生产提案准入检查；后者即使所有外部证据
+通过也只允许 `READY_FOR_PRODUCTION_PROPOSAL_NO_PRODUCTION_CUTOVER`，不授权切换。
+
+| 证据 | R2 r3 结果 | Verdict / 边界 |
+|---|---:|---|
+| canonical unprepared profile | 约 `1.537 s` | 分段归因值，observer 开销不作为资格数字 |
+| prepared raster profile | 约 `0.624 s` | raster 重复解析明显下降；语义不变 |
+| cold prepared + exact cache | 约 `0.631 s` | raw median 约 `0.00473 s`，附加 ratio 约 `132.37` |
+| warm prepared + exact cache | median 约 `0.321 s` | 附加 ratio 约 `66.88`；不能替代 cold 资格 |
+| exact sample cache | cold `4513` misses / `79` hits；3 次 warm 后累计 `13855` hits | 无 eviction；production default 未改变 |
+| sidecar digest | canonical/prepared/cached/cold/3 次 warm 全一致 | `PASS_SEMANTIC_DIGEST_MATCH` |
+| cgroup / RSS | `2 GiB / swap 0 / pids 256`；约 `41.27 MiB` | evidence complete，无 OOM/swap；RSS 通过 |
+| wall-time 资格 | `qualified=false` | 冷、暖均远高于预注册 `<=10%` |
+
+profile 显示 R1 的首要可消除热点是每次 corridor 检查重新展开 raster 网格；prepared index
+已将该部分显著降低。剩余冷路径主要由约 `4513` 个唯一风险采样、曲线 ETA/risk integration
+和仍需遍历 prepared cell 的 corridor 检查构成。缓存只减少重复请求，不能消除首次完整安全
+证明，因此本轮不能以 warm-cache 数字制造通过结论。
+
+ETA 诊断确认了一个可复算的部分根因：Viewer route 对同一 22 个 waypoint 发布的距离为约
+`921.3796 km`，当前 qualifier 的 `C_LOCAL_EQUIRECTANGULAR_PATH_METRIC` 重算为约
+`955.6161 km`，距离基准相差约 `34.2366 km`。因此状态为
+`PARTIAL_ROOT_CAUSE_DISTANCE_BASIS_MISMATCH_OBSERVED`；但 Viewer bundle 未声明发布距离方法，
+发布速度模型版本和 wait/replan 调整也未完全绑定，故 `+5061.17 s` 仍标记
+`UNRESOLVED_EXISTING_PUBLISHED_VS_RECOMPUTED_DRIFT`，且继续排除 smoothing attribution。
+
+proposal-readiness 的当前 blocker 固定为：performance gate failed、目标船校准缺失、连续
+corridor proof 缺失、published ETA drift 未完全解决。按预注册顺序，performance 已再次
+失败，故不启动真实船模校准接入、导航级连续走廊接入或生产合同提案；代码只保留这些外部
+证据的严格 fail-closed 准入形状，不生成伪造的 booklet、trial、navigation semantics 或
+continuous proof。R2 权威终态为：
+
+`R2_PROFILE_ONLY_PERFORMANCE_GATE_FAIL_NO_PRODUCTION_CUTOVER`

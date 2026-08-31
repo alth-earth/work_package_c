@@ -144,3 +144,32 @@ def test_v2_final_eta_coverage_failure_is_atomic() -> None:
         "risk_sampling_incomplete",
         "pointwise_manoeuvring_limit_exceeded",
     }
+
+
+def test_v2_stage_observer_is_out_of_band_and_does_not_change_digest() -> None:
+    stages: list[tuple[str, float]] = []
+    observed = build_qualified_route_smoothing_sidecar_v2(
+        _route(),
+        experiment_id="c.route-smoothing.profile.synthetic.v2",
+        risk_sampler=_sampler(),
+        vessel_model=_model(),
+        corridor_validator=_corridor,
+        stage_observer=lambda name, seconds: stages.append((name, seconds)),
+    )
+    canonical = build_qualified_route_smoothing_sidecar_v2(
+        _route(),
+        experiment_id="c.route-smoothing.profile.synthetic.v2",
+        risk_sampler=_sampler(),
+        vessel_model=_model(),
+        corridor_validator=_corridor,
+    )
+
+    assert observed["sidecar_digest"] == canonical["sidecar_digest"]
+    assert stages
+    assert all(seconds >= 0.0 for _, seconds in stages)
+    names = {name for name, _ in stages}
+    assert "geometry_and_candidate_screening" in names
+    assert "candidate_corridor" in names
+    assert "curve_eta_risk_integration" in names
+    assert "raw_eta_risk_integration" in names
+    assert "final_corridor_and_sensitivity" in names

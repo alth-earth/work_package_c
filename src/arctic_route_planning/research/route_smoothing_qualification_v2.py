@@ -9,7 +9,9 @@ and never produces a production qualification.
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Mapping, Sequence
+import time
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from datetime import datetime
 from itertools import pairwise
 from typing import Any
@@ -59,11 +61,24 @@ RasterCorridorValidator = Callable[
     [tuple[SpanHull, ...], tuple[Coordinate, ...], tuple[datetime, ...], float],
     Mapping[str, Any] | bool,
 ]
+StageObserver = Callable[[str, float], None]
 
 PRIMARY_CORRIDOR_MARGIN_M = 500.0
 CORRIDOR_SENSITIVITY_M = (1_000.0, 2_000.0)
 ETA_ABSOLUTE_TOLERANCE_S = 600.0
 ETA_RELATIVE_TOLERANCE = 0.02
+
+
+@contextmanager
+def _timed_stage(observer: StageObserver | None, name: str) -> Iterator[None]:
+    if observer is None:
+        yield
+        return
+    started = time.perf_counter()
+    try:
+        yield
+    finally:
+        observer(name, time.perf_counter() - started)
 
 
 def _route_id(route: Any) -> str | None:
@@ -277,6 +292,7 @@ def build_qualified_route_smoothing_sidecar_v2(
     maximum_sample_count: int = 10_000,
     primary_corridor_margin_m: float = PRIMARY_CORRIDOR_MARGIN_M,
     corridor_sensitivity_m: Sequence[float] = CORRIDOR_SENSITIVITY_M,
+    stage_observer: StageObserver | None = None,
 ) -> dict[str, Any]:
     """Build v2 evidence or atomically return a raw-route fallback sidecar."""
 
@@ -335,25 +351,29 @@ def build_qualified_route_smoothing_sidecar_v2(
         local_points: tuple[Coordinate, ...],
     ) -> CandidateDecision:
         try:
-            candidate_points = _local_distance_to_geo(frame, segment.samples)
-            candidate_times = _candidate_times(
-                segment, local_points, raw_times, raw_distances, frame
-            )
-            corridor = _corridor_evidence(
-                corridor_validator,
-                segment.span_convex_hulls_m,
-                candidate_points,
-                candidate_times,
-                margins[0],
-            )
-            risks = _sample_points(risk_sampler, candidate_points, candidate_times)
+            with _timed_stage(stage_observer, "candidate_parameterization"):
+                candidate_points = _local_distance_to_geo(frame, segment.samples)
+                candidate_times = _candidate_times(
+                    segment, local_points, raw_times, raw_distances, frame
+                )
+            with _timed_stage(stage_observer, "candidate_corridor"):
+                corridor = _corridor_evidence(
+                    corridor_validator,
+                    segment.span_convex_hulls_m,
+                    candidate_points,
+                    candidate_times,
+                    margins[0],
+                )
+            with _timed_stage(stage_observer, "candidate_risk_sampling"):
+                risks = _sample_points(risk_sampler, candidate_points, candidate_times)
             if any(value.hard_mask for value in risks):
                 return CandidateDecision(False, "hard_mask")
-            speeds_kmh = _speed_values(vessel_model, risks)
-            manoeuvring = envelope.evaluate(
-                segment.curvatures_m_inv,
-                tuple(value / 3.6 for value in speeds_kmh),
-            )
+            with _timed_stage(stage_observer, "candidate_speed_and_manoeuvring"):
+                speeds_kmh = _speed_values(vessel_model, risks)
+                manoeuvring = envelope.evaluate(
+                    segment.curvatures_m_inv,
+                    tuple(value / 3.6 for value in speeds_kmh),
+                )
             if not manoeuvring.accepted:
                 return CandidateDecision(
                     False,
@@ -376,11 +396,12 @@ def build_qualified_route_smoothing_sidecar_v2(
     route_points = [
         {"lon": point[0], "lat": point[1]} for point in points
     ]
-    geometry = build_multispan_route_smoothing(
-        route_points,
-        policy=policy,
-        candidate_validator=candidate_validator,
-    )
+    with _timed_stage(stage_observer, "geometry_and_candidate_screening"):
+        geometry = build_multispan_route_smoothing(
+            route_points,
+            policy=policy,
+            candidate_validator=candidate_validator,
+        )
     sidecar["geometry"] = geometry.to_dict()
     sidecar["curve_digest"] = geometry.curve_digest
     sidecar["degree"] = 3
@@ -411,35 +432,38 @@ def build_qualified_route_smoothing_sidecar_v2(
         hull for segment in geometry.segments for hull in segment.span_convex_hulls_m
     )
     try:
-        curve_times, curve_risks, curve_speeds, iterations = _integrate_path(
-            risk_sampler,
-            vessel_model,
-            geometry.points,
-            provisional_times,
-            max_iterations=eta_max_iterations,
-            convergence_tolerance_s=eta_convergence_tolerance_s,
-        )
-        raw_final_times, raw_risks, raw_speeds, raw_iterations = _integrate_path(
-            risk_sampler,
-            vessel_model,
-            points,
-            raw_times,
-            max_iterations=eta_max_iterations,
-            convergence_tolerance_s=eta_convergence_tolerance_s,
-        )
-        corridor_primary = _corridor_evidence(
-            corridor_validator,
-            hulls,
-            geometry.points,
-            curve_times,
-            margins[0],
-        )
-        corridor_sensitivity = [
-            _corridor_observation(
-                corridor_validator, hulls, geometry.points, curve_times, margin
+        with _timed_stage(stage_observer, "curve_eta_risk_integration"):
+            curve_times, curve_risks, curve_speeds, iterations = _integrate_path(
+                risk_sampler,
+                vessel_model,
+                geometry.points,
+                provisional_times,
+                max_iterations=eta_max_iterations,
+                convergence_tolerance_s=eta_convergence_tolerance_s,
             )
-            for margin in margins[1:]
-        ]
+        with _timed_stage(stage_observer, "raw_eta_risk_integration"):
+            raw_final_times, raw_risks, raw_speeds, raw_iterations = _integrate_path(
+                risk_sampler,
+                vessel_model,
+                points,
+                raw_times,
+                max_iterations=eta_max_iterations,
+                convergence_tolerance_s=eta_convergence_tolerance_s,
+            )
+        with _timed_stage(stage_observer, "final_corridor_and_sensitivity"):
+            corridor_primary = _corridor_evidence(
+                corridor_validator,
+                hulls,
+                geometry.points,
+                curve_times,
+                margins[0],
+            )
+            corridor_sensitivity = [
+                _corridor_observation(
+                    corridor_validator, hulls, geometry.points, curve_times, margin
+                )
+                for margin in margins[1:]
+            ]
         if any(value.hard_mask for value in curve_risks):
             raise _EvaluationFailure(
                 "hard_mask",
@@ -612,5 +636,6 @@ __all__ = [
     "CORRIDOR_SENSITIVITY_M",
     "PRIMARY_CORRIDOR_MARGIN_M",
     "RasterCorridorValidator",
+    "StageObserver",
     "build_qualified_route_smoothing_sidecar_v2",
 ]
