@@ -228,10 +228,18 @@ def _anchored_motion(
     anchor_indices = find_anchor_indices(raw_points, geometry.points)
     if anchor_indices is None:
         raise _QualificationFailure("non_monotonic_curve_anchors")
-    anchored_points = list(geometry.points)
-    for raw_point, sample_index in zip(raw_points, anchor_indices, strict=True):
-        anchored_points[sample_index] = raw_point
-    authoritative_points = tuple(anchored_points)
+    # An internal raw waypoint is a temporal/arc-length anchor, not a point
+    # that belongs to the smoothed geometry.  Replacing the nearest curve
+    # sample with the raw corner creates a path of ``curve -> vertex ->
+    # curve`` and can make the vessel visibly reverse at a turn.  The curve's
+    # internal sample is therefore authoritative for geometry.
+    # Preserve only the exact route endpoints (the local-frame inverse can
+    # otherwise introduce ~1e-14 degree drift); internal anchors keep the
+    # producer geometry and only receive the authoritative ETA below.
+    authoritative_points = list(geometry.points)
+    authoritative_points[0] = raw_points[0]
+    authoritative_points[-1] = raw_points[-1]
+    authoritative_points = tuple(authoritative_points)
     _, _, curve_distances = path_metric(authoritative_points)
     anchor_distances = tuple(curve_distances[index] for index in anchor_indices)
     times = tuple(

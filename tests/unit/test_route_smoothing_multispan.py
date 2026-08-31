@@ -4,6 +4,9 @@ import math
 
 import pytest
 
+from arctic_route_planning.motion.geometry import (
+    build_multispan_route_smoothing as build_formal_multispan_route_smoothing,
+)
 from arctic_route_planning.research.route_smoothing_multispan import (
     CLAMPED_CUBIC_4_SPAN_KNOT_VECTOR,
     CONTROL_POINT_COUNT,
@@ -13,6 +16,9 @@ from arctic_route_planning.research.route_smoothing_multispan import (
     cox_de_boor_basis,
     evaluate_clamped_cubic_bspline,
     evaluate_clamped_cubic_bspline_derivatives,
+)
+from arctic_route_planning.research.route_smoothing_v2 import (
+    build_multispan_route_smoothing as build_research_multispan_route_smoothing,
 )
 
 
@@ -109,6 +115,63 @@ def test_endpoints_are_g2_compatible_with_adjacent_straight_segments() -> None:
     assert abs(start_second[1]) == pytest.approx(0.0, abs=1.0e-9)
     assert abs(end_second[0]) == pytest.approx(0.0, abs=1.0e-9)
     assert curve.evidence.endpoint_g2_pass is True
+
+
+@pytest.mark.parametrize(
+    ("entry", "vertex", "exit"),
+    [
+        ((0.0, 0.0), (10_000.0, 0.0), (10_000.0, 10_000.0)),
+        ((0.0, 0.0), (10_000.0, 0.0), (10_000.0, -10_000.0)),
+    ],
+)
+def test_local_corner_has_one_turn_direction_without_inflection(
+    entry: tuple[float, float],
+    vertex: tuple[float, float],
+    exit: tuple[float, float],
+) -> None:
+    curve = build_local_corner_curve(
+        entry,
+        vertex,
+        exit,
+        2_000.0,
+        turn_direction_safe=True,
+    )
+    signed_crosses = []
+    for parameter in curve.parameters:
+        first, second = curve.derivatives(parameter)
+        signed_crosses.append(first[0] * second[1] - first[1] * second[0])
+    scale = max(abs(value) for value in signed_crosses)
+    observed_signs = {
+        math.copysign(1.0, value)
+        for value in signed_crosses
+        if abs(value) > scale * 1.0e-8
+    }
+    incoming = (vertex[0] - entry[0], vertex[1] - entry[1])
+    outgoing = (exit[0] - vertex[0], exit[1] - vertex[1])
+    expected_sign = math.copysign(
+        1.0, incoming[0] * outgoing[1] - incoming[1] * outgoing[0]
+    )
+    assert observed_signs == {expected_sign}
+
+
+def test_formal_facade_uses_safe_controls_without_rewriting_research_shape() -> None:
+    points = [
+        {"lon": 0.0, "lat": 0.0},
+        {"lon": 1.0, "lat": 0.0},
+        {"lon": 1.0, "lat": 1.0},
+    ]
+    research = build_research_multispan_route_smoothing(points)
+    formal = build_formal_multispan_route_smoothing(points)
+
+    assert (
+        research.segments[0].curve.control_points[3]
+        != formal.segments[0].curve.control_points[3]
+    )
+    assert formal.segments[0].curve.control_points[3] == pytest.approx(
+        formal.segments[0].curve.vertex
+    )
+    assert research.segments[0].curve.evidence.endpoint_g2_pass is True
+    assert formal.segments[0].curve.evidence.endpoint_g2_pass is True
 
 
 @pytest.mark.parametrize(

@@ -284,6 +284,34 @@ def _curvature(first: Coordinate, second: Coordinate) -> float:
     return value
 
 
+def _validate_turn_direction(
+    first_derivatives: Sequence[Coordinate],
+    second_derivatives: Sequence[Coordinate],
+    expected_turn_cross: float,
+) -> None:
+    """Reject a local curve that turns back through an inflection.
+
+    Endpoint curvature is intentionally zero, so a few sampled cross products
+    are expected to be numerically zero.  The non-zero samples must nevertheless
+    keep the sign of the raw incoming-to-outgoing turn.  This is a geometric
+    safety invariant, not merely a rendering preference: a sign change means
+    turn -> counter-turn -> turn and produces the inward dent seen in the old
+    midpoint-control implementation.
+    """
+
+    cross_products = tuple(
+        _cross(first, second)
+        for first, second in zip(first_derivatives, second_derivatives, strict=True)
+    )
+    scale = max(abs(value) for value in cross_products)
+    if scale <= _GEOMETRY_EPSILON_M:
+        raise ValueError("constructed B-spline has no measurable turn")
+    expected_sign = 1.0 if expected_turn_cross > 0.0 else -1.0
+    threshold = scale * 1.0e-8
+    if any(expected_sign * value < -threshold for value in cross_products):
+        raise ValueError("constructed B-spline changes turn direction")
+
+
 def _sample_parameters(sample_count: int) -> tuple[float, ...]:
     if not isinstance(sample_count, int) or isinstance(sample_count, bool) or sample_count < 5:
         raise ValueError("sample_count must be an integer of at least five")
@@ -516,18 +544,20 @@ def _make_controls(
     vertex: Coordinate,
     exit: Coordinate,
     trim_m: float,
+    *,
+    turn_direction_safe: bool = False,
 ) -> tuple[Coordinate, ...]:
     incoming = _unit(_sub(vertex, entry), "incoming segment")
     outgoing = _unit(_sub(exit, vertex), "outgoing segment")
     spacing = trim_m / 3.0
     curve_entry = _add(vertex, _multiply(incoming, -trim_m))
     curve_exit = _add(vertex, _multiply(outgoing, trim_m))
-    # P3 is the only control point not constrained by endpoint G2.  Keeping
-    # it at the raw vertex makes the curve mathematically smooth while still
-    # hugging the visual sharp corner.  The tangent-point chord midpoint
-    # creates a genuine local corner cut without weakening the first/last
-    # three-point collinearity proof.
-    corner_cut = _multiply(_add(curve_entry, curve_exit), 0.5)
+    # P3 is the only control point not constrained by endpoint G2.  The
+    # historical research sidecar keeps it at the tangent-point midpoint to
+    # preserve its frozen digest.  The formal motion facade opts into the raw
+    # vertex, which avoids the midpoint's turn -> counter-turn -> turn
+    # inflection and its visually inward dent.
+    corner_cut = vertex if turn_direction_safe else _multiply(_add(curve_entry, curve_exit), 0.5)
     return (
         curve_entry,
         _add(curve_entry, _multiply(incoming, spacing)),
@@ -548,6 +578,7 @@ def build_local_corner_curve(
     trim_m: float | None = None,
     radius_m: float | None = None,
     sample_count: int = 65,
+    turn_direction_safe: bool = False,
 ) -> LocalCornerCurve:
     """Construct a deterministic local four-span cubic corner.
 
@@ -592,7 +623,13 @@ def build_local_corner_curve(
     if trim >= 0.5 * min(incoming_length, outgoing_length):
         raise ValueError("trim must leave a local window on both adjacent segments")
 
-    controls = _make_controls(entry_point, vertex_point, exit_point, trim)
+    controls = _make_controls(
+        entry_point,
+        vertex_point,
+        exit_point,
+        trim,
+        turn_direction_safe=turn_direction_safe,
+    )
     spline = MultiSpanCubicBSpline(controls)
     parameters = _sample_parameters(sample_count)
     evaluations = tuple(
@@ -601,6 +638,12 @@ def build_local_corner_curve(
     samples = tuple(item[0] for item in evaluations)
     first_derivatives = tuple(item[1] for item in evaluations)
     second_derivatives = tuple(item[2] for item in evaluations)
+    if turn_direction_safe:
+        _validate_turn_direction(
+            first_derivatives,
+            second_derivatives,
+            _cross(incoming_vector, outgoing_vector),
+        )
     curvatures = tuple(
         _curvature(first, second)
         for first, second in zip(first_derivatives, second_derivatives, strict=True)

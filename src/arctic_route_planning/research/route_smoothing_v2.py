@@ -157,8 +157,14 @@ def build_multispan_route_smoothing(
     *,
     policy: RouteSmoothingPolicy | None = None,
     candidate_validator: MultiSpanCandidateValidator | None = None,
+    turn_direction_safe: bool = False,
 ) -> MultiSpanRouteResult:
-    """Build a deterministic research geometry without mutating the route."""
+    """Build deterministic geometry without mutating the route.
+
+    The default retains the frozen R1 research-sidecar control construction.
+    The formal motion facade opts into ``turn_direction_safe`` so its producer
+    geometry rejects local inflections before any contract artifact is built.
+    """
 
     chosen = policy or RouteSmoothingPolicy()
     raw_points = _normalise_points(points)
@@ -199,6 +205,7 @@ def build_multispan_route_smoothing(
                     sample_count=_sample_count(
                         radius * math.tan(candidate.angle_rad / 2.0), chosen
                     ),
+                    turn_direction_safe=turn_direction_safe,
                 )
             except ValueError:
                 last_reason = "geometry_constraint"

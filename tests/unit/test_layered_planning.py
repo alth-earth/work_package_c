@@ -366,9 +366,27 @@ def test_route_motion_set_qualifies_curves_and_keeps_short_layer_raw() -> None:
             record.waypoint_anchors, bundle.recommended.waypoints, strict=True
         ):
             sample = record.motion_samples[anchor.motion_sample_index]
-            assert (sample.longitude, sample.latitude) == (
-                waypoint.longitude, waypoint.latitude
+            assert sample.eta == waypoint.eta
+            assert anchor.arc_length_m >= 0.0
+        for previous, current in zip(
+            record.motion_samples, record.motion_samples[1:], strict=False
+        ):
+            assert (previous.longitude, previous.latitude) != (
+                current.longitude,
+                current.latitude,
             )
+        # An internal curve anchor must stay on the B-spline.  Replacing it
+        # with the raw corner would produce curve -> vertex -> curve and a
+        # visible reverse jump at the turn.
+        if record.mode.value == "CURVE":
+            for anchor, waypoint in zip(
+                record.waypoint_anchors[1:-1], bundle.recommended.waypoints[1:-1], strict=True
+            ):
+                sample = record.motion_samples[anchor.motion_sample_index]
+                assert (sample.longitude, sample.latitude) != (
+                    waypoint.longitude,
+                    waypoint.latitude,
+                )
     assert route_motion_set_from_dict(route_motion_set_to_dict(motion_set)) == motion_set
 
 

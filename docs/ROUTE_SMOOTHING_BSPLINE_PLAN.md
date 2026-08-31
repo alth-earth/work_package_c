@@ -1085,8 +1085,18 @@ production 只指当前 C→Orchestrator→D 工程仿真发布链，不表示�
   raw waypoint/timeline。research sidecar 仍只在研究视图显式启用，不是生产 fallback。
 
 正式 motion 直接锚定原 RoutePlan waypoint ETA，不发布新 ETA，也不把第 16 节约 `5061 s`
-published-vs-recomputed 诊断归因于曲线。C 在所有 anchor sample 上恢复权威 waypoint 的精确
-经纬度，避免局部坐标反投影的约 `1e-14` 浮点漂移触发跨语言身份误判。
+published-vs-recomputed 诊断归因于曲线。内部 waypoint 只记录其在平滑曲线上的单调最近
+sample、权威 ETA 和弧长位置，不把不属于 B 样条的原始转角强行写回 sample；否则会形成
+`curve → raw vertex → curve` 的回跳。起点和终点仍由 producer 保持与 RoutePlan 精确一致，
+避免局部坐标反投影的约 `1e-14` 浮点漂移触发跨语言身份误判。
+
+转弯控制点还受一个明确的几何 fail-closed 约束：局部 B 样条的解析一、二阶导数叉积
+在忽略端点零曲率的数值零点后，必须始终保持原始入射段到出射段的转向符号。旧实现曾
+把唯一未受端点 G2 约束的中央控制点放在两切点弦中点；这虽然保留了端点 G2，却会在
+普通转角中产生 `turn → counter-turn → turn` 的反向曲率，正是 Viewer 中看到的短暂内凹。
+当前正式实现将该中央控制点保留在 raw vertex，并在候选生成时显式拒绝任何符号变化；
+拒绝时只生成 `RAW_PASSTHROUGH`，不得发布为 `CURVE`。因此“C2/G2 连续”不再被误认为
+“转向方向正确”，两者均是正式 motion 的独立几何门禁。
 
 ### 17.3 当前工程证据
 
