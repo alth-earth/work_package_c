@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -412,10 +413,331 @@ def _fig_funnel(english: bool, out: Path) -> None:
     print(f"wrote {fig_path} and {fig_path.with_suffix('.svg')}")
 
 
+def _load_run_documents(root: Path) -> dict[str, dict[str, Any]]:
+    """Load the raw comparison.json artefacts for per-step figures.
+
+    Returns a mapping ``"<run>|<objective>|<algorithm>" -> raw record``.  Only
+    v2 artefacts carry the per-step sequences these figures need; v1 artefacts
+    are skipped silently.
+    """
+    documents: dict[str, dict[str, Any]] = {}
+    for directory in sorted(p for p in root.iterdir() if p.is_dir()):
+        candidate = directory / "comparison.json"
+        if not candidate.is_file():
+            continue
+        document = json.loads(candidate.read_text(encoding="utf-8"))
+        if document.get("schema_version") != "c.algorithm-comparison.v2":
+            continue
+        label = directory.name.removeprefix("c-algorithm-comparison-")
+        for record in document.get("raw", []):
+            key = f"{label}|{record['objective']}|{record['algorithm']}"
+            documents[key] = record
+    return documents
+
+
+def _fig_runtime_scale_log(rows: list[dict[str, Any]], english: bool, out: Path) -> None:
+    """Runtime (median wall ms) vs synthetic grid size, log-log."""
+    synth = [
+        r for r in rows if r.get("input_kind") == "synthetic" and r.get("baseline") == "dijkstra"
+    ]
+    if not synth:
+        return
+    _prepare(synth, ("grid_cells",), ("ours_wall_ms", "baseline_wall_ms"))
+    by_size: dict[tuple[str, int], dict[str, dict[str, Any]]] = defaultdict(dict)
+    for r in synth:
+        key = (r["grid_size"], r["grid_cells"] or 0)
+        by_size[key][r["objective"]] = r
+    sizes = sorted(by_size, key=lambda k: (k[1], k[0]))
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    markers = {"fastest": "o", "low_risk": "s", "recommended": "^"}
+    labels = OBJECTIVE_LABELS_EN if english else OBJECTIVE_LABELS_ZH
+    ours_label = "A* (ours)" if english else "本文 A*"
+    dij_label = "Dijkstra"
+    for obj in OBJECTIVES:
+        ours_x = [by_size[k].get(obj, {}).get("grid_cells") for k in sizes]
+        ours_y = [by_size[k].get(obj, {}).get("ours_wall_ms") for k in sizes]
+        dij_x = [by_size[k].get(obj, {}).get("grid_cells") for k in sizes]
+        dij_y = [by_size[k].get(obj, {}).get("baseline_wall_ms") for k in sizes]
+        ours_x = [v for v in ours_x if v]
+        ours_y = [v for v in ours_y if v is not None]
+        dij_x = [v for v in dij_x if v]
+        dij_y = [v for v in dij_y if v is not None]
+        ax.plot(
+            ours_x, ours_y, marker=markers[obj], linewidth=1.5, label=f"{labels[obj]} {ours_label}"
+        )
+        ax.plot(
+            dij_x,
+            dij_y,
+            marker=markers[obj],
+            linewidth=1.5,
+            linestyle="--",
+            alpha=0.7,
+            label=f"{labels[obj]} {dij_label}",
+        )
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlabel("Grid cells (log)" if english else "网格格点数（对数）")
+    ax.set_ylabel("Runtime / ms (log)" if english else "运行时间 / ms（对数）")
+    ax.set_title("Runtime scaling (log-log)" if english else "运行时间随规模变化（双对数）")
+    ax.legend(fontsize=8, ncol=2, loc="upper left", frameon=False)
+    fig_path = out / ("runtime-scale-log.png" if english else "fig-runtime-scale-log.png")
+    fig.savefig(fig_path)
+    fig.savefig(fig_path.with_suffix(".svg"))
+    plt.close(fig)
+    print(f"wrote {fig_path} and {fig_path.with_suffix('.svg')}")
+
+
+def _fig_runtime_cost_scatter(runs: dict[str, dict[str, Any]], english: bool, out: Path) -> None:
+    """Scatter: runtime (x) vs total cost (y), real 24h inputs.
+
+    Proves that the faster algorithm does not sacrifice solution cost.  Cost
+    lives in the raw JSON records, not the CSV, so this figure needs the v2
+    artefacts loaded via ``--experiments-root``.
+    """
+    if not runs:
+        print("skipping runtime-cost scatter: no v2 artefacts")
+        return
+    real_keys = [k for k in runs if ("holdout" in k or "development" in k) and "|recommended|" in k]
+    if not real_keys:
+        return
+    fig, ax = plt.subplots(figsize=(8, 5))
+    markers = {"time_dependent_astar": "o", "dijkstra": "s", "static_field": "^", "risk_blind": "D"}
+    legend_en = {
+        "time_dependent_astar": "A* (ours)",
+        "dijkstra": "Dijkstra",
+        "static_field": "Static field",
+        "risk_blind": "Risk-blind",
+    }
+    legend_zh = {
+        "time_dependent_astar": "本文 A*",
+        "dijkstra": "Dijkstra",
+        "static_field": "静态场",
+        "risk_blind": "风险无关",
+    }
+    legend = legend_en if english else legend_zh
+    for key in real_keys:
+        run_label, obj, _ = key.split("|")
+        for algo in ("time_dependent_astar", "dijkstra", "static_field", "risk_blind"):
+            record = runs.get(f"{run_label}|{obj}|{algo}")
+            if not record:
+                continue
+            x = record.get("wall_ms")
+            y = record["route"].get("total_cost_hours")
+            if x is None or y is None:
+                continue
+            ax.scatter(
+                x,
+                y,
+                marker=markers[algo],
+                s=100,
+                color={
+                    "time_dependent_astar": "#1f77b4",
+                    "dijkstra": "#ff7f0e",
+                    "static_field": "#2ca02c",
+                    "risk_blind": "#d62728",
+                }[algo],
+                label=legend[algo] if key == real_keys[0] else None,
+            )
+    ax.set_xscale("log")
+    ax.set_xlabel("Runtime / ms" if english else "运行时间 / ms")
+    ax.set_ylabel("Total cost / hours" if english else "总代价 / 小时")
+    ax.set_title(
+        "Runtime vs total cost (real 24h)" if english else "运行时间 vs 总代价（真实 24h）"
+    )
+    ax.legend(fontsize=9, loc="upper right", frameon=False)
+    fig_path = out / ("runtime-cost.png" if english else "fig-runtime-cost.png")
+    fig.savefig(fig_path)
+    fig.savefig(fig_path.with_suffix(".svg"))
+    plt.close(fig)
+    print(f"wrote {fig_path} and {fig_path.with_suffix('.svg')}")
+
+
+def _fig_runtime_risk_scatter(rows: list[dict[str, Any]], english: bool, out: Path) -> None:
+    """Scatter: runtime (x) vs max edge risk (y), real 24h inputs."""
+    real = [r for r in rows if r.get("input_kind") == "real" and r.get("baseline") == "dijkstra"]
+    if not real:
+        return
+    _prepare(real, (), ("ours_wall_ms", "baseline_wall_ms", "ours_max_risk", "baseline_max_risk"))
+    fig, ax = plt.subplots(figsize=(8, 5))
+    markers = {"fastest": "o", "low_risk": "s", "recommended": "^"}
+    labels = OBJECTIVE_LABELS_EN if english else OBJECTIVE_LABELS_ZH
+    for obj in OBJECTIVES:
+        cells = [r for r in real if r["objective"] == obj]
+        ox = [r["ours_wall_ms"] for r in cells if r.get("ours_wall_ms")]
+        oy = [r["ours_max_risk"] for r in cells if r.get("ours_max_risk")]
+        bx = [r["baseline_wall_ms"] for r in cells if r.get("baseline_wall_ms")]
+        by = [r["baseline_max_risk"] for r in cells if r.get("baseline_max_risk")]
+        ax.scatter(ox, oy, marker=markers[obj], s=90, label=f"{labels[obj]} A*")
+        ax.scatter(bx, by, marker=markers[obj], s=90, alpha=0.4, label=f"{labels[obj]} Dijkstra")
+    ax.set_xscale("log")
+    ax.set_xlabel("Runtime / ms" if english else "运行时间 / ms")
+    ax.set_ylabel("Max edge risk" if english else "最大边风险")
+    ax.set_title(
+        "Runtime vs max risk (real 24h)" if english else "运行时间 vs 最大风险（真实 24h）"
+    )
+    ax.legend(fontsize=8, ncol=2, loc="upper right", frameon=False)
+    fig_path = out / ("runtime-risk.png" if english else "fig-runtime-risk.png")
+    fig.savefig(fig_path)
+    fig.savefig(fig_path.with_suffix(".svg"))
+    plt.close(fig)
+    print(f"wrote {fig_path} and {fig_path.with_suffix('.svg')}")
+
+
+def _fig_risk_timeseries(runs: dict[str, dict[str, Any]], english: bool, out: Path) -> None:
+    """Per-step risk time series on real 24h inputs.
+
+    Reads the per-step ``step_edge_risk_score`` sequences captured in v2
+    artefacts.  One subplot per (run, objective); algorithms as line colours.
+    """
+    if not runs:
+        print("skipping risk time-series: no v2 artefacts")
+        return
+    # Pick real-input runs only, recommended objective.
+    real_keys = [k for k, v in runs.items() if "holdout" in k or "development" in k]
+    real_keys = [k for k in real_keys if "|recommended|" in k]
+    if not real_keys:
+        return
+    palette = {
+        "time_dependent_astar": "#1f77b4",
+        "dijkstra": "#ff7f0e",
+        "static_field": "#2ca02c",
+        "risk_blind": "#d62728",
+    }
+    legend_en = {
+        "time_dependent_astar": "A* (ours)",
+        "dijkstra": "Dijkstra",
+        "static_field": "Static field",
+        "risk_blind": "Risk-blind",
+    }
+    legend_zh = {
+        "time_dependent_astar": "本文 A*",
+        "dijkstra": "Dijkstra",
+        "static_field": "静态场",
+        "risk_blind": "风险无关",
+    }
+    legend = legend_en if english else legend_zh
+    n = len(real_keys)
+    fig, axes = plt.subplots(1, n, figsize=(4.5 * n, 5.0), sharey=False)
+    if n == 1:
+        axes = [axes]
+    for ax, key in zip(axes, real_keys, strict=False):
+        run_label, obj, _ = key.split("|")
+        for algo in ("time_dependent_astar", "dijkstra", "static_field", "risk_blind"):
+            lookup = f"{run_label}|{obj}|{algo}"
+            record = runs.get(lookup)
+            if not record:
+                continue
+            risks = record["route"].get("step_edge_risk_score", [])
+            if not risks:
+                continue
+            xs = list(range(1, len(risks) + 1))
+            ax.plot(
+                xs,
+                risks,
+                marker="o",
+                markersize=4,
+                linewidth=1.5,
+                color=palette[algo],
+                label=legend[algo],
+            )
+        ax.set_xlabel("Step index" if english else "航段序号")
+        ax.set_ylabel("Edge risk" if english else "边风险")
+        ax.set_title(f"{run_label} / {obj}")
+        ax.legend(fontsize=8, loc="upper left", frameon=False)
+    fig.suptitle(
+        "Per-step edge risk on real 24h inputs" if english else "真实 24h 输入上的逐段风险序列"
+    )
+    fig.tight_layout(rect=(0, 0, 1, 0.94))
+    fig_path = out / ("risk-timeseries.png" if english else "fig-risk-timeseries.png")
+    fig.savefig(fig_path)
+    fig.savefig(fig_path.with_suffix(".svg"))
+    plt.close(fig)
+    print(f"wrote {fig_path} and {fig_path.with_suffix('.svg')}")
+
+
+def _fig_risk_distribution(runs: dict[str, dict[str, Any]], english: bool, out: Path) -> None:
+    """Box-and-whisker of per-step edge risk, real 24h inputs.
+
+    Each algorithm contributes one box per (run, objective).  When n=1 the
+    box is degenerate (a single point) and is annotated accordingly.
+    """
+    if not runs:
+        print("skipping risk distribution: no v2 artefacts")
+        return
+    real_keys = [
+        k
+        for k, v in runs.items()
+        if ("holdout" in k or "development" in k) and "|recommended|" in k
+    ]
+    if not real_keys:
+        return
+    palette = {
+        "time_dependent_astar": "#1f77b4",
+        "dijkstra": "#ff7f0e",
+        "static_field": "#2ca02c",
+        "risk_blind": "#d62728",
+    }
+    legend_en = {
+        "time_dependent_astar": "A* (ours)",
+        "dijkstra": "Dijkstra",
+        "static_field": "Static field",
+        "risk_blind": "Risk-blind",
+    }
+    legend_zh = {
+        "time_dependent_astar": "本文 A*",
+        "dijkstra": "Dijkstra",
+        "static_field": "静态场",
+        "risk_blind": "风险无关",
+    }
+    legend = legend_en if english else legend_zh
+    fig, axes = plt.subplots(1, len(real_keys), figsize=(7 * len(real_keys), 4.5), sharey=False)
+    if len(real_keys) == 1:
+        axes = [axes]
+    for ax, key in zip(axes, real_keys, strict=False):
+        run_label, obj, _ = key.split("|")
+        data: list[list[float]] = []
+        labels: list[str] = []
+        colours: list[str] = []
+        for algo in ("time_dependent_astar", "dijkstra", "static_field", "risk_blind"):
+            record = runs.get(f"{run_label}|{obj}|{algo}")
+            if not record:
+                continue
+            risks = record["route"].get("step_edge_risk_score", [])
+            if not risks:
+                continue
+            data.append(risks)
+            labels.append(legend[algo])
+            colours.append(palette[algo])
+        bp = ax.boxplot(data, tick_labels=labels, patch_artist=True, showmeans=True)
+        for patch, colour in zip(bp["boxes"], colours, strict=False):
+            patch.set_facecolor(colour)
+            patch.set_alpha(0.6)
+        ax.set_ylabel("Edge risk distribution" if english else "边风险分布")
+        ax.set_title(f"{run_label} / {obj}")
+    fig.suptitle(
+        "Per-step risk distribution on real 24h inputs"
+        if english
+        else "真实 24h 输入上的逐段风险分布"
+    )
+    fig.tight_layout(rect=(0, 0, 1, 0.94))
+    fig_path = out / ("risk-distribution.png" if english else "fig-risk-distribution.png")
+    fig.savefig(fig_path)
+    fig.savefig(fig_path.with_suffix(".svg"))
+    plt.close(fig)
+    print(f"wrote {fig_path} and {fig_path.with_suffix('.svg')}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--csv", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument(
+        "--experiments-root",
+        type=Path,
+        default=None,
+        help="root containing per-run comparison.json; required for per-step figures",
+    )
     parser.add_argument(
         "--english",
         action="store_true",
@@ -433,6 +755,8 @@ def main() -> int:
     if not rows:
         raise SystemExit(f"no rows in {args.csv}")
 
+    runs = _load_run_documents(args.experiments_root) if args.experiments_root is not None else {}
+
     variants = [False] if not (args.english or args.both) else []
     if args.english:
         variants.append(True)
@@ -448,6 +772,11 @@ def main() -> int:
         _fig_risk(rows, english, args.output_dir)
         _fig_speedup(rows, english, args.output_dir)
         _fig_funnel(english, args.output_dir)
+        _fig_runtime_scale_log(rows, english, args.output_dir)
+        _fig_runtime_cost_scatter(runs, english, args.output_dir)
+        _fig_runtime_risk_scatter(rows, english, args.output_dir)
+        _fig_risk_timeseries(runs, english, args.output_dir)
+        _fig_risk_distribution(runs, english, args.output_dir)
     return 0
 
 

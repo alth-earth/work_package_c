@@ -125,7 +125,7 @@ def _meta(doc: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-SCHEMA_VERSION = "c.algorithm-comparison.v1"
+SCHEMA_VERSIONS = ("c.algorithm-comparison.v1", "c.algorithm-comparison.v2")
 DEFAULT_RUN_PREFIX = "c-algorithm-comparison-"
 
 
@@ -140,7 +140,7 @@ def _load_runs(args: argparse.Namespace) -> list[tuple[str, dict[str, Any]]]:
     skipped: list[str] = []
 
     def accept(label: str, document: dict[str, Any], origin: str) -> None:
-        if document.get("schema_version") != SCHEMA_VERSION:
+        if document.get("schema_version") not in SCHEMA_VERSIONS:
             skipped.append(f"{origin} (schema={document.get('schema_version')!r})")
             return
         runs.append((label, document))

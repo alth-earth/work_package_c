@@ -64,7 +64,7 @@ from arctic_route_planning.planners import PlanningRequest, TimeDependentAStar
 from arctic_route_planning.profiling import SyntheticProfileConfig
 from arctic_route_planning.risk import RiskSampler
 
-SCHEMA_VERSION = "c.algorithm-comparison.v1"
+SCHEMA_VERSION = "c.algorithm-comparison.v2"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 OBJECTIVES = tuple(ObjectiveMode)
 
@@ -330,6 +330,16 @@ def _run_one(
             "average_edge_risk": avg_risk,
             "maximum_edge_risk": max_risk,
             "nodes": [list(node) for node in result.nodes],
+            # Per-step sequences (v2): consumed by the Chapter 4 risk
+            # time-series and risk-distribution figures.  Kept flat for easy
+            # downstream CSV/SVG plotting; the ETA is serialised as a Unix
+            # timestamp (seconds) so callers never have to parse ISO strings.
+            "step_eta_unix": [int(step.eta.timestamp()) for step in steps],
+            "step_edge_risk_score": [step.edge_risk_score for step in steps],
+            "step_edge_maximum_risk": [step.edge_maximum_risk for step in steps],
+            "step_edge_distance_km": [step.edge_distance_km for step in steps],
+            "step_longitude": [step.longitude for step in steps],
+            "step_latitude": [step.latitude for step in steps],
         },
     }
 
