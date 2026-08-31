@@ -22,6 +22,22 @@ attributable to the algorithm and not to a weaker model.
                                 (every frame replaced by the departure frame).
                                 This represents the conventional practice of
                                 planning against current conditions only.
+
+The first three are **search-strategy** baselines: they share one objective
+function with ours, so search effort and total cost are directly comparable.
+
+Selectable via ``--algorithm`` but deliberately kept out of ``ALGORITHMS``:
+
+  * ``risk_blind``            - the same search and the same temporal field, but
+                                with an objective that prices travel time and
+                                distance while assigning zero weight to ice risk
+                                and forecast uncertainty.  This models the
+                                conventional practice of geometry/speed-driven
+                                routing.  Because the objective function itself
+                                differs, cost and search-efficiency deltas are
+                                **not** advantage claims for this baseline; only
+                                the realised route qualities (risk, travel time,
+                                distance) are comparable.
 """
 
 from __future__ import annotations
@@ -42,7 +58,7 @@ from typing import Any
 
 from arctic_route_planning import profiling as synthetic_profiling
 from arctic_route_planning.cost import VesselPerformanceModel
-from arctic_route_planning.domain.models import ObjectiveMode
+from arctic_route_planning.domain.models import CostWeights, ObjectiveMode, PlannerConfig
 from arctic_route_planning.grid import RegularGrid
 from arctic_route_planning.planners import PlanningRequest, TimeDependentAStar
 from arctic_route_planning.profiling import SyntheticProfileConfig
@@ -51,7 +67,32 @@ from arctic_route_planning.risk import RiskSampler
 SCHEMA_VERSION = "c.algorithm-comparison.v1"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 OBJECTIVES = tuple(ObjectiveMode)
+
+# Search-strategy baselines.  These three share one objective function, so they
+# are directly comparable on search effort (expansions, wall time).
 ALGORITHMS = ("time_dependent_astar", "dijkstra", "static_field")
+
+# ``risk_blind`` is *not* a search-strategy baseline: it changes the objective
+# function itself (it prices time and distance but ignores ice risk and
+# forecast uncertainty).  It models the conventional practice of routing on
+# geometry and speed alone.  Keeping it out of ``ALGORITHMS`` avoids polluting
+# the search-efficiency comparison, whose validity depends on all cells sharing
+# one objective.
+OBJECTIVE_BASELINES = ("risk_blind",)
+ALL_ALGORITHMS = ALGORITHMS + OBJECTIVE_BASELINES
+
+
+def _risk_blind_weights(weights: CostWeights) -> CostWeights:
+    """Minimal ablation: the objective's own weights with the ice terms removed.
+
+    ``risk`` and ``uncertainty`` are the only terms that consume the temporal
+    risk field, so zeroing them -- and changing nothing else -- isolates the
+    value of using that field.  Using a hand-written weight vector instead
+    would silently change ``travel_time`` / ``distance`` / ``turn`` as well and
+    confound the comparison.
+    """
+    return replace(weights, risk=0.0, uncertainty=0.0)
+
 
 SYNTHETIC_PROFILES: dict[str, SyntheticProfileConfig] = {
     "small": SyntheticProfileConfig(rows=5, cols=7, frame_count=7),
@@ -186,6 +227,7 @@ def _build_real(
     real_context = {
         "grid": fixture.grid,
         "vessel": _VPM.from_configuration(fixture.vessel_config),
+        "planner_config": fixture.planner_config,
         "time_bucket": timedelta(minutes=fixture.planner_config.time_bucket_minutes),
         "edge_sample_count": fixture.planner_config.edge_sample_count,
         "max_frame_gap": timedelta(minutes=fixture.planner_config.max_risk_frame_gap_minutes),
@@ -197,6 +239,13 @@ def _build_real(
 # --------------------------------------------------------------------------- #
 # measurement
 # --------------------------------------------------------------------------- #
+def _delta_pct(ours: float, baseline: float) -> float | None:
+    """Relative change of ``ours`` against ``baseline``, in percent."""
+    if not baseline:
+        return None
+    return 100.0 * (ours - baseline) / baseline
+
+
 def _run_one(
     frames: list[Any],
     start: tuple[int, int],
@@ -211,6 +260,16 @@ def _run_one(
     source = frames
     if algorithm == "static_field":
         source = [replace(frame, payload=frames[0].payload) for frame in frames]
+
+    # ``risk_blind`` keeps the *same* search and the *same* temporal field; only
+    # the objective function changes (the ice risk / uncertainty terms are
+    # removed from that objective's own weights, everything else untouched).
+    weight_override = None
+    if algorithm == "risk_blind":
+        planner_config = (
+            real_context["planner_config"] if real_context is not None else PlannerConfig()
+        )
+        weight_override = {objective: _risk_blind_weights(planner_config.weights_for(objective))}
 
     if real_context is not None:
         sampler = RiskSampler(source, max_frame_gap=real_context["max_frame_gap"])
@@ -228,7 +287,7 @@ def _run_one(
         departure = source[0].valid_time
         extra = {}
 
-    planner = TimeDependentAStar(grid, sampler, vessel)
+    planner = TimeDependentAStar(grid, sampler, vessel, cost_weights=weight_override)
 
     request = PlanningRequest(
         start=start,
@@ -315,7 +374,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--real-segment", default="rolling_0_24h")
     parser.add_argument("--config-root", type=Path, default=REPO_ROOT / "configs")
     parser.add_argument("--objective", action="append", choices=[o.value for o in OBJECTIVES])
-    parser.add_argument("--algorithm", action="append", choices=ALGORITHMS)
+    parser.add_argument("--algorithm", action="append", choices=ALL_ALGORITHMS)
     parser.add_argument("--repetitions", type=int, default=5)
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--max-expansions", type=int, default=250_000)
@@ -434,10 +493,47 @@ def main() -> int:
             ]
             if not base_cells:
                 continue
+            # A search-strategy baseline shares our objective function, so search
+            # effort and total cost are directly comparable.  An
+            # objective-function baseline prices the world differently, so cost
+            # and search-efficiency deltas are *not* advantage claims -- only
+            # the realised route qualities (risk, travel time, distance) are.
+            is_objective_baseline = algorithm in OBJECTIVE_BASELINES
+            base = base_cells[0]
+            if is_objective_baseline:
+                comparisons.append(
+                    {
+                        "objective": objective.value,
+                        "baseline": algorithm,
+                        "baseline_kind": "objective_function",
+                        "expansion_reduction_pct": None,
+                        "generated_reduction_pct": None,
+                        "wall_speedup": None,
+                        "cost_delta_pct": None,
+                        "cost_identical": None,
+                        "average_risk_delta_pct": _delta_pct(
+                            base["average_edge_risk_median"],
+                            ours["average_edge_risk_median"],
+                        ),
+                        "max_risk_delta_pct": _delta_pct(
+                            base["maximum_edge_risk_median"],
+                            ours["maximum_edge_risk_median"],
+                        ),
+                        "travel_hours_delta_pct": _delta_pct(
+                            ours["travel_hours_median"], base["travel_hours_median"]
+                        ),
+                        "distance_delta_pct": _delta_pct(
+                            ours["distance_km_median"], base["distance_km_median"]
+                        ),
+                        "identical_route": None,
+                    }
+                )
+                continue
             comparisons.append(
                 {
                     "objective": objective.value,
                     "baseline": algorithm,
+                    "baseline_kind": "search_strategy",
                     "expansion_reduction_pct": (
                         100.0
                         * (
@@ -490,6 +586,10 @@ def main() -> int:
                         if base_cells[0]["average_edge_risk_median"]
                         else None
                     ),
+                    "max_risk_delta_pct": None,
+                    "travel_hours_delta_pct": None,
+                    "distance_delta_pct": None,
+                    "identical_route": None,
                 }
             )
 
@@ -528,6 +628,15 @@ def main() -> int:
 
     print(f"[{label}] comparison written to {output_dir / 'comparison.json'}")
     for row in comparisons:
+        if row["baseline_kind"] == "objective_function":
+            print(
+                f"  {row['objective']:12s} vs {row['baseline']:14s} "
+                f"[objective baseline] risk avg {row['average_risk_delta_pct']:+.1f}% "
+                f"max {row['max_risk_delta_pct']:+.1f}%  "
+                f"travel {row['travel_hours_delta_pct']:+.1f}%  "
+                f"distance {row['distance_delta_pct']:+.1f}%"
+            )
+            continue
         print(
             f"  {row['objective']:12s} vs {row['baseline']:14s} "
             f"expansion -{row['expansion_reduction_pct']:.1f}%  "

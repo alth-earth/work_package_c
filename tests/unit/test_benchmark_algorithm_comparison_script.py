@@ -20,18 +20,14 @@ from pathlib import Path
 import pytest
 
 from arctic_route_planning.cost import VesselPerformanceModel
-from arctic_route_planning.domain.models import ObjectiveMode
+from arctic_route_planning.domain.models import ObjectiveMode, PlannerConfig
 from arctic_route_planning.grid import RegularGrid
 from arctic_route_planning.planners import PlanningRequest, TimeDependentAStar
 from arctic_route_planning.profiling import SyntheticProfileConfig
 from arctic_route_planning.risk import RiskSampler
 
-_SCRIPT_PATH = (
-    Path(__file__).parents[2] / "scripts" / "benchmark_algorithm_comparison.py"
-)
-_SPEC = importlib.util.spec_from_file_location(
-    "c_benchmark_algorithm_comparison", _SCRIPT_PATH
-)
+_SCRIPT_PATH = Path(__file__).parents[2] / "scripts" / "benchmark_algorithm_comparison.py"
+_SPEC = importlib.util.spec_from_file_location("c_benchmark_algorithm_comparison", _SCRIPT_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
 _SCRIPT = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _SCRIPT
@@ -103,11 +99,43 @@ def test_static_field_baseline_is_executable() -> None:
 
 
 def test_runner_exposes_three_algorithms() -> None:
+    """The search-strategy trio must stay intact for the efficiency comparison."""
     assert _SCRIPT.ALGORITHMS == (
         "time_dependent_astar",
         "dijkstra",
         "static_field",
     )
+    # risk_blind is selectable, but must not join the search-strategy trio.
+    assert "risk_blind" not in _SCRIPT.ALGORITHMS
+    assert "risk_blind" in _SCRIPT.ALL_ALGORITHMS
+    assert _SCRIPT.ALL_ALGORITHMS == _SCRIPT.ALGORITHMS + _SCRIPT.OBJECTIVE_BASELINES
+
+
+def test_risk_blind_zeroes_only_the_ice_terms() -> None:
+    """The ablation must change only `risk` and `uncertainty`."""
+    weights = PlannerConfig().weights_for(ObjectiveMode.RECOMMENDED)
+    blinded = _SCRIPT._risk_blind_weights(weights)
+    assert blinded.risk == 0.0
+    assert blinded.uncertainty == 0.0
+    # Everything else is held fixed, otherwise the comparison is confounded.
+    assert blinded.travel_time == weights.travel_time
+    assert blinded.distance == weights.distance
+    assert blinded.turn == weights.turn
+
+
+def test_risk_blind_baseline_is_executable() -> None:
+    """The risk-blind objective must still yield a route on the same input."""
+    frames = _frames()
+    blinded = _SCRIPT._risk_blind_weights(PlannerConfig().weights_for(ObjectiveMode.RECOMMENDED))
+    grid = RegularGrid.from_risk_frame(frames[0], allow_diagonal=False)
+    blind_planner = TimeDependentAStar(
+        grid,
+        RiskSampler(frames),
+        _vessel(),
+        cost_weights={ObjectiveMode.RECOMMENDED: blinded},
+    )
+    result = blind_planner.plan(_request(frames))
+    assert result.nodes, "risk-blind baseline must yield a non-empty route"
 
 
 def test_runner_rejects_real_input_without_route_plan_set(
