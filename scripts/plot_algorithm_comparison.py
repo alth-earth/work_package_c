@@ -303,6 +303,110 @@ def _fig_speedup(rows: list[dict[str, Any]], english: bool, out: Path) -> None:
     print(f"wrote {fig_path} and {fig_path.with_suffix('.svg')}")
 
 
+# --------------------------------------------------------------------------- #
+# Figure 4: candidate gate funnel (reverse argument)
+# --------------------------------------------------------------------------- #
+# Hard-coded from the SSOT (docs/CORE_ALGORITHM_IMPROVEMENT_PLAN.md, §3 maturity
+# table and decision log).  Every number below is verified against that file.
+# The funnel reads "how many candidates survived each gate" and the punchline is
+# that *zero* candidates were ever enabled -- the incumbent was never overtaken.
+FUNNEL_STAGES_ZH = (
+    "6 个改进候选进入评估",
+    "4 个在真实输入 / 正式 M2 门禁 FAIL",
+    "2 个无剪枝增益或撤回（RETIRED）",
+    "0 个被启用（candidate/Winter 全部默认关闭）",
+)
+FUNNEL_STAGES_EN = (
+    "6 improvement candidates entered evaluation",
+    "4 failed on real input / formal M2 gates",
+    "2 retired or gained no pruning",
+    "0 enabled (all candidates default-off)",
+)
+FUNNEL_COUNTS = (6, 4, 2, 0)
+
+
+def _fig_funnel(english: bool, out: Path) -> None:
+    """The "reverse argument" funnel: all candidates failed, incumbent stands.
+
+    Does not depend on the CSV; the data are the candidate gate outcomes from
+    the SSOT.  The annotation is deliberately conservative -- "not overtaken",
+    never "optimal" or "production-grade advantage".
+    """
+    fig, ax = plt.subplots(figsize=(8, 4.6))
+    stages = FUNNEL_STAGES_EN if english else FUNNEL_STAGES_ZH
+    counts = FUNNEL_COUNTS
+    # Funnel shape: each stage half the width of the previous.
+    half_widths = [3.0, 2.2, 1.5, 0.8]
+    center_x = 0.0
+    y_positions = [0.0, -1.0, -2.0, -3.0]
+    colors = ["#4C72B0", "#DD8452", "#CC5A4A", "#2F8F4F"]
+
+    for y, half, count, stage, color in zip(
+        y_positions, half_widths, counts, stages, colors, strict=True
+    ):
+        left = center_x - half
+        width = 2 * half
+        ax.barh(
+            y,
+            width,
+            left=left,
+            height=0.8,
+            color=color,
+            edgecolor="white",
+            alpha=0.9,
+        )
+        count_text = f"{count}" if english else f"{count} 个"
+        ax.text(
+            center_x,
+            y,
+            count_text,
+            ha="center",
+            va="center",
+            fontsize=18,
+            fontweight="bold",
+            color="white",
+        )
+        ax.text(
+            center_x,
+            y - 0.55,
+            stage,
+            ha="center",
+            va="center",
+            fontsize=11,
+            color="#333333",
+        )
+    ax.set_xlim(-3.6, 3.6)
+    ax.set_ylim(-4.0, 0.8)
+    ax.axis("off")
+    ax.set_title(
+        "Candidate gate funnel: the incumbent was never overtaken"
+        if english
+        else "改进候选门禁漏斗：当前实现从未被超越",
+        fontsize=13,
+        pad=14,
+    )
+    annotation = (
+        "All improvement candidates failed the correctness-first gates; "
+        "the production default (time-dependent A*) remained unchanged."
+        if english
+        else "全部改进候选未通过正确性优先门禁；生产默认（时间依赖 A*）保持不变。"
+    )
+    fig.text(
+        0.5,
+        0.02,
+        annotation,
+        ha="center",
+        va="bottom",
+        fontsize=9.5,
+        color="#555555",
+    )
+    fig_path = out / ("funnel.png" if english else "fig-funnel.png")
+    fig.savefig(fig_path)
+    fig.savefig(fig_path.with_suffix(".svg"))
+    plt.close(fig)
+    print(f"wrote {fig_path} and {fig_path.with_suffix('.svg')}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--csv", type=Path, required=True)
@@ -338,6 +442,7 @@ def main() -> int:
         _fig_scaling(rows, english, args.output_dir)
         _fig_risk(rows, english, args.output_dir)
         _fig_speedup(rows, english, args.output_dir)
+        _fig_funnel(english, args.output_dir)
     return 0
 
 
