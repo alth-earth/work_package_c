@@ -312,15 +312,15 @@ def _fig_speedup(rows: list[dict[str, Any]], english: bool, out: Path) -> None:
 # that *zero* candidates were ever enabled -- the incumbent was never overtaken.
 FUNNEL_STAGES_ZH = (
     "6 个改进候选进入评估",
-    "4 个在真实输入 / 正式 M2 门禁 FAIL",
-    "2 个无剪枝增益或撤回（RETIRED）",
-    "0 个被启用（candidate/Winter 全部默认关闭）",
+    "4 个在真实输入/正式 M2 门禁 FAIL",
+    "2 个无剪枝增益或撤回",
+    "0 个被启用（默认关闭）",
 )
 FUNNEL_STAGES_EN = (
-    "6 improvement candidates entered evaluation",
-    "4 failed on real input / formal M2 gates",
-    "2 retired or gained no pruning",
-    "0 enabled (all candidates default-off)",
+    "6 improvement candidates\nentered evaluation",
+    "4 failed on real input /\nformal M2 gates",
+    "2 retired or\ngained no pruning",
+    "0 enabled (all\ncandidates default-off)",
 )
 FUNNEL_COUNTS = (6, 4, 2, 0)
 
@@ -332,7 +332,7 @@ def _fig_funnel(english: bool, out: Path) -> None:
     the SSOT.  The annotation is deliberately conservative -- "not overtaken",
     never "optimal" or "production-grade advantage".
     """
-    fig, ax = plt.subplots(figsize=(8, 4.6))
+    fig, ax = plt.subplots(figsize=(8, 5.0))
     stages = FUNNEL_STAGES_EN if english else FUNNEL_STAGES_ZH
     counts = FUNNEL_COUNTS
     # Funnel shape: each stage half the width of the previous.
@@ -355,25 +355,29 @@ def _fig_funnel(english: bool, out: Path) -> None:
             edgecolor="white",
             alpha=0.9,
         )
-        count_text = f"{count}" if english else f"{count} 个"
+        count_text = f"{count}"
+        # Count is the headline; description sits *inside* the same bar in a
+        # lighter shade so long labels never overflow horizontally or collide
+        # with neighbouring stages.
         ax.text(
             center_x,
-            y,
+            y + 0.15,
             count_text,
             ha="center",
             va="center",
-            fontsize=18,
+            fontsize=16,
             fontweight="bold",
             color="white",
         )
         ax.text(
             center_x,
-            y - 0.55,
+            y - 0.18,
             stage,
             ha="center",
             va="center",
-            fontsize=11,
-            color="#333333",
+            fontsize=9.5,
+            color="white",
+            alpha=0.92,
         )
     ax.set_xlim(-3.6, 3.6)
     ax.set_ylim(-4.0, 0.8)
@@ -391,6 +395,7 @@ def _fig_funnel(english: bool, out: Path) -> None:
         if english
         else "全部改进候选未通过正确性优先门禁；生产默认（时间依赖 A*）保持不变。"
     )
+    fig.subplots_adjust(top=0.88, bottom=0.12)
     fig.text(
         0.5,
         0.02,
