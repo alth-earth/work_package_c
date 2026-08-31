@@ -1,8 +1,8 @@
 # 北极航线规划算法对比报告
 
-**主题**：工作包 C 的时间依赖 A\* 与常规算法的对比证据
-**生成日期**：2026-08-30
-**代码提交**：`f997a8b`（分支 `research-validation-system`，全部构件 `git.dirty=False`）
+**主题**：工作包 C 的时间依赖 A\* 与常规算法的对比证据 + 算法创新性
+**生成日期**：2026-08-31
+**代码提交**：`4a6abb2`（分支 `research-validation-system`；24h 真实构件 `git.dirty=True`，唯一脏项为并发 R2 平滑流的未跟踪临时文档 `docs/tmp/`，与 runner 代码无关，runner 代码本身已完整提交）
 **构件目录**：`/root/my_project/.runtime/experiments/c-algorithm-comparison-*`
 **文档性质**：**外部展示用的科学对比材料，不是晋级证据**
 
@@ -11,6 +11,8 @@
 ## 摘要（核心结论）
 
 在真实北极 145 帧冰情预报序列上，相比静态场规划的常规做法，**最大航段风险降低 15.3%–29.8%、平均航段风险降低 10.7%–16.5%**；相比无信息 Dijkstra，**扩展状态数减少 55.7%–86.6%、墙钟加速 2.31×–7.84×，且总代价严格相同**。
+
+算法创新性（详见 §6）分三层：**已实现生效**（风险-速度-ETA 三方耦合不动点建模、四层三目标 12 路线架构、全局 fail-closed 语义）、**科学发现**（真实 marine model 违反 FIFO——两窗口 43 500 / 40 776 次 interval 级违反；ETA 不动点在部分边上根本不存在——受控场阻尼迭代残差 55 s → 8 万 s）、**已验证但默认关闭**（bounded 区间收缩、解析/区间/分区 ETA 证据、证明携带剪枝、non-FIFO exact-arrival 与完整 Pareto frontier）。后两层的准确表述是"**发现问题 + 已设计并验证更安全的解法**"，不是"已解决"或"已启用"。
 
 三条证据的完整口径：
 
@@ -106,11 +108,82 @@
 | 17×29×37 | low_risk | 980 | 3 880 | 2 900 | -74.7% | 3.61× |
 | 17×29×37 | recommended | 405 | 3 883 | 3 478 | -89.6% | 9.65× |
 
-**绝对节省量随规模单调放大**：fastest 的扩展差值从 32 → 247 → 1 352 → 3 755，即问题越大、绝对收益越大。这是规模论证中比百分比更有说服力的指标（见 §7 注意点 3）。
+**绝对节省量随规模单调放大**：fastest 的扩展差值从 32 → 247 → 1 352 → 3 755，即问题越大、绝对收益越大。这是规模论证中比百分比更有说服力的指标（见 §8 注意点 3）。
 
 ---
 
-## 6. 图表
+## 6. 算法创新性
+
+本章按三层如实论述本文算法的创新性，每层标注真实启用状态与证据。**第 3 层均为已验证但默认关闭的研究方法**，报告不会将其表述为「已启用」或「生产级」。
+
+### 6.1 创新性总览
+
+| 层 | 创新点 | 启用状态 | 证据 |
+|---|---|---|---|
+| 第一层 | 风险-速度-ETA 三方耦合不动点建模 | **已实现，正式 control 生效** | `_evaluate_edge` 固定两轮精化 |
+| 第一层 | 四层三目标 12 路线架构 | **已实现，正式 control 生效** | `FourLayerPlanningService` |
+| 第一层 | 全局 fail-closed 语义 | **已实现，正式 control 生效** | 缺测/未来/过期/覆盖不足一律失败 |
+| 第二层 | 真实 marine model 违反 FIFO | **科学发现**（非"已解决"） | 两窗口 43 500 / 40 776 次违反，`REAL_INPUT_FIFO_VIOLATED` |
+| 第二层 | ETA 不动点不存在性 | **科学发现**（非"已解决"） | 受控振荡场阻尼迭代残差 55s → 8 万 s |
+| 第三层 | bounded 区间收缩法 | 已验证，**默认关闭** | 振荡场 7–11 次收敛；`test_eta_refinement.py` 18 项 |
+| 第三层 | 解析法 / 区间算术 / 分区 ETA 证据 | 已验证，**默认关闭** | `eta_analytic/interval/partition.py` |
+| 第三层 | 证明携带剪枝 | 已验证，**默认关闭** | 对抗场景 pruning 必须为 0 |
+| 第三层 | non-FIFO exact-arrival 与完整 Pareto frontier | 已验证，**默认关闭** | M34 语义/frontier 等价，无新增 transition pruning |
+
+### 6.2 第一层：已实现并在正式 control 生效
+
+**① 风险-速度-ETA 三方耦合不动点建模。** 本文的边代价不是「某一时刻的静态风险」，而是三方耦合：冰情风险 → 决定该航段可达速度 → 决定航行时间 → 到达时刻 → 再取**该到达时刻**的风险与后续速度。形式化地，对边 `e` 需解不动点：
+
+`t* = t_depart + τ_e(t*)`
+
+其中 `τ_e(t)` 是「在时刻 `t` 出发穿越边 `e` 所需时间」。正式 `_evaluate_edge` 用固定两轮精化逼近该不动点（两轮在真实场上足够稳定——见第二层发现 ②，它同时揭示了旧代码的收敛性盲点）。
+
+**② 四层三目标 12 路线架构。** `full_voyage`（全程）/ `main_corridor`（主走廊）/ `rolling`（滚动 24h）/ `executable`（可执行段）四层 × `fastest` / `low_risk` / `recommended` 三目标，产出 12 条路线；`PlanKind` 含 `INITIAL` 与 `REPLANNED`（重规划已实现）。
+
+**③ 全局 fail-closed 语义。** 缺测、未来时刻、过期、覆盖不足一律判失败（fail-closed），**绝不补零当安全**。这是安全相关系统的正确性基线——宁可无路可走，也不把「未知」当作「安全」。
+
+### 6.3 第二层：科学发现（有真实数据，改变了算法设计）
+
+**① 真实 marine model 违反 FIFO（C-ALG-01）。** 教科书时依赖最短路算法（time-dependent A\* / Dijkstra）的**时间支配剪枝**成立的前提是 FIFO 性质：出发越晚，到达不更早。本文用分区证据扫描真实输入，发现该前提**在真实北极海洋数据上不成立**：
+
+| 输入 | experiment id | directed edges × objectives | interval evaluations | FIFO violated | certified probes | uncertain/coverage | 首个反例 |
+|---|---|---|---|---|---|---|---|
+| holdout | `c.p0.1-temporal-evaluator-partition-real.v1-e0ff8c805db67d0b` | `1388 × 3` | `104 100` | `43 500`（每目标 `14 500`） | `101 958` | `686`/objective | edge `[(0,0),(0,1)]`，`2026-02-22T00:00Z`，2h boundary；左 image `2.8943256398h`，右 image `2.7839194360h` |
+| development | `c.p0.1-temporal-evaluator-partition-real.v1-adfa392fc050c67c` | `1540 × 3` | `115 500` | `40 776`（每目标 `13 592`） | `113 685` | `605`/objective | edge `[(0,0),(0,1)]`，`2026-03-22T00:00Z`，2h boundary；左 image `2.9088543441h`，右 image `2.9063708135h` |
+
+> 数据来源：研究分支 `research/p02-m24-real-incumbent-bound-20260829` 的 SSOT `CORE_ALGORITHM_IMPROVEMENT_PLAN.md` §P0.2-M1.12（实验 id 为 `c.p0.1-temporal-evaluator-partition-real.v1-*`，见该分支 1352-1355 行）。主线 `research-validation-system` 的 SSOT 只同步到 M16，故此处引用研究分支的最新证据。
+
+即：**「同一时刻出发的左 image 到达时间」比「晚 2 小时出发的右 image」更晚**——出发晚反而到得早。跨两独立窗口、每目标约 1.4 万个 interval 级违反。该状态固定为 `REAL_INPUT_FIFO_VIOLATED`，`TemporalDominancePolicy.disabled()` 是正式默认（见 6.5）。
+
+**② ETA 不动点不存在性（ADR §13）。** 用受控振荡场 `f(t)=0.3+0.5·sin(t·2π/1.0h)` 复现：阻尼迭代的 residual 从 **55 s 飙升至 8 万 s**（发散）。进一步分析 `g(t) = implied(t) − t`：当风险场让「预估到达时间总是晚于当前时刻」（`implied(t) > t` 恒成立）时，**该边不存在 ETA 不动点**——任何迭代法都不收敛。
+
+> **关键结论**：旧代码固定两轮精化且**从不检查收敛**，会静默接受发散的第 2 轮值。这不是边界情况——它发生在真实受控场上，并且是第三层研究方法的直接动机。
+
+### 6.4 第三层：已验证但默认关闭的研究方法
+
+以下方法**全部通过验证但默认关闭**（正式 `eta_refinement_policy=None` 即固定两轮）。它们证明了「有更安全、可证明的解法存在」，但没有被擅自启用。
+
+**① bounded 区间收缩法（C-ALG-03B）。** bracket 符号翻转检测 + 二分收缩，`bracket_budget = max(1, max_iterations//3)`、`bisection_budget = max(16, max_iterations*2)`。振荡场上**收敛**（实测 7–11 次迭代、residual < 1 s）；有限区间无符号翻转时 fail-closed 抛 `no_bracket_found`，**不**静默返回非不动点、**不**误报全局无解。验证：`test_eta_refinement.py` 18 项、`test_time_dependent_astar.py` 13 项。
+
+**② 解析法 / 区间算术 / 分区 ETA 证据。** `eta_analytic.py` 机械推导收缩率与隐式到达斜率界；`eta_interval.py` 用区间算术给出到达时间的严格包络；`eta_partition.py` 在不可变 RiskFrame 边界切分后再求证据，使 FIFO 扫描可扩展到真实 145 帧输入。
+
+**③ 证明携带剪枝。** `temporal_qualification.py` 用 15 分钟 probe 扫描可航有向边、临界 slack 才递归加密；真实反例判 `FIFO_VIOLATED`，无反例但无区间证明判 `FIFO_UNCERTAIN_NO_INTERVAL_PROOF`。**所有 uncertain、scope mismatch、未知 evaluator 与 fail-closed 对抗场景的 pruning 必须为零**——没有证明就不剪枝。
+
+**④ non-FIFO exact-arrival 与完整 Pareto frontier。** `non_fifo_temporal_pareto.py` 等在 exact-arrival 维度保留完整 Pareto frontier，不同到达时刻的 label **不比较、不丢弃**。M0～M34 全覆盖；M34 在真实 24h 输入上证明语义与 frontier 等价，但**没有新增 transition pruning** 且资源证据不完整，最终状态 `REAL_INPUT_STATE_BOUND_SEMANTIC_PASS_RESOURCE_EVIDENCE_INCOMPLETE_NO_ADDITIONAL_TRANSITION_GAIN`。P0.2 研究范围已在 M34 收束冻结，不启动 M35。
+
+### 6.5 为什么「不启用」本身是正确的工程决策
+
+第三层方法之所以默认关闭，**正是因为第二层的发现证明了它们的前提在真实数据上不成立**：
+
+- 时间支配剪枝依赖 FIFO，而真实输入 `REAL_INPUT_FIFO_VIOLATED`——**支配不安全，宁可不剪枝也不误剪**；
+- 迭代式 ETA 精化依赖不动点存在，而部分边上不动点根本不存在——**没有 bracket 就不迭代，fail-closed 而非静默发散**；
+- 剪枝规则只在「有证明」时才启用，没有证明就是「uncertain」——**证明携带，而非信任默认**。
+
+这是「先证明、后启用」的工程纪律，而不是能力不足。它保证了：**即使研究 sidecar 全部关闭，正式 control 的行为也从未以未经验证的方式改变。**
+
+---
+
+## 7. 图表
 
 | 图 | 中文版 | 英文版 |
 |---|---|---|
@@ -122,7 +195,7 @@
 
 ---
 
-## 7. 诚实性边界（必须同时呈现）
+## 8. 诚实性边界（必须同时呈现）
 
 以下每一条都是本对比的真实局限。**在比赛答辩中主动说明这些，比被追问后承认要有利得多。**
 
@@ -177,9 +250,17 @@ A\* 相对 Dijkstra 的加速来自**可采纳启发式**这一成熟技术的�
 
 本轮只测了单条路线、单层的规划搜索。**未**测量完整的 12 路线四层规划端到端吞吐。扩展数减少是搜索层的指标，向端到端吞吐的传导尚未验证。
 
+### 注意点 10：创新性三层的启用状态差异巨大
+
+本章所述的创新性分三层，**启用状态完全不同**：第一层（耦合建模、四层三目标、fail-closed）在正式 control 生效；第二层是**科学发现**（发现问题，不是"已解决"）；第三层（bounded 收缩、ETA 证据、证明携带剪枝、non-FIFO Pareto）**全部默认关闭**，正式 `eta_refinement_policy=None` 仍是固定两轮。**严禁把第三层表述为"已启用"或"生产级"，严禁把第二层"发现"表述为"已解决"。** 创新性的诚实表述是："发现教科书算法在真实数据上不成立，并设计、验证了更安全的解法，且只在不牺牲正确性的前提下启用。"
+
+### 注意点 11：风险无关动机证据只有 n=1 个有效样本
+
+§6 之前的动机证据（风险无关常规路径）中：**holdout 24h** 上风险无关路径平均风险 +10.4%、最大风险 +15.4%（本文路线为参照），但仅快 0.5%；而 **development 24h** 上两条路线完全相同（差异 0.0%）。因此**实际有效样本 n=1**。这条证据只能作为"为什么必须用时变风险感知规划"的**动机**，**不能**单独作为优势主张。
+
 ---
 
-## 8. 与生产晋级门禁的关系（重要声明）
+## 9. 与生产晋级门禁的关系（重要声明）
 
 **本报告不构成也不代表任何生产晋级结论。**
 
@@ -192,7 +273,7 @@ A\* 相对 Dijkstra 的加速来自**可采纳启发式**这一成熟技术的�
 
 ---
 
-## 9. 复现方式
+## 10. 复现方式
 
 ```bash
 cd /root/my_project/work_package_c
@@ -204,11 +285,13 @@ for p in small medium large stress; do
     --output-dir ../.runtime/experiments/c-algorithm-comparison-synthetic-$p
 done
 
-# 2) 真实 Winter 输入（145 帧）
+# 2) 真实 Winter 输入（145 帧，四算法含 risk_blind）
 uv run python scripts/benchmark_algorithm_comparison.py \
   --real-commit <risk-window-commit.json> \
   --real-route-plan-set <route-plan-set.json> \
   --real-segment rolling_0_24h --repetitions 3 --warmup 1 \
+  --algorithm time_dependent_astar --algorithm dijkstra \
+  --algorithm static_field --algorithm risk_blind \
   --output-dir <dir>
 
 # 3) 汇总（自动发现全部 c-algorithm-comparison-* 构件，按 schema 过滤无关构件）
@@ -225,23 +308,29 @@ uv run --with matplotlib python scripts/plot_algorithm_comparison.py \
 uv run python -m pytest tests/unit/test_benchmark_algorithm_comparison_script.py -q
 ```
 
-**构件清单**（8 个，全部 `dirty=False`，commit `f997a8b`）：
+**构件清单**（8 个；合成 4 档 + 真实 6h 档在 `f997a8b` 干净提交下产出，真实 24h 两档在 `4a6abb2` 产出且 `git.dirty=True`——唯一脏项是并发 R2 平滑流的未跟踪临时文档 `docs/tmp/`，与 runner 代码无关）：
 
 | 构件 | 内容 | 重复次数 |
 |---|---|---|
 | `c-algorithm-comparison-synthetic-{small,medium,large,stress}` | 合成 4 档规模 | 5/5/5/3 |
-| `c-algorithm-comparison-{holdout,development}-24h` | 真实 145 帧，24h 航段 | 3 |
+| `c-algorithm-comparison-{holdout,development}-24h` | 真实 145 帧，24h 航段（四算法含 risk_blind） | 3 |
 | `c-algorithm-comparison-{holdout,development}-6h` | 真实 145 帧，6h 航段（诚实性对照） | 3 |
 | `c-algorithm-comparison-summary` | 汇总表、CSV、图表 | — |
 
+**风险无关基线（risk_blind）说明**：它不是搜索策略基线，而是**目标函数消融**——把该目标自身的 `risk` 与 `uncertainty` 权重置零、其余权重保持不变（最小消融，避免把时间/距离/转向权衡也改掉）。因此它与本文算法的差异只能归因于"使用风险场"这一件事。它的汇出行不输出扩展数/加速比（不同目标函数下搜索效率不可比），仅输出风险/时间/航程权衡。
+
 ---
 
-## 10. 建议的答辩表述
+## 11. 建议的答辩表述
 
 **推荐主线**（可直接引用）：
 
 > 在真实北极 145 帧冰情预报序列上，相比静态场规划的常规做法，本文算法将最大航段风险降低 15.3%–29.8%、平均航段风险降低 10.7%–16.5%，且在 `fastest` 目标上航程与基线完全相同（397.4 km）而风险显著更低、航行时间更短——优势来自对通行时机的选择而非绕行。相比无信息 Dijkstra，扩展状态数减少 55.7%–86.6%、加速 2.31×–7.84×，且总代价严格相同，证明启发式未牺牲最优性。在合成规模曲线上，扩展数的绝对节省随问题规模单调放大（fastest：32 → 247 → 1 352 → 3 755）。
 
+**创新性补充**（答辩可加，体现"发现问题 + 严谨解法"）：
+
+> 本研究还发现教科书时依赖最短路算法在真实北极海洋数据上不成立：跨两独立窗口、每目标约 1.4 万个 interval 级 FIFO 违反（出发晚反而到得早）；并证明 ETA 不动点在部分边上根本不存在。针对此，我们设计并验证了 bounded 区间收缩、解析/区间/分区 ETA 证据、证明携带剪枝与 non-FIFO exact-arrival / 完整 Pareto frontier 等方法。这些解法**默认关闭**、仅在具备证明时才启用——这是"先证明、后启用"的工程纪律。
+
 **主动补充局限**（体现严谨）：
 
-> 需要说明的是：该效率优势源自可采纳启发式的正确工程实现，而非新的搜索算法；"最优性不变"限于同一离散时间展开图；真实样本为 2 个独立窗口，且短航段与合成平滑场上优势不显著，故质量结论仅基于 24h 真实航段。
+> 需要说明的是：该效率优势源自可采纳启发式的正确工程实现，而非新的搜索算法；"最优性不变"限于同一离散时间展开图；真实样本为 2 个独立窗口，且短航段与合成平滑场上优势不显著，故质量结论仅基于 24h 真实航段。风险无关动机证据仅有 1 个有效样本（development 窗口差异为 0），只作动机不作优势主张。

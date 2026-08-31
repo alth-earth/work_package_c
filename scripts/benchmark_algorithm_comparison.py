@@ -498,6 +498,11 @@ def main() -> int:
             # objective-function baseline prices the world differently, so cost
             # and search-efficiency deltas are *not* advantage claims -- only
             # the realised route qualities (risk, travel time, distance) are.
+            #
+            # Delta semantics for the objective-function baseline: every delta
+            # is (baseline - ours)/ours, i.e. "the risk-blind baseline relative
+            # to ours".  A positive risk delta means the risk-blind route pays
+            # more ice risk; a negative travel delta means it takes less time.
             is_objective_baseline = algorithm in OBJECTIVE_BASELINES
             base = base_cells[0]
             if is_objective_baseline:
@@ -520,10 +525,10 @@ def main() -> int:
                             ours["maximum_edge_risk_median"],
                         ),
                         "travel_hours_delta_pct": _delta_pct(
-                            ours["travel_hours_median"], base["travel_hours_median"]
+                            base["travel_hours_median"], ours["travel_hours_median"]
                         ),
                         "distance_delta_pct": _delta_pct(
-                            ours["distance_km_median"], base["distance_km_median"]
+                            base["distance_km_median"], ours["distance_km_median"]
                         ),
                         "identical_route": None,
                     }

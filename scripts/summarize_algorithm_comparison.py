@@ -27,6 +27,7 @@ from typing import Any
 OURS = "time_dependent_astar"
 DIJKSTRA = "dijkstra"
 STATIC = "static_field"
+RISK_BLIND = "risk_blind"
 
 OBJECTIVES = ("fastest", "low_risk", "recommended")
 
@@ -273,6 +274,90 @@ def _quality_section(
     return md, rows
 
 
+def _motivation_section(
+    runs: list[tuple[str, dict[str, Any]]],
+) -> tuple[list[str], list[dict[str, Any]]]:
+    """Risk-blind baseline as *motivation* evidence, not an advantage claim.
+
+    ``risk_blind`` changes the objective function (ice terms removed from that
+    objective's own weights), so it is **not** comparable on search effort.  Its
+    only honest reading is the realised route-quality trade-off: how much risk a
+    geometry/speed-driven routing would accept for how much time.
+    """
+    md: list[str] = []
+    rows: list[dict[str, Any]] = []
+    for label, doc in runs:
+        meta = _meta(doc)
+        if meta["input_kind"] != "real":
+            continue
+        for objective in OBJECTIVES:
+            ours = _cell(doc["summary"], objective, OURS)
+            base = _cell(doc["summary"], objective, RISK_BLIND)
+            if not ours or not base:
+                continue
+            # Read the authoritative deltas from the runner's comparison block
+            # (with *ours* as the reference denominator, exactly as the JSON
+            # artefacts and the report cite them), instead of recomputing with a
+            # possibly different denominator.
+            comparison = next(
+                (
+                    c
+                    for c in doc.get("comparisons", [])
+                    if c["objective"] == objective and c["baseline"] == RISK_BLIND
+                ),
+                None,
+            )
+            risk_paid_avg = comparison["average_risk_delta_pct"] if comparison is not None else None
+            risk_paid_max = comparison["max_risk_delta_pct"] if comparison is not None else None
+            travel_paid = comparison["travel_hours_delta_pct"] if comparison is not None else None
+            distance_paid = comparison["distance_delta_pct"] if comparison is not None else None
+            md.append(
+                f"| {label} | {objective} | "
+                f"{ours['average_edge_risk_median']:.5f} | "
+                f"{base['average_edge_risk_median']:.5f} | "
+                f"**{_fmt(risk_paid_avg, 1, '%')}** | "
+                f"{ours['maximum_edge_risk_median']:.5f} | "
+                f"{base['maximum_edge_risk_median']:.5f} | "
+                f"**{_fmt(risk_paid_max, 1, '%')}** | "
+                f"{ours['travel_hours_median']:.2f} | "
+                f"{base['travel_hours_median']:.2f} | "
+                f"{_fmt(travel_paid, 1, '%')} | "
+                f"{ours['distance_km_median']:.1f} | "
+                f"{base['distance_km_median']:.1f} | "
+                f"{_fmt(distance_paid, 1, '%')} |"
+            )
+            rows.append(
+                _blank_row(
+                    run=label,
+                    objective=objective,
+                    baseline=RISK_BLIND,
+                    ours_expanded=ours["expanded_states_median"],
+                    baseline_expanded=base["expanded_states_median"],
+                    expansion_reduction_pct=None,
+                    ours_wall_ms=round(ours["wall_ms_median"], 2),
+                    baseline_wall_ms=round(base["wall_ms_median"], 2),
+                    speedup=None,
+                    cost_identical=None,
+                    ours_avg_risk=ours["average_edge_risk_median"],
+                    baseline_avg_risk=base["average_edge_risk_median"],
+                    avg_risk_delta_pct=(
+                        round(risk_paid_avg, 4) if risk_paid_avg is not None else None
+                    ),
+                    ours_max_risk=ours["maximum_edge_risk_median"],
+                    baseline_max_risk=base["maximum_edge_risk_median"],
+                    max_risk_delta_pct=(
+                        round(risk_paid_max, 4) if risk_paid_max is not None else None
+                    ),
+                    ours_distance_km=ours["distance_km_median"],
+                    baseline_distance_km=base["distance_km_median"],
+                    ours_travel_hours=ours["travel_hours_median"],
+                    baseline_travel_hours=base["travel_hours_median"],
+                    **meta,
+                )
+            )
+    return md, rows
+
+
 def _scaling_section(runs: list[tuple[str, dict[str, Any]]]) -> list[str]:
     scale_rows = [
         (label, doc, _meta(doc)) for label, doc in runs if _meta(doc)["input_kind"] == "synthetic"
@@ -363,6 +448,29 @@ def main() -> int:
     md.extend(qual_md)
     md.append("")
 
+    # Motivation evidence: the risk-blind objective is *not* an advantage claim
+    # (it changes the objective function), so it gets its own clearly-labelled
+    # table and is excluded from the search-efficiency narrative.
+    md.append("## 2.5 动机证据：为什么必须用时变风险感知规划（风险无关常规路径）")
+    md.append("")
+    md.append(
+        "> 常规做法（只看时间/距离、忽略冰情风险与不确定性）在 **holdout 24h** 上"
+        "为省 0.5% 航行时间承担 15.4% 峰值冰情风险；在 **development 24h** 上两条"
+        "路线完全相同（差异 0.0%）。因此本条**不是优势主张**，仅作为动机证据，"
+        "实际有效样本 **n=1**。"
+    )
+    md.append("")
+    md.append(
+        "| 算例 | 目标 | 平均风险(本文) | 平均风险(风险无关) | 风险无关Δ "
+        "| 最大风险(本文) | 最大风险(风险无关) | 风险无关Δ "
+        "| 航行h(本文) | 航行h(风险无关) | 风险无关Δ "
+        "| 航程km(本文) | 航程km(风险无关) | 风险无关Δ |"
+    )
+    md.append("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+    motiv_md, motiv_rows = _motivation_section(runs)
+    md.extend(motiv_md)
+    md.append("")
+
     md.extend(_scaling_section(runs))
 
     # Synthetic efficiency/quality rows are produced for the CSV (they feed the
@@ -395,7 +503,7 @@ def main() -> int:
 
     (args.output_dir / "summary-tables.md").write_text("\n".join(md), encoding="utf-8")
 
-    all_rows = eff_rows + qual_rows + synthetic_rows
+    all_rows = eff_rows + qual_rows + motiv_rows + synthetic_rows
     with (args.output_dir / "summary-data.csv").open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(CSV_FIELDS))
         writer.writeheader()
