@@ -2,7 +2,7 @@
 
 **主题**：工作包 C 的时间依赖 A\* 与常规算法的对比证据 + 算法创新性
 **生成日期**：2026-08-31
-**代码提交**：`4a6abb2`（分支 `research-validation-system`；24h 真实构件 `git.dirty=True`，唯一脏项为并发 R2 平滑流的未跟踪临时文档 `docs/tmp/`，与 runner 代码无关，runner 代码本身已完整提交）
+**代码提交**：`6c5ac3b`（分支 `research-validation-system`；24h 真实构件记录 `git.commit=31df655` 且 `dirty=True`——该次产出的 runner 代码与现 HEAD `6c5ac3b` 逐位一致，`dirty` 来源于并发 R2 平滑流的未跟踪临时文档 `docs/tmp/` 与当时未提交的 runner delta 修正，两者均不影响结果）
 **构件目录**：`/root/my_project/.runtime/experiments/c-algorithm-comparison-*`
 **文档性质**：**外部展示用的科学对比材料，不是晋级证据**
 
@@ -171,6 +171,8 @@
 
 **④ non-FIFO exact-arrival 与完整 Pareto frontier。** `non_fifo_temporal_pareto.py` 等在 exact-arrival 维度保留完整 Pareto frontier，不同到达时刻的 label **不比较、不丢弃**。M0～M34 全覆盖；M34 在真实 24h 输入上证明语义与 frontier 等价，但**没有新增 transition pruning** 且资源证据不完整，最终状态 `REAL_INPUT_STATE_BOUND_SEMANTIC_PASS_RESOURCE_EVIDENCE_INCOMPLETE_NO_ADDITIONAL_TRANSITION_GAIN`。P0.2 研究范围已在 M34 收束冻结，不启动 M35。
 
+> 数据来源：研究分支 `research/p02-m34-composed-envelope-20260830` 的 SSOT `CORE_ALGORITHM_IMPROVEMENT_PLAN.md`（§P0.2-M34）。
+
 ### 6.5 为什么「不启用」本身是正确的工程决策
 
 第三层方法之所以默认关闭，**正是因为第二层的发现证明了它们的前提在真实数据上不成立**：
@@ -308,7 +310,7 @@ uv run --with matplotlib python scripts/plot_algorithm_comparison.py \
 uv run python -m pytest tests/unit/test_benchmark_algorithm_comparison_script.py -q
 ```
 
-**构件清单**（8 个；合成 4 档 + 真实 6h 档在 `f997a8b` 干净提交下产出，真实 24h 两档在 `4a6abb2` 产出且 `git.dirty=True`——唯一脏项是并发 R2 平滑流的未跟踪临时文档 `docs/tmp/`，与 runner 代码无关）：
+**构件清单**（8 个；合成 4 档 + 真实 6h 档在 `f997a8b` 干净提交下产出；真实 24h 两档记录 `git.commit=31df655`、`dirty=True`——产出时 runner 代码与现 HEAD `6c5ac3b` 一致，`dirty` 为并发 R2 平滑流未跟踪临时文档 `docs/tmp/` 与当时未提交的 delta 修正所致，已核实不影响数值）：
 
 | 构件 | 内容 | 重复次数 |
 |---|---|---|
