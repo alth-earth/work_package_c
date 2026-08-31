@@ -1,0 +1,36 @@
+[research]
+schema_version = "c.route-smoothing-synthetic-manoeuvring.v1"
+profile_id = "nordic_odyssey_scale_synthetic_manoeuvring_v1"
+research_only = true
+calibration_status = "SYNTHETIC_UNCALIBRATED"
+production_qualified = false
+reference_length_m = 225.0
+reference_breadth_m = 32.31
+base_minimum_radius_m = 2000.0
+speed_sensitivity_knots = [6.0, 10.0, 13.5, 15.7]
+
+[research.corridor]
+primary_expansion_m = 500.0
+sensitivity_expansion_m = [1000.0, 2000.0]
+proof_scope = "RASTER_RESOLUTION_CONTAINMENT_ONLY"
+
+[research.envelopes.conservative]
+maximum_yaw_rate_deg_per_s = 0.15
+maximum_lateral_acceleration_m_per_s2 = 0.02
+admission_gate = true
+
+[research.envelopes.nominal]
+maximum_yaw_rate_deg_per_s = 0.25
+maximum_lateral_acceleration_m_per_s2 = 0.04
+admission_gate = false
+
+[research.envelopes.permissive]
+maximum_yaw_rate_deg_per_s = 0.35
+maximum_lateral_acceleration_m_per_s2 = 0.06
+admission_gate = false
+
+[limitations]
+statement = "Formula-generated research assumptions only; not target-vessel trials or calibration."
+imo_turning_criteria_are_not_route_radius = true
+requires_full_scale_validation_for_real_manoeuvring_claim = true
+may_not_enter_formal_route_contract = true

@@ -21,6 +21,15 @@ from .route_smoothing_qualification import (
     RouteSmoothingQualificationError,
     build_qualified_route_smoothing_sidecar,
 )
+from .route_smoothing_qualification_v2 import (
+    RasterCorridorValidator,
+    build_qualified_route_smoothing_sidecar_v2,
+)
+from .route_smoothing_v2 import (
+    MultiSpanRouteResult,
+    MultiSpanRouteSegment,
+    build_multispan_route_smoothing,
+)
 
 __all__ = [
     "CLAMPED_CUBIC_KNOT_VECTOR",
@@ -28,10 +37,15 @@ __all__ = [
     "CandidateValidator",
     "CorridorValidator",
     "CurveSegment",
+    "MultiSpanRouteResult",
+    "MultiSpanRouteSegment",
+    "RasterCorridorValidator",
     "RouteSmoothingPolicy",
     "RouteSmoothingQualificationError",
     "RouteSmoothingResult",
+    "build_multispan_route_smoothing",
     "build_qualified_route_smoothing_sidecar",
+    "build_qualified_route_smoothing_sidecar_v2",
     "build_route_smoothing",
     "build_route_smoothing_sidecar",
     "evaluate_clamped_cubic_bspline",

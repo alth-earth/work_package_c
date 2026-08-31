@@ -9,7 +9,7 @@ Applicability: CURRENT
 Scope: C 核心算法现状、证据、正确性边界、改进设计与实施计划
 Canonical For: 工作包 C 核心算法改进实现的首要参考
 Branch: research-validation-system
-Last Verified: 2026-08-31 03:48 +08:00
+Last Verified: 2026-08-31 12:50 +08:00
 Related Canonical Docs:
   - "README.md"
   - "docs/ARCHITECTURE_AND_DECISIONS.md"
@@ -209,7 +209,7 @@ target.maximum_risk    >= R_trace
 | MOPBD* | 在局部风险变化和稳定状态下复用多目标搜索树 | 需要增量差分索引、局部变化假设和更强证明 | 远期研究 |
 | D* Lite/LPA* | 借鉴增量队列和边成本变化更新 | 经典假设不直接覆盖时变 RiskFrame；不能只改名 | 仅作理论参考 |
 | 自适应/非均匀网格 | 在风险梯度/障碍附近细化，均质区域粗化 | 需新的网格版本、cell→RiskFrame 映射和保守聚合合同 | **上一版 2.2.2 对应方向暂不实施** |
-| [受约束局部三次 B 样条航线平滑](ROUTE_SMOOTHING_BSPLINE_PLAN.md) | 对网格 waypoint 的航点处航向突变做局部曲线/可执行性研究；当前已有 D 展示-only 绘制、C geometry-only sidecar 和 C synthetic qualification API | 展示层只改 paint geometry；research sidecar 不改变搜索或合同，C qualifier 只在显式同一 RiskSampler/船模/corridor proof 下运行；真实连续安全、操纵性和资源资格仍未形成；不把 geometry-only 或 synthetic pass 当安全证据 | 独立 `R0`、`RESEARCH_ONLY`；R0.1/R0.2 已完成，R0.3-C/R0.4-C/R0.5-C 已实现并通过 focused/synthetic 门禁但未真实资格化，R0.6/R0.7 当前收束不运行；不属于 P0.2-M35 |
+| [受约束局部三次 B 样条航线平滑](ROUTE_SMOOTHING_BSPLINE_PLAN.md) | 对网格 waypoint 的航点处航向突变做局部曲线/可执行性研究；R1 已新增 v2 多跨度 G2 sidecar、最终 ETA 后逐点合成运动学复核、真实 RiskFrame/raster shadow 和同 digest 研究运动 | 正式 waypoint、搜索和合同不变；6/6 候选、视觉、风险、ETA、确定性和强制 cgroup 证据通过，但 manoeuvring 仍未校准，raster 只证明该分辨率包含性，附加 wall-time 相对 raw baseline 约 `252×`，超过 `10%` 门禁 | 独立 `R1`、`RESEARCH_ONLY`；终态 `DISPLAY_ONLY_RETAINED_NO_PRODUCTION_CUTOVER`，`resource_evidence_complete=true` 但 `qualified=false`；不属于 P0.2-M35，不自动重跑 |
 
 本轮受约束航线平滑研究实现的本地提交为 C `5a9af953ab7d6258ce0d4c9547c77d832e91a0af`，
 SSOT 收束提交为 C `972e0fe1ab094a99be168015f441a615c63b16e6`，Orchestrator

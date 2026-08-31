@@ -6,11 +6,11 @@ Content Status:
   - EXPERIMENTAL
 Document Role: SUPPORTING
 Applicability: RESEARCH_ONLY
-Scope: 受约束局部三次 B 样条航线平滑的 R0.1 问题定义、展示-only 实现、研究设计与验证门禁
+Scope: 受约束局部三次 B 样条航线平滑的 R0/R1 问题定义、展示实现、合成船模约束 shadow 与验证门禁
 Canonical For: 工作包 C 航点处航向突变和平滑航线研究的详细定义；从属于核心算法 SSOT
 Canonical Current State: NO
 Branch: research-validation-system
-Last Verified: 2026-08-31 03:48 +08:00
+Last Verified: 2026-08-31 12:50 +08:00
 Related Canonical Docs:
   - CORE_ALGORITHM_IMPROVEMENT_PLAN.md
   - ARCHITECTURE_AND_DECISIONS.md
@@ -20,6 +20,9 @@ Related Canonical Docs:
 ---
 
 # 受约束局部三次 B 样条航线平滑：R0.1 问题定义、展示实现与研究计划
+
+> 当前结论入口：第 1～15 节保留 R0 的历史问题定义、计划和当时证据；R1 的实施、真实
+> 环境 shadow、资源门禁和终态以第 16 节为准。R1 不回写或重解释 R0 历史运行结果。
 
 ## 0. 文档定位与更新规则（2026-08-31 03:26 +08:00）
 
@@ -51,6 +54,11 @@ SSOT。本文档不能取代 C 核心 SSOT、`cd.route-plan.v2`、四层 v3 或�
   synthetic qualification 与现有显示实现处收束；只有提出实质不同、可形式化且有真实
   可观测收益的新命题，并重新满足安全、非重复性、cgroup 和独立 experiment identity
   门禁后，才允许另行立项。
+- R1 已在独立 v2 sidecar 中实施多跨度 G2 三次 B 样条、最终 ETA 后逐点合成运动学复核、
+  caller-owned raster-resolution containment、真实 RiskFrame shadow 和同 digest Viewer
+  运动。R1 最终结论是 `DISPLAY_ONLY_RETAINED; NO_PRODUCTION_CUTOVER`：语义、视觉和
+  有限 cgroup 证据形成，但相对 raw-route 重算的附加 wall-time 门禁失败。第 16 节覆盖
+  本文其他位置仍写为 `NOT RUN` 的 R0 历史口径。
 
 **治理和证据依据：** 本文档遵循
 [`AGENT_DOCUMENTATION_RULES.md`](../../arctic_route_governance/standards/AGENT_DOCUMENTATION_RULES.md)
@@ -827,3 +835,164 @@ experiment identity 门禁后另立计划；不能仅因资源证据缺失而重
 1. 仅显示平滑：留在非权威显示层（本轮已选择）；
 2. 研究型可执行改善：另立合同和生产资格计划；
 3. 没有真实价值：关闭 R0，保留本文档作为审计记录。
+
+## 16. R1：合成船模约束的多跨度三次 B 样条（2026-08-31 12:50 +08:00）
+
+### 16.1 目标、范围和与 R0 的关系（2026-08-31 12:50 +08:00）
+
+R1 将上一轮提出的完整方案收敛为一个独立、默认关闭的 research-only shadow：保留现有
+D `route_smoothing.js` 的 display-only 呈现和默认行为，同时新增真正绑定曲率、速度、
+RiskFrame、raster、ETA 和资源证据的 v2 曲线。R1 不改变正式 waypoint 折线、planner、
+candidate、搜索上限、B/C 或 C/D 合同、ingress/service、formal latest、replanning
+baseline 或 frozen artifact。
+
+R1 的预注册目标如下：
+
+1. 用 clamped degree-3、4-span、7-control-point B-spline 替换独立局部锐角；内部节点
+   `0.25/0.5/0.75` multiplicity 为 1，内部保持 C2；前三/后三控制点分别沿入射/出射方向
+   等距共线，使直线拼接端点曲率为零。
+2. 不把“内部 C2”误称为整条路线 G2。每个局部窗口必须同时验证端点位置、切向、零曲率
+   和内部 C2；只要仍有 raw corner，`full_route_g2_claimed=false`。
+3. 保留 `2 km` 为未校准基础下限，候选从 65 个确定性降序半径中选择最大可行值；不把
+   `20/40 km` 写成固定显示半径。
+4. 运动学使用 conservative 准入门禁，并在最终 ETA 收敛后逐点复核，而不是使用“全局
+   最大速度 × 全局最大曲率”：
+
+   \[
+   R_{\min}(v)=\max\left(2000,\frac{v}{\omega_{\max}},
+   \frac{v^2}{a_{y,\max}}\right)
+   \]
+
+5. caller 以每个 B-spline span 的控制点凸包做 `500 m` 主门禁，并记录 `1/2 km`
+   sensitivity；陆地、unknown 或 coverage 缺失均拒绝。该证据只能称
+   `RASTER_RESOLUTION_CONTAINMENT_PASS`，不能称连续海域或真实可航证明。
+6. 使用同一 RiskSampler 和船速模型重算 raw/curve；最大风险与积分风险不得超过 raw 加
+   容差；ETA 必须严格递增，curve 与同模型 raw 重算的终点差不得超过
+   `max(10 min, 2% raw duration)`。发布 ETA 与 raw 重算的既有偏差单独诊断，不能错误
+   归因于平滑。
+7. 当前 `1024×1024`、`mapZoom=1` 下，accepted-corner 法向偏离中位数不少于 `3 CSS px`，
+   最大值不少于 `5 CSS px`；采样后的最大屏幕弦误差不大于 `0.5 CSS px`，单弦弧长亏损
+   不大于 `25 m`。
+8. 真实 6h case 必须以各候选角 ETA 为中心，至少 `5/6` 通过；随后才允许约 `53.4h`
+   全程 3 次重复。资源限定为 `memory.max=2 GiB`、`memory.swap.max=0`、`pids.max=256`、
+   timeout `90 min`、附加 RSS 不超过 `128 MiB`、附加 wall time 不超过 raw baseline 的
+   `10%`。
+
+最大允许结论只有：
+
+- `SYNTHETIC_VESSEL_AND_REAL_ENVIRONMENT_SHADOW_PASS`；
+- `SHADOW_PASS_VISUAL_GAIN_INSUFFICIENT`；
+- `DISPLAY_ONLY_RETAINED`；
+- `FALLBACK_RAW_ROUTE`。
+
+四种结论都必须附加 `NO_PRODUCTION_CUTOVER`，且
+`production_qualified=false`。
+
+### 16.2 实现结构和身份隔离（2026-08-31 12:50 +08:00）
+
+R1 新增 `c.research-route-smoothing-sidecar.v2`，不修改 v1 schema、digest 或历史构件：
+
+| Owner | R1 实现 | 权威边界 |
+|---|---|---|
+| C | `route_smoothing_multispan.py`：固定 knot 的 4-span/7-control-point 数学切片、解析一/二阶导数、曲率和 G2 evidence | 只在 `research` 命名空间；不进入正式 C API/RoutePlan |
+| C | `route_smoothing_manoeuvring.py`：conservative/nominal/permissive 合成运动学 envelope | 全部标记 `SYNTHETIC_UNCALIBRATED`；不是实船校准 |
+| C | `route_smoothing_v2.py`：路线级 65 半径候选、相邻窗口 fail-closed、逐点曲率装配 | v1 不变；整条路线不越界声明 G2 |
+| C | `route_smoothing_qualification_v2.py`：RiskSampler、船速、ETA、风险、hard mask、coverage、raster 和最终逐点运动学门禁 | 任一失败原子回退；`production_qualified=false` |
+| Orchestrator | `raster_corridor_evidence.py`、v1/v2 dispatcher、replay exporter 和 R1 runner | caller-owned raster 证明；不导入 A/B 正式实现，不改变生产 replay |
+| D | `research_route_motion.js` 的严格 v2 reader、同 geometry/motion digest、course/speed 消费 | 默认 research 开关关闭；非法/过期/摘要不一致回退 timeline |
+
+中央控制点最初仍位于 raw vertex，虽然局部 G2，但真实 viewport 法向偏离只有约 `1.10 px`。
+R1 没有降低视觉门禁，而是利用不受端点 G2 约束的唯一中央控制点，将其移到两切点弦中点；
+前三/后三控制点的共线关系和端点零曲率保持不变，真实偏离提升到约 `6.02 px`。这一区分
+“数学连续”和“肉眼可见的真实 corner cut”，避免再次以纯绘图线宽制造平滑效果。
+
+v2 的 `motion_samples` 同时携带 `lon/lat/eta/course_degrees/speed_knots`。C 计算
+`same_geometry_motion_digest`；Orchestrator 重新计算并校验，D 也使用 Python-compatible
+canonical JSON 重新计算 sidecar 和 geometry/motion digest。蓝色路线、船位、航向、轨迹
+和 completed-track 因而绑定同一 v2 identity；任何不一致不得混用局部几何。
+
+### 16.3 输入、实验 identity 和证据等级（2026-08-31 12:50 +08:00）
+
+正式实验目录：
+
+`/root/my_project/.runtime/experiments/c-r1-route-smoothing-synthetic-vessel-real-env-20260831-r1/`
+
+主要输入：
+
+| 输入 | 当前证据 |
+|---|---|
+| Winter Viewer authoritative route | `22` waypoints、约 `53.4056 h`、`6` 个候选角；`INHERITED` 输入 |
+| RiskWindow | commit `risk-window-sha256-b5bed6bb48893e32620710e8c765dc60ec37a2fc384f0c49014b92f0a1c056b2`，`145` frames |
+| A land/sea raster | GEBCO-derived `0.05°` raster；`1=sea`、`0=land_or_coast`；metadata 明确 `navigation_semantics=none`、`hard_mask_semantics=none` |
+| vessel scale | `225 m × 32.31 m` Nordic Odyssey 数量级；10 kn economic speed、15.7 kn upper reference |
+| manoeuvring | conservative `0.15°/s`、`0.02 m/s²` 为准入；nominal/permissive 只作敏感性 |
+
+因此 R1 的环境证据来自现有真实 artifact，但船舶操纵性仍为合成、未校准假设。正确成熟度
+是 `SYNTHETIC_VESSEL_AND_REAL_ENVIRONMENT_SHADOW`，不是 real-vessel pass、连续海域安全或
+生产资格。
+
+调试期间保留了四个不作为正式结果的 attempt 目录：首次因 ETA 基线错误把既有 raw 模型
+偏差归因于曲线；第二次证明中央点在 raw vertex 时视觉不足；第三/四次用于补齐资源 baseline
+和屏幕弦误差记录。它们只作实现审计，正式结论只读取无 attempt 后缀的目录。
+
+### 16.4 真实 shadow 结果矩阵（2026-08-31 12:50 +08:00）
+
+| 门禁 | R1 结果 | Verdict / 边界 |
+|---|---:|---|
+| candidate-centered 6h | `6/6` | `PASS`；不是起始 6h 替代 |
+| 4-span/7-control-point、端点 G2、内部 C2 | 6 个 accepted corners 全通过 | `PASS_LOCAL_G2`；`full_route_g2_claimed=false` |
+| 选定半径 | 约 `41.439 km` | 最大可行离散候选；不是固定显示半径或实船标定 |
+| 实际最小曲率半径 | 约 `3.158 km` | conservative 逐点门禁通过；基础 `2 km` 未被改写 |
+| conservative 最大 yaw rate | 约 `0.0898°/s` | 小于 `0.15°/s`；`SYNTHETIC_UNCALIBRATED` |
+| conservative 最大横向加速度 | 约 `0.00775 m/s²` | 小于 `0.02 m/s²`；`SYNTHETIC_UNCALIBRATED` |
+| 500 m raster 主门禁 | land/unknown/missing coverage 均为 0 | `RASTER_RESOLUTION_CONTAINMENT_PASS`；非连续海域证明 |
+| 1/2 km raster sensitivity | 两档均 accepted | `PASS_AS_SENSITIVITY`；不是额外生产缓冲 |
+| hard mask / RiskFrame coverage | violation `0` / complete | `PASS`；绑定同一 145-frame RiskWindow |
+| 最大风险 delta | `0.0` | `PASS` |
+| 积分风险 delta | 约 `-0.02721 risk-hours` | `PASS`；不宣称稳定风险优势 |
+| curve vs raw recomputed ETA | 约 `-674.48 s` | `PASS`；小于 `3845.20 s` 门槛 |
+| raw recomputed vs published ETA | 约 `+5061.17 s` | 既有模型诊断，不归因于曲线，不隐藏 |
+| viewport 法向偏离 | median/max 均约 `6.023 px` | `PASS`，超过 `3/5 px` |
+| 最大屏幕弦误差 | 约 `0.00146 px` | `PASS`，小于 `0.5 px` |
+| 最大单弦弧长亏损 | 约 `0.0103 m` | `PASS`，小于 `25 m` |
+| full-route digest | 3 次一致 | `PASS`；904 个 v2 motion samples |
+| cgroup | `2 GiB / swap 0 / pids 256 / timeout 90 min` | `EVIDENCE_COMPLETE`；无 OOM、swap 或 timeout |
+| 附加峰值 RSS | 约 `43.1 MiB` | `PASS`，小于 `128 MiB` |
+| wall time | smoothing/proof median 约 `1.29 s`；raw recompute median 约 `0.0051 s`；overhead ratio 约 `252.15` | `FAIL`，远高于 `10%`；不以绝对时间较短掩盖相对门禁失败 |
+| 生产资格 | `false` | `NO_PRODUCTION_CUTOVER` |
+
+注意：`resource_evidence_complete=true` 只表示强制 cgroup 和比较指标齐全，不表示资源资格
+通过；本次 `resource_evidence.qualified=false`。同理，`all_resource_clean` 或没有 OOM 不能
+替代 wall-time 门禁。
+
+### 16.5 终态、停止规则和后续条件（2026-08-31 12:50 +08:00）
+
+R1 的权威终态固定为：
+
+`DISPLAY_ONLY_RETAINED_NO_PRODUCTION_CUTOVER`
+
+原因不是几何、视觉、安全采样、RiskFrame 语义、逐点合成运动学、确定性或 cgroup 证据
+缺失；这些门禁在当前 artifact 上均已形成。阻止升级的是预注册 wall-time 相对门禁明确
+失败，以及真实船舶操纵性仍未校准。当前实现和 v2 sidecar 保留为 research shadow，D
+默认仍使用既有 display-only 呈现；不得自动把船舶正式运动切到 v2，也不得修改正式合同。
+
+本阶段到此收束，不通过以下方式制造成功：
+
+- 不将 raw baseline 改为 Dijkstra 或不相关的长耗时流程；Dijkstra 继续只作正确性 oracle；
+- 不把绝对约 1.3 秒描述成稳定性能优势，忽略 `252×` 相对开销；
+- 不因 resource evidence 已完整而绕过 `qualified=false`；
+- 不把 GEBCO raster cell pass 写成连续海域安全；
+- 不把公开相似散货船参数写成目标船实测操纵性；
+- 不删除或改写 v1 历史 sidecar，不启动 P0.2-M35，不提高搜索上限；
+- 不把 attempt 调试目录冒充正式复现结果。
+
+若未来重新立项，必须提出独立 R2 identity，并至少满足以下一个实质新命题：
+
+1. 在不减少当前 raster/RiskFrame/运动学证据的前提下，把证明和资格计算增量化或缓存化，
+   使附加 wall time 达到预注册 `<=10%`；
+2. 获得目标船 manoeuvring booklet、试验或经批准的可追溯校准，从
+   `SYNTHETIC_UNCALIBRATED` 升级；
+3. 提出比 raster-resolution bbox 枚举更强且可形式化的连续 corridor 证明。
+
+重启前仍须说明与 R0/R1、P0.2-M31～M34 的非重复性、预期真实可观测收益、强制 cgroup
+方案和独立 artifact identity。不得只因想让曲线进入生产运动而重复运行同一 R1。
