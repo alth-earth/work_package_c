@@ -60,7 +60,7 @@ SSOT。本文档不能取代 C 核心 SSOT、`cd.route-plan.v2`、四层 v3 或�
   有限 cgroup 证据形成，但相对 raw-route 重算的附加 wall-time 门禁失败。第 16 节覆盖
   本文其他位置仍写为 `NOT RUN` 的 R0 历史口径。
 - R2 仅按第 16.5 节允许的新性能命题完成分段归因、prepared raster 和 exact sample cache
-  复核；语义 digest 一致，但冷/暖附加 wall-time 仍约为 raw baseline 的 `132×/67×`，终态
+  复核；语义 digest 一致，但冷/暖附加 wall-time 仍约为 raw baseline 的 `138×/70×`，终态
   `R2_PROFILE_ONLY_PERFORMANCE_GATE_FAIL_NO_PRODUCTION_CUTOVER`。详见第 16.6 节。
 
 **治理和证据依据：** 本文档遵循
@@ -1016,10 +1016,10 @@ bounded-LRU 复用。另新增 ETA drift 逐航段诊断和生产提案准入检
 
 | 证据 | R2 r3 结果 | Verdict / 边界 |
 |---|---:|---|
-| canonical unprepared profile | 约 `1.537 s` | 分段归因值，observer 开销不作为资格数字 |
-| prepared raster profile | 约 `0.624 s` | raster 重复解析明显下降；语义不变 |
-| cold prepared + exact cache | 约 `0.631 s` | raw median 约 `0.00473 s`，附加 ratio 约 `132.37` |
-| warm prepared + exact cache | median 约 `0.321 s` | 附加 ratio 约 `66.88`；不能替代 cold 资格 |
+| canonical unprepared profile | 约 `1.550 s` | 分段归因值，observer 开销不作为资格数字 |
+| prepared raster profile | 约 `0.615 s` | raster 重复解析明显下降；语义不变 |
+| cold prepared + exact cache | 约 `0.623 s` | raw median 约 `0.00447 s`，附加 ratio 约 `138.18` |
+| warm prepared + exact cache | median 约 `0.316 s` | 附加 ratio 约 `69.75`；不能替代 cold 资格 |
 | exact sample cache | cold `4513` misses / `79` hits；3 次 warm 后累计 `13855` hits | 无 eviction；production default 未改变 |
 | sidecar digest | canonical/prepared/cached/cold/3 次 warm 全一致 | `PASS_SEMANTIC_DIGEST_MATCH` |
 | cgroup / RSS | `2 GiB / swap 0 / pids 256`；约 `41.27 MiB` | evidence complete，无 OOM/swap；RSS 通过 |

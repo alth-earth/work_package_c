@@ -209,13 +209,13 @@ target.maximum_risk    >= R_trace
 | MOPBD* | 在局部风险变化和稳定状态下复用多目标搜索树 | 需要增量差分索引、局部变化假设和更强证明 | 远期研究 |
 | D* Lite/LPA* | 借鉴增量队列和边成本变化更新 | 经典假设不直接覆盖时变 RiskFrame；不能只改名 | 仅作理论参考 |
 | 自适应/非均匀网格 | 在风险梯度/障碍附近细化，均质区域粗化 | 需新的网格版本、cell→RiskFrame 映射和保守聚合合同 | **上一版 2.2.2 对应方向暂不实施** |
-| [受约束局部三次 B 样条航线平滑](ROUTE_SMOOTHING_BSPLINE_PLAN.md) | 对网格 waypoint 的航点处航向突变做局部曲线/可执行性研究；R1 已形成 v2 多跨度 G2 shadow，R2 仅新增分段归因、prepared raster、exact sample cache、ETA drift 和 proposal-readiness fail-closed 证据 | 正式 waypoint、搜索、合同和 D 默认均不变；R2 sidecar digest 全一致，冷路径约 `0.631 s`、warm median 约 `0.321 s`，但相对 raw baseline 仍约 `132×/67×`；ETA 另观察到发布 `921.38 km` 与 qualifier 重算 `955.62 km` 的距离基准不一致，manoeuvring 校准和连续 corridor proof 仍缺失 | R1 终态保持 `DISPLAY_ONLY_RETAINED_NO_PRODUCTION_CUTOVER`；R2 终态 `R2_PROFILE_ONLY_PERFORMANCE_GATE_FAIL_NO_PRODUCTION_CUTOVER`，`resource_evidence_complete=true` 但 `qualified=false`；不属于 P0.2-M35，不启动生产合同提案 |
+| [受约束局部三次 B 样条航线平滑](ROUTE_SMOOTHING_BSPLINE_PLAN.md) | 对网格 waypoint 的航点处航向突变做局部曲线/可执行性研究；R1 已形成 v2 多跨度 G2 shadow，R2 仅新增分段归因、prepared raster、exact sample cache、ETA drift 和 proposal-readiness fail-closed 证据 | 正式 waypoint、搜索、合同和 D 默认均不变；R2 sidecar digest 全一致，冷路径约 `0.623 s`、warm median 约 `0.316 s`，但相对 raw baseline 仍约 `138×/70×`；ETA 另观察到发布 `921.38 km` 与 qualifier 重算 `955.62 km` 的距离基准不一致，manoeuvring 校准和连续 corridor proof 仍缺失 | R1 终态保持 `DISPLAY_ONLY_RETAINED_NO_PRODUCTION_CUTOVER`；R2 终态 `R2_PROFILE_ONLY_PERFORMANCE_GATE_FAIL_NO_PRODUCTION_CUTOVER`，`resource_evidence_complete=true` 但 `qualified=false`；不属于 P0.2-M35，不启动生产合同提案 |
 
-本轮受约束航线平滑研究实现的本地提交为 C `5a9af953ab7d6258ce0d4c9547c77d832e91a0af`，
-SSOT 收束提交为 C `972e0fe1ab094a99be168015f441a615c63b16e6`，Orchestrator
-`356b9dc9b301029ad7304f98e6b3893186c918c7`、D `0d122c359440e1522a2a3724df84b1c7548bfc5f`；
-均未 push。提交后的 C 研究构件仍只写入 workspace 根目录 `.runtime/experiments/`，不进入
-正式数据流。
+R1 最终本地提交为 C `6c6f707`、Orchestrator `345aa6d`、D `fd7a4b1`。R2 profile 代码提交
+为 C `aaadf2e`、Orchestrator `6835321`，正式 r3 manifest 绑定这两个 commit；C 的
+`working_tree_clean=false` 仅来自提交前已存在且继续保留的 `docs/tmp/` 未跟踪文件，tracked
+tree 与 manifest tree digest 一致。以上提交均未 push；研究构件仍只写入 workspace 根目录
+`.runtime/experiments/`，不进入正式数据流。
 
 **2.2.2 暂缓声明：** 上一版编号 2.2.2 所对应的自适应/非均匀网格方案全部保留为后备研究方向，但本轮不实现、不改合同、不引入 PolarRoute/MeshiPhi 的网格依赖。只有当固定网格在 M1/M2 中被重复证据证明为主要瓶颈，且 C 侧无法通过 LTCR-TDA*、缓存或搜索标签改进达到目标，才启动该方向的必要性评审和跨包合同提案。
 
