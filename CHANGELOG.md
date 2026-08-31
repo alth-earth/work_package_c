@@ -15,6 +15,17 @@ Last Verified: 2026-08-27
 与当前架构请先阅读 [README.md](README.md)；长期设计取舍见
 [决策记录](docs/DECISIONS.md)。
 
+## Unreleased — Engineering route motion contract（2026-08-31）
+
+- 新增 `cd.route-motion-set.v1`、严格 JSON codec/Schema 和四层 recommended-only producer；
+  正式 motion 不修改 RoutePlan waypoint、ETA、metrics 或身份。
+- 新增公式推导的 `c.route-motion-vessel-profile.v1` 与
+  `CONTINUOUS_IN_DECLARED_RASTER_MODEL` corridor proof；两者明确不宣称实船校准、导航或 UKC。
+- 新增 `arctic-route-motion` 冷生成 CLI，以显式 plan/RunContext/RiskWindow/raster 输入原子发布
+  motion set、profile 和 checksums；默认 generated-at 继承 plan set 以保证同输入确定性。
+- 历史 R1/R2 sidecar 与 `production_qualified=false` 保持不变；research v2 golden digest
+  增加字面回归保护。
+
 ## Unreleased — P3.1 SMO-A* evidence hardening（2026-08-27）
 
 - `TimeDependentAStar` 的显式 `shared_edge_evaluation=True` 路径现在把拒绝边保存为

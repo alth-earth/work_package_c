@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arctic-route.local/schemas/route-motion-set-v1.schema.json",
+  "title": "CD Route Motion Set v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "motion_set_id", "layer_set_id", "run_id", "scenario_id",
+    "corridor_id", "generation_id", "input_revision", "risk_window_id",
+    "risk_window_digest", "vessel_profile_id", "vessel_profile_version",
+    "vessel_profile_digest", "motion_profile_id", "motion_profile_digest",
+    "config_digest", "model_config_digest", "planner_config_digest",
+    "producer_digest", "generated_at", "records"
+  ],
+  "properties": {
+    "schema_version": {"const": "cd.route-motion-set.v1"},
+    "motion_set_id": {"type": "string", "pattern": "^route-motion-set-sha256-[0-9a-f]{64}$"},
+    "layer_set_id": {"type": "string", "pattern": "^layer-set-sha256-[0-9a-f]{64}$"},
+    "run_id": {"type": "string", "minLength": 1},
+    "scenario_id": {"type": "string", "minLength": 1},
+    "corridor_id": {"type": "string", "minLength": 1},
+    "generation_id": {"type": "integer", "minimum": 0},
+    "input_revision": {"type": "integer", "minimum": 0},
+    "risk_window_id": {"type": "string", "minLength": 1},
+    "risk_window_digest": {"$ref": "#/$defs/digest"},
+    "vessel_profile_id": {"type": "string", "minLength": 1},
+    "vessel_profile_version": {"type": "string", "minLength": 1},
+    "vessel_profile_digest": {"$ref": "#/$defs/digest"},
+    "motion_profile_id": {"type": "string", "minLength": 1},
+    "motion_profile_digest": {"$ref": "#/$defs/digest"},
+    "config_digest": {"$ref": "#/$defs/digest"},
+    "model_config_digest": {"$ref": "#/$defs/digest"},
+    "planner_config_digest": {"$ref": "#/$defs/digest"},
+    "producer_digest": {"$ref": "#/$defs/digest"},
+    "generated_at": {"$ref": "#/$defs/time"},
+    "records": {
+      "type": "array", "minItems": 4, "maxItems": 4,
+      "prefixItems": [
+        {"$ref": "#/$defs/record", "properties": {"planning_layer": {"const": "full_voyage"}}},
+        {"$ref": "#/$defs/record", "properties": {"planning_layer": {"const": "main_corridor_24_72h"}}},
+        {"$ref": "#/$defs/record", "properties": {"planning_layer": {"const": "rolling_0_24h"}}},
+        {"$ref": "#/$defs/record", "properties": {"planning_layer": {"const": "executable_0_6h"}}}
+      ],
+      "items": false
+    }
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "time": {"type": "string", "format": "date-time", "pattern": "Z$"},
+    "sample": {
+      "type": "object", "additionalProperties": false,
+      "required": ["lon", "lat", "eta", "course_degrees", "speed_knots"],
+      "properties": {
+        "lon": {"type": "number", "minimum": -180, "maximum": 180},
+        "lat": {"type": "number", "minimum": -90, "maximum": 90},
+        "eta": {"$ref": "#/$defs/time"},
+        "course_degrees": {"type": "number", "minimum": 0, "exclusiveMaximum": 360},
+        "speed_knots": {"type": "number", "minimum": 0}
+      }
+    },
+    "anchor": {
+      "type": "object", "additionalProperties": false,
+      "required": ["waypoint_index", "eta", "motion_sample_index", "arc_length_m"],
+      "properties": {
+        "waypoint_index": {"type": "integer", "minimum": 0},
+        "eta": {"$ref": "#/$defs/time"},
+        "motion_sample_index": {"type": "integer", "minimum": 0},
+        "arc_length_m": {"type": "number", "minimum": 0}
+      }
+    },
+    "qualification": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "result", "risk_rechecked", "hard_mask_rechecked", "coverage_complete",
+        "eta_anchors_preserved", "speed_checked", "curvature_checked",
+        "corridor_checked", "manoeuvring_checked", "corridor_proof_scope",
+        "evidence_kind", "real_vessel_calibrated", "details_digest"
+      ],
+      "properties": {
+        "result": {"enum": ["QUALIFIED_ENGINEERING_REFERENCE", "RAW_FALLBACK"]},
+        "risk_rechecked": {"type": "boolean"},
+        "hard_mask_rechecked": {"type": "boolean"},
+        "coverage_complete": {"type": "boolean"},
+        "eta_anchors_preserved": {"type": "boolean"},
+        "speed_checked": {"type": "boolean"},
+        "curvature_checked": {"type": "boolean"},
+        "corridor_checked": {"type": "boolean"},
+        "manoeuvring_checked": {"type": "boolean"},
+        "corridor_proof_scope": {"type": "string", "minLength": 1},
+        "evidence_kind": {"const": "FORMULA_DERIVED_ENGINEERING_REFERENCE"},
+        "real_vessel_calibrated": {"const": false},
+        "details_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "record": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "planning_layer", "plan_id", "raw_route_digest", "mode", "fallback_reason",
+        "curve_digest", "motion_digest", "interpolation", "waypoint_anchors",
+        "motion_samples", "qualification"
+      ],
+      "properties": {
+        "planning_layer": {"enum": ["full_voyage", "main_corridor_24_72h", "rolling_0_24h", "executable_0_6h"]},
+        "plan_id": {"type": "string", "pattern": "^route-v3-sha256-[0-9a-f]{64}$"},
+        "raw_route_digest": {"$ref": "#/$defs/digest"},
+        "mode": {"enum": ["CURVE", "RAW_PASSTHROUGH"]},
+        "fallback_reason": {"type": ["string", "null"]},
+        "curve_digest": {"$ref": "#/$defs/digest"},
+        "motion_digest": {"$ref": "#/$defs/digest"},
+        "interpolation": {"const": "linear_time_between_producer_motion_samples"},
+        "waypoint_anchors": {"type": "array", "minItems": 2, "items": {"$ref": "#/$defs/anchor"}},
+        "motion_samples": {"type": "array", "minItems": 2, "items": {"$ref": "#/$defs/sample"}},
+        "qualification": {"$ref": "#/$defs/qualification"}
+      }
+    }
+  }
+}

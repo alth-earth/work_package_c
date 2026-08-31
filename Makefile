@@ -31,6 +31,7 @@ check: lint test
 	$(UV) lock --check --python "$(MAMBA_PREFIX)/bin/python"
 	$(UV) sync --check --python "$(MAMBA_PREFIX)/bin/python"
 	$(UV) run --locked arctic-route-plan --help
+	$(UV) run --locked arctic-route-motion --help
 
 demo:
 	$(UV) run --locked arctic-route-plan synthetic-demo --output-dir output/demo

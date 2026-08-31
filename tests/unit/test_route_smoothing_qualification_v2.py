@@ -87,6 +87,14 @@ def test_v2_qualification_is_deterministic_and_pointwise() -> None:
 
     assert first["status"] == "ACCEPTED"
     assert first["sidecar_digest"] == second["sidecar_digest"]
+    # Formal route motion reuses the geometry implementation without changing
+    # the historical research codec or its canonical v2 output.
+    assert first["sidecar_digest"] == (
+        "7686c448e38f64fb25be9770fc2875e022bfa592c62c83dedd734045b3bedb2e"
+    )
+    assert first["curve_digest"] == (
+        "6176bd835c73b2461d3df5a210dc687a241b0434dfac2c110742916bf5af7356"
+    )
     assert first["validation"]["manoeuvring_checked"] is True
     assert first["manoeuvring_evidence"]["accepted"] is True
     assert len(first["manoeuvring_evidence"]["curvatures_m_inv"]) == len(

@@ -1044,3 +1044,69 @@ corridor proof 缺失、published ETA drift 未完全解决。按预注册顺序
 continuous proof。R2 权威终态为：
 
 `R2_PROFILE_ONLY_PERFORMANCE_GATE_FAIL_NO_PRODUCTION_CUTOVER`
+
+## 17. 工程仿真正式 Route Motion 合同（2026-08-31 19:05 +08:00）
+
+### 17.1 决策边界
+
+本节是用户在 R1/R2 收束后另行授权的正式工程合同实施，不回写第 16 节实验结论：R1 仍为
+`DISPLAY_ONLY_RETAINED_NO_PRODUCTION_CUTOVER`，R2 仍为
+`R2_PROFILE_ONLY_PERFORMANCE_GATE_FAIL_NO_PRODUCTION_CUTOVER`，历史 v1/v2 research sidecar
+及其 `production_qualified=false` 均不变。新路径的最高结论限定为
+`ENGINEERING_ROUTE_MOTION_PRODUCTION_ENABLED_WITH_SYNTHETIC_REFERENCE_MODEL`；这里的
+production 只指当前 C→Orchestrator→D 工程仿真发布链，不表示实船、导航或 UKC 认证。
+
+由于项目没有目标船实测 manoeuvring 数据，本节采用版本化公式工程参考船模并把不确定性
+写进合同，而不是伪造 holdout。方法记录参考
+[IMO MSC.137(76)](https://wwwcdn.imo.org/localresources/en/KnowledgeCentre/IndexofIMOResolutions/MSCResolutions/MSC.137%2876%29.pdf)
+和 [ITTC model validation guidance](https://ittc.info/media/11868/75-02-06-03.pdf) 对模型用途、
+假设、有效范围和验证记录的要求；这两个标准不是本项目 `0.15°/s`、`0.02 m/s²` 合成阈值的来源。
+
+### 17.2 已实施合同与失败语义
+
+- C 新增 `cd.route-motion-set.v1` Python 类型、严格 codec 和 JSON Schema；整组固定四层，
+  每层只处理 `recommended`，绑定完整 waypoint/ETA/推荐速度 digest。`CURVE` 和
+  `RAW_PASSTHROUGH` 可在四层内混合，但整组身份和顺序不可部分发布。
+- `c.route-motion-vessel-profile.v1` 记录 `225×32.31×14.08 m`、`10/15.7 kn`、基础
+  `2000 m`、`ω_max=0.15°/s`、`a_lat_max=0.02 m/s²`，并固定
+  `real_vessel_calibrated=false`、bathymetry/UKC disabled。
+- 连续走廊证明利用每个 cubic span 位于控制点凸包内的性质，并把所有相邻 producer samples
+  的直线段凸包一并纳入，保守枚举扩张凸包 bbox 接触的规则闭合 raster cells；缓冲为
+  `max(500 m, beam/2 + position + transform + chord error)`。
+  land、unknown、coverage/digest/extent/frame 缺失均把该层变成 raw passthrough。证明只覆盖
+  声明的 piecewise-constant raster model，不提升 GEBCO 的导航语义。
+- Orchestrator 重新校验四条 recommended plan、完整 waypoint digest、RiskWindow、RunContext
+  vessel、generation/revision 和 adoption 起终点；正式集合进入顶层 `route_motion_sets`，
+  motion set ID 进入 assembly semantic identity。JSON 与 plan 可由既有不可变目录发布器整组
+  写入并由 `checksums.json` 绑定；已存在目录拒绝覆盖。
+- D 启动时以 WebCrypto 对完整规范 JSON、curve 和 motion digest 做异步预校验并冻结对象；
+  正式 motion 无开关、默认优先。绘线、船位、course、speed、trail、completed-track 全部读取
+  同一 producer record；任何缺失、过期、篡改、非单调 ETA 或 adoption mismatch 整体回退
+  raw waypoint/timeline。research sidecar 仍只在研究视图显式启用，不是生产 fallback。
+
+正式 motion 直接锚定原 RoutePlan waypoint ETA，不发布新 ETA，也不把第 16 节约 `5061 s`
+published-vs-recomputed 诊断归因于曲线。C 在所有 anchor sample 上恢复权威 waypoint 的精确
+经纬度，避免局部坐标反投影的约 `1e-14` 浮点漂移触发跨语言身份误判。
+
+### 17.3 当前工程证据
+
+现有 Winter `145`-frame RiskWindow、四层 plan set 和 GEBCO 声明 raster model 生成了一个
+本地验收集合：四层模式依次为 `CURVE(904)`、`CURVE(904)`、`CURVE(157)`、
+`RAW_PASSTHROUGH(no_eligible_corner, 3)`。这证明合法 passthrough 不阻塞原子四层集合，也不把
+无可平滑转角误报为失败。
+
+- C 无 motion/input cache、每次重载 plan、145-frame RiskWindow 和 GEBCO 的五次冷生成中位约
+  `0.813 s/set`，折合约 `0.203 s/route`，通过前瞻式 `4.0/1.0 s` 门禁；五次
+  motion-set ID 一致。正式 `arctic-route-motion` CLI 使用同一路径并向不可变目录原子落盘。
+- D WebCrypto 完整预校验加活动路径建立的 11 次 cold median 约 `40.54 ms`，warm median
+  约 `6.83 ms`，通过 `50 ms` 门禁；cold/warm 分开报告。
+- `2 GiB / swap 0 / pids 256` transient cgroup 下三仓聚焦集为 C `20 passed`、
+  Orchestrator `24 passed`、D `11 passed`；`memory.peak=120,975,360 B`（约 `115.4 MiB`）、
+  `pids.peak=67`、swap `0`、OOM/oom_kill `0`；该 scope 总峰值也低于 `128 MiB` 预算。
+- CLI-first Firefox 在 `1024×1024` 真实 Viewer 验证正式 904-sample 路径默认启用、航程 scrub、
+  四层 UI 切换、producer course/speed/track 同源和 digest 篡改 raw fallback；最终静态请求均
+  `200`，console errors/warnings 为 `0`。截图、trace 和性能 JSON 位于 D
+  `output/playwright/`，仅为本地验收构件。
+
+上述证据不改写 R1 的相对 raw baseline 失败，也不将公式散货船或 GEBCO 声明 raster model
+解释成实船或导航安全证明。

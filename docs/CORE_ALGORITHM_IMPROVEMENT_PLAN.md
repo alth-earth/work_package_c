@@ -209,7 +209,7 @@ target.maximum_risk    >= R_trace
 | MOPBD* | 在局部风险变化和稳定状态下复用多目标搜索树 | 需要增量差分索引、局部变化假设和更强证明 | 远期研究 |
 | D* Lite/LPA* | 借鉴增量队列和边成本变化更新 | 经典假设不直接覆盖时变 RiskFrame；不能只改名 | 仅作理论参考 |
 | 自适应/非均匀网格 | 在风险梯度/障碍附近细化，均质区域粗化 | 需新的网格版本、cell→RiskFrame 映射和保守聚合合同 | **上一版 2.2.2 对应方向暂不实施** |
-| [受约束局部三次 B 样条航线平滑](ROUTE_SMOOTHING_BSPLINE_PLAN.md) | 对网格 waypoint 的航点处航向突变做局部曲线/可执行性研究；R1 已形成 v2 多跨度 G2 shadow，R2 仅新增分段归因、prepared raster、exact sample cache、ETA drift 和 proposal-readiness fail-closed 证据 | 正式 waypoint、搜索、合同和 D 默认均不变；R2 sidecar digest 全一致，冷路径约 `0.623 s`、warm median 约 `0.316 s`，但相对 raw baseline 仍约 `138×/70×`；ETA 另观察到发布 `921.38 km` 与 qualifier 重算 `955.62 km` 的距离基准不一致，manoeuvring 校准和连续 corridor proof 仍缺失 | R1 终态保持 `DISPLAY_ONLY_RETAINED_NO_PRODUCTION_CUTOVER`；R2 终态 `R2_PROFILE_ONLY_PERFORMANCE_GATE_FAIL_NO_PRODUCTION_CUTOVER`，`resource_evidence_complete=true` 但 `qualified=false`；不属于 P0.2-M35，不启动生产合同提案 |
+| [受约束局部三次 B 样条航线平滑](ROUTE_SMOOTHING_BSPLINE_PLAN.md) | R1/R2 研究结论冻结；其后经用户另行授权新增 `cd.route-motion-set.v1` 工程仿真正式兄弟合同、公式散货船 profile 和声明 raster model 连续证明 | RoutePlan waypoint/ETA/metrics、RiskFrame 和历史 sidecar 不变；正式 motion 只处理四条 recommended，D 严格校验后同源消费，失败回退 raw | R1/R2 的 `NO_PRODUCTION_CUTOVER` 不回写；新路径最高结论仅为 `ENGINEERING_ROUTE_MOTION_PRODUCTION_ENABLED_WITH_SYNTHETIC_REFERENCE_MODEL`，不是实船或导航认证；详见 §17 |
 
 R1 最终本地提交为 C `6c6f707`、Orchestrator `345aa6d`、D `fd7a4b1`。R2 profile 代码提交
 为 C `aaadf2e`、Orchestrator `6835321`，正式 r3 manifest 绑定这两个 commit；C 的

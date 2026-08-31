@@ -27,6 +27,14 @@ from .models import (
     build_selection_rationale,
     token_for_plan,
 )
+from .route_motion_serialization import (
+    canonical_sha256 as canonical_route_motion_sha256,
+)
+from .route_motion_serialization import (
+    route_motion_set_from_dict,
+    route_motion_set_semantic_digest,
+    route_motion_set_to_dict,
+)
 from .serialization import (
     atomic_write_json,
     route_plan_from_dict,
@@ -59,11 +67,15 @@ __all__ = [
     "Waypoint",
     "atomic_write_json",
     "build_selection_rationale",
+    "canonical_route_motion_sha256",
     "four_layer_route_plan_set_from_dict",
     "four_layer_route_plan_set_from_geojson",
     "four_layer_route_plan_set_semantic_digest",
     "four_layer_route_plan_set_to_dict",
     "four_layer_route_plan_set_to_geojson",
+    "route_motion_set_from_dict",
+    "route_motion_set_semantic_digest",
+    "route_motion_set_to_dict",
     "route_plan_from_dict",
     "route_plan_from_geojson",
     "route_plan_to_dict",

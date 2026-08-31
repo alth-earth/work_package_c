@@ -120,3 +120,31 @@ Python 真源：
 - 无推荐/最快对偶时不产出 rationale（字段为 `None`，不写文件），主路线合同不受影响。
 
 D 必须将 rationale 视为可选；旧 C 不产 rationale 时正常降级显示，不得因此阻塞路线消费。
+
+## 正式兄弟合同：Route Motion Set v1（2026-08-31）
+
+`cd.route-motion-set.v1` 是 `FourLayerRoutePlanSet` 的正式兄弟 artifact，不修改
+`RoutePlanV3` waypoint、ETA、metrics 或身份算法。Python 真源、codec 和 Schema 分别为：
+
+- `arctic_route_planning.contracts.RouteMotionSet`；
+- `arctic_route_planning.publishing.route_motion_serialization`；
+- `schemas/route-motion-set-v1.schema.json`。
+
+正式 producer 入口为 `arctic-route-motion`。它严格绑定四层 plan set、RunContext、显式
+RiskWindow commit 和声明 GEBCO raster，生成 `route-motion-set.json`、版本化 vessel
+profile 与 `checksums.json`；输出目录已存在时拒绝覆盖。
+
+每个集合按四层固定顺序恰好绑定四条 `recommended` 路线；每条记录使用包含坐标、ETA 和
+`recommended_speed_mps` 的完整 waypoint digest。`CURVE` 记录的
+`motion_samples` 是 D 绘线、船位、航向、航速、trail 和 completed-track 的唯一曲线源；
+`RAW_PASSTHROUGH` 是合法的逐层回退。整组 `motion_set_id` 对除自身外的规范 JSON 求
+SHA-256，任一记录缺失、顺序/plan/RiskWindow/vessel/generation 身份不符或 digest 篡改时，
+Orchestrator 不把该集合注入 Viewer bundle，D 则回退原始 waypoint/timeline。
+
+配套 `c.route-motion-vessel-profile.v1` 使用
+`nordic_odyssey_formula_reference_v1`：`225 m × 32.31 m`、吃水 `14.08 m`、经济航速
+`10 kn`、上界 `15.7 kn`，且
+`R_min(v)=max(2000 m, v/0.15°s⁻¹, v²/0.02 m s⁻²)`。它明确标记
+`FORMULA_DERIVED_ENGINEERING_REFERENCE`、`real_vessel_calibrated=false`。连续走廊证明也只
+声明 `CONTINUOUS_IN_DECLARED_RASTER_MODEL`；`navigation_grade=false`、bathymetry/UKC 未启用。
+因此本合同中的“生产”仅表示当前工程仿真正式消费路径，不表示实船校准、导航认证或适航证明。

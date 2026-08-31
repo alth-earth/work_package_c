@@ -6,18 +6,28 @@ from datetime import timedelta
 from pathlib import Path
 from threading import Event, Thread
 
+import numpy as np
 import pytest
 from jsonschema import Draft202012Validator, FormatChecker
 from referencing import Registry, Resource
 
 from arctic_route_planning.config import load_configuration
-from arctic_route_planning.contracts import PlanLayer, ProvenanceKind
+from arctic_route_planning.contracts import (
+    FourLayerRoutePlanSet,
+    LayerRouteBundle,
+    PlanLayer,
+    ProvenanceKind,
+)
 from arctic_route_planning.development import create_development_run_context
 from arctic_route_planning.domain import ObjectiveMode, PlanKind, ReplanReason
 from arctic_route_planning.errors import PlanningCancelledError
 from arctic_route_planning.layered import (
     FourLayerPlanningService,
     LayerNotMaterializableError,
+)
+from arctic_route_planning.motion import (
+    EngineeringRouteMotionProfile,
+    build_route_motion_set,
 )
 from arctic_route_planning.planners import PlanningResult, RouteStep, SearchMetrics
 from arctic_route_planning.publishing import (
@@ -29,6 +39,8 @@ from arctic_route_planning.publishing import (
     four_layer_route_plan_set_from_geojson,
     four_layer_route_plan_set_to_dict,
     four_layer_route_plan_set_to_geojson,
+    route_motion_set_from_dict,
+    route_motion_set_to_dict,
     route_plan_v3_from_dict,
     route_plan_v3_from_geojson,
     route_plan_v3_to_dict,
@@ -41,7 +53,10 @@ from arctic_route_planning.replanning import (
     ReplanTriggerEvaluator,
     RouteSwitchGate,
 )
+from arctic_route_planning.risk import RiskSampler
 from arctic_route_planning.service import ServicePlanningRequest
+
+from .factories import make_frame
 
 CONFIG_ROOT = Path(__file__).parents[2] / "configs"
 SCHEMA_ROOT = Path(__file__).parents[2] / "schemas"
@@ -212,6 +227,149 @@ def test_four_layer_service_builds_twelve_routes_and_round_trips() -> None:
         "four-layer-route-plan-set-v3.geojson.schema.json",
         four_layer_route_plan_set_to_geojson(outcome.plan_set),
     )
+
+
+def test_route_motion_set_is_a_four_recommended_sibling_contract() -> None:
+    _configuration, _planner, _store, service, request = _case()
+    outcome = service.execute(request)
+
+    motion_set = build_route_motion_set(
+        outcome.plan_set,
+        risk_window_id="risk-window-fixture",
+        risk_window_digest="2" * 64,
+        vessel_profile_digest="3" * 64,
+        producer_digest="4" * 64,
+        generated_at=request.start_time,
+    )
+    document = route_motion_set_to_dict(motion_set)
+
+    assert route_motion_set_from_dict(document) == motion_set
+    assert [record["planning_layer"] for record in document["records"]] == [
+        layer.value for layer in PlanLayer
+    ]
+    assert [record["plan_id"] for record in document["records"]] == [
+        bundle.recommended.plan_id for bundle in outcome.plan_set.layers
+    ]
+    assert {record["mode"] for record in document["records"]} == {"RAW_PASSTHROUGH"}
+    assert {record["fallback_reason"] for record in document["records"]} == {
+        "missing_risk_window"
+    }
+    assert motion_set.motion_profile_digest == EngineeringRouteMotionProfile().digest
+    deterministic_default = build_route_motion_set(
+        outcome.plan_set,
+        risk_window_id="risk-window-fixture",
+        risk_window_digest="2" * 64,
+        vessel_profile_digest="3" * 64,
+        producer_digest="4" * 64,
+    )
+    assert deterministic_default.generated_at == outcome.plan_set.generated_at
+    assert deterministic_default.motion_set_id == motion_set.motion_set_id
+    _validate_schema("route-motion-set-v1.schema.json", document)
+
+    tampered = json.loads(json.dumps(document))
+    tampered["records"][0]["motion_samples"][0]["lon"] += 0.01
+    with pytest.raises(ValueError, match=r"digest|motion_set_id"):
+        route_motion_set_from_dict(tampered)
+
+
+def test_route_motion_set_qualifies_curves_and_keeps_short_layer_raw() -> None:
+    _configuration, _planner, _store, service, request = _case()
+    original = service.execute(request).plan_set
+    full_plan_id = "route-v3-sha256-" + "a" * 64
+    rebuilt_bundles = []
+    recommended_ids = iter("abcd")
+    for bundle in original.layers:
+        plans = {}
+        for objective, plan in bundle.plans.items():
+            waypoints = tuple(
+                replace(
+                    waypoint,
+                    latitude=(
+                        waypoint.latitude + 0.2
+                        if waypoint.longitude in {2.0, 4.0}
+                        else waypoint.latitude
+                    ),
+                )
+                for waypoint in plan.waypoints
+            )
+            updated = replace(plan, waypoints=waypoints)
+            if plan.planning_layer is not PlanLayer.FULL_VOYAGE:
+                updated = replace(updated, reference_plan_id=full_plan_id)
+            if objective is ObjectiveMode.RECOMMENDED:
+                identifier = next(recommended_ids)
+                updated = replace(
+                    updated,
+                    plan_id="route-v3-sha256-" + identifier * 64,
+                    reference_plan_id=(
+                        None
+                        if plan.planning_layer is PlanLayer.FULL_VOYAGE
+                        else full_plan_id
+                    ),
+                )
+            plans[objective] = updated
+        rebuilt_bundles.append(LayerRouteBundle(bundle.planning_layer, plans))
+    plan_set = replace(original, layers=tuple(rebuilt_bundles))
+    assert isinstance(plan_set, FourLayerRoutePlanSet)
+
+    frames = tuple(
+        make_frame(
+            request.start_time + timedelta(hours=hour),
+            np.full((3, 6), 0.1, dtype=np.float32),
+            risk_id=f"risk-{hour}",
+            environment_speed_factor=np.ones((3, 6), dtype=np.float32),
+            latitudes=(69.5, 70.0, 70.5),
+            longitudes=(0.0, 1.0, 2.0, 3.0, 4.0, 5.0),
+            scenario_id=plan_set.scenario_id,
+            corridor_id=plan_set.corridor_id,
+            vessel_profile_id=plan_set.vessel_profile_id,
+            config_digest=plan_set.config_digest,
+            model_config_digest=plan_set.model_config_digest,
+            run_id=plan_set.run_id,
+            generation_id=plan_set.generation_id,
+        )
+        for hour in range(91)
+    )
+
+    def continuous_corridor(_hulls, _points, _times, expansion_m):
+        return {
+            "accepted": True,
+            "complete": True,
+            "coverage_complete": True,
+            "hard_mask_envelope_complete": True,
+            "continuous_containment_proved": True,
+            "continuous_containment_scope": "CONTINUOUS_IN_DECLARED_RASTER_MODEL",
+            "expansion_m": expansion_m,
+            "navigation_grade": False,
+        }
+
+    motion_set = build_route_motion_set(
+        plan_set,
+        risk_window_id="risk-window-fixture",
+        risk_window_digest="2" * 64,
+        vessel_profile_digest="3" * 64,
+        producer_digest="4" * 64,
+        profile=EngineeringRouteMotionProfile(minimum_steerage_speed_knots=0.1),
+        risk_sampler=RiskSampler(frames),
+        corridor_validator=continuous_corridor,
+        generated_at=request.start_time,
+    )
+
+    assert any(
+        record.mode.value == "CURVE" for record in motion_set.records[:-1]
+    ), [(record.mode.value, record.fallback_reason) for record in motion_set.records]
+    assert motion_set.records[-1].mode.value == "RAW_PASSTHROUGH"
+    for record, bundle in zip(motion_set.records, plan_set.layers, strict=True):
+        assert record.plan_id == bundle.recommended.plan_id
+        assert record.waypoint_anchors[0].eta == bundle.recommended.waypoints[0].eta
+        assert record.waypoint_anchors[-1].eta == bundle.recommended.waypoints[-1].eta
+        for anchor, waypoint in zip(
+            record.waypoint_anchors, bundle.recommended.waypoints, strict=True
+        ):
+            sample = record.motion_samples[anchor.motion_sample_index]
+            assert (sample.longitude, sample.latitude) == (
+                waypoint.longitude, waypoint.latitude
+            )
+    assert route_motion_set_from_dict(route_motion_set_to_dict(motion_set)) == motion_set
 
 
 def test_four_layer_service_attaches_selection_rationale_using_full_voyage_layer() -> None:
@@ -454,6 +612,7 @@ def _validate_schema(name: str, document: dict[str, object]) -> None:
         "route-plan-v3.geojson.schema.json",
         "four-layer-route-plan-set-v3.schema.json",
         "four-layer-route-plan-set-v3.geojson.schema.json",
+        "route-motion-set-v1.schema.json",
     )
     resources = []
     schemas = {}

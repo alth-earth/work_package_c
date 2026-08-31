@@ -18,6 +18,7 @@ arctic-route-contracts = { path = "../arctic_route_contracts", editable = true }
 
 [project.scripts]
 arctic-route-plan = "arctic_route_planning.cli:main"
+arctic-route-motion = "arctic_route_planning.motion.cli:main"
 
 [dependency-groups]
 dev = [

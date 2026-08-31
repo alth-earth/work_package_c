@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arctic-route.local/schemas/route-motion-vessel-profile-v1.schema.json",
+  "title": "C Formula-Derived Route Motion Vessel Profile v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "profile_id", "vessel_profile_id", "vessel_profile_version",
+    "length_m", "beam_m", "draft_m", "economic_speed_knots",
+    "maximum_speed_knots", "minimum_steerage_speed_knots",
+    "base_minimum_radius_m", "maximum_yaw_rate_deg_s",
+    "maximum_lateral_acceleration_m_s2", "primary_corridor_margin_m",
+    "evidence_kind", "real_vessel_calibrated",
+    "bathymetry_hard_constraint_enabled", "source_notes", "profile_digest",
+    "minimum_radius_formula", "units"
+  ],
+  "properties": {
+    "schema_version": {"const": "c.route-motion-vessel-profile.v1"},
+    "profile_id": {"const": "nordic_odyssey_formula_reference_v1"},
+    "vessel_profile_id": {"const": "nordic_odyssey_reference_v1"},
+    "vessel_profile_version": {"type": "string", "minLength": 1},
+    "length_m": {"type": "number", "exclusiveMinimum": 0},
+    "beam_m": {"type": "number", "exclusiveMinimum": 0},
+    "draft_m": {"type": "number", "exclusiveMinimum": 0},
+    "economic_speed_knots": {"type": "number", "exclusiveMinimum": 0},
+    "maximum_speed_knots": {"type": "number", "exclusiveMinimum": 0},
+    "minimum_steerage_speed_knots": {"type": "number", "exclusiveMinimum": 0},
+    "base_minimum_radius_m": {"type": "number", "exclusiveMinimum": 0},
+    "maximum_yaw_rate_deg_s": {"type": "number", "exclusiveMinimum": 0},
+    "maximum_lateral_acceleration_m_s2": {"type": "number", "exclusiveMinimum": 0},
+    "primary_corridor_margin_m": {"type": "number", "exclusiveMinimum": 0},
+    "evidence_kind": {"const": "FORMULA_DERIVED_ENGINEERING_REFERENCE"},
+    "real_vessel_calibrated": {"const": false},
+    "bathymetry_hard_constraint_enabled": {"const": false},
+    "source_notes": {"type": "string", "minLength": 1},
+    "profile_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "minimum_radius_formula": {"const": "max(base_radius, v/omega_max, v^2/a_lat_max)"},
+    "units": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["length_beam_draft_radius_margin", "speed", "yaw_rate", "lateral_acceleration"],
+      "properties": {
+        "length_beam_draft_radius_margin": {"const": "m"},
+        "speed": {"const": "knots"},
+        "yaw_rate": {"const": "deg/s"},
+        "lateral_acceleration": {"const": "m/s^2"}
+      }
+    }
+  }
+}

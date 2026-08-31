@@ -46,6 +46,7 @@ Last Verified: 2026-08-25
 | C 侧最终速度、ETA 和多目标成本 | `cost/`、`service.py` |
 | RoutePlan v2 三目标基线 | `service.py`、`schemas/route-plan-v2.schema.json` |
 | RoutePlan v3 四层十二路线整组 | `layered.py`、`contracts/layered.py`、v3 Schema |
+| C→D 正式工程曲线运动兄弟合同 | `contracts/route_motion.py`、`motion/`、`route-motion-set-v1.schema.json`；公式散货船、声明 raster model 连续证明、失败回退 raw |
 | 重规划、竞态围栏和原子 latest | `replanning/`、`publishing/` |
 | JSON/GeoJSON 往返和 Schema 验证 | `contracts/codec.py`、`publishing/`、`tests/contract/test_schemas.py` |
 | 旧 B/v1 显式隔离 | `adapters/legacy_b.py`；只允许 `legacy_unverified` |
