@@ -423,12 +423,19 @@ SWEEP_CSV_FIELDS: tuple[str, ...] = (
     "expansion_reduction_pct",
     "ours_wall_ms",
     "dijkstra_wall_ms",
+    "static_wall_ms",
+    "risk_blind_wall_ms",
     "speedup",
     "cost_identical",
+    "ours_cost_hours",
+    "dijkstra_cost_hours",
+    "static_cost_hours",
+    "risk_blind_cost_hours",
     "ours_avg_risk",
     "static_avg_risk",
     "avg_risk_delta_pct",
     "ours_max_risk",
+    "dijkstra_max_risk",
     "static_max_risk",
     "max_risk_delta_pct",
     "ours_distance_km",
@@ -549,6 +556,15 @@ def _load_sweep(sweep_root: Path) -> list[dict[str, Any]]:
                 row["cost_identical"] = (
                     abs(ours["total_cost_hours_median"] - dij["total_cost_hours_median"]) < 1e-9
                 )
+                row["ours_cost_hours"] = ours["total_cost_hours_median"]
+                row["dijkstra_cost_hours"] = dij["total_cost_hours_median"]
+                row["dijkstra_max_risk"] = dij["maximum_edge_risk_median"]
+            if static is not None:
+                row["static_wall_ms"] = round(static["wall_ms_median"], 2)
+                row["static_cost_hours"] = static["total_cost_hours_median"]
+            if blind is not None:
+                row["risk_blind_wall_ms"] = round(blind["wall_ms_median"], 2)
+                row["risk_blind_cost_hours"] = blind["total_cost_hours_median"]
             if ours is not None and static is not None:
                 row["ours_avg_risk"] = ours["average_edge_risk_median"]
                 row["static_avg_risk"] = static["average_edge_risk_median"]

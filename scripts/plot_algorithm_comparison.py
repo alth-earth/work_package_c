@@ -451,6 +451,59 @@ def _load_run_documents(root: Path) -> dict[str, dict[str, Any]]:
     return documents
 
 
+def _load_sweep_run_documents(cases_root: Path) -> dict[str, dict[str, Any]]:
+    """Load per-case comparison.json artefacts produced by the sweep driver.
+
+    Returns ``"<case_id>|<objective>|<algorithm>" -> raw record``.  Only v2/v3
+    artefacts carry the per-step sequences the upgraded per-step figures need.
+    """
+    documents: dict[str, dict[str, Any]] = {}
+    if not cases_root.is_dir():
+        return documents
+    for case_dir in sorted(p for p in cases_root.iterdir() if p.is_dir()):
+        candidate = case_dir / "comparison.json"
+        if not candidate.is_file():
+            continue
+        document = json.loads(candidate.read_text(encoding="utf-8"))
+        if document.get("schema_version") not in (
+            "c.algorithm-comparison.v2",
+            "c.algorithm-comparison.v3",
+        ):
+            continue
+        for record in document.get("raw", []):
+            if record.get("status") != "ok":
+                continue
+            key = f"{case_dir.name}|{record['objective']}|{record['algorithm']}"
+            documents[key] = record
+    return documents
+
+
+def _representative_case_ids(sweep_rows: list[dict[str, Any]], window: str) -> list[str]:
+    """Pick up to three OD-pair cases per window (short / medium / long).
+
+    The per-step figures used to show a single n=1 corridor per window.  The
+    upgraded versions show three representative corridors instead, so each
+    subplot panel is backed by n=3 planning cases rather than n=1.
+    """
+    picked: list[str] = []
+    for bucket in ("short", "medium", "long"):
+        candidates = [
+            row
+            for row in sweep_rows
+            if row.get("window") == window
+            and row.get("axis") == "od_pair"
+            and row.get("length_bucket") == bucket
+            and float(row.get("departure_offset_hours") or 0.0) == 0.0
+            and row.get("case_status") == "ok"
+            and row.get("case_id")
+        ]
+        if not candidates:
+            continue
+        candidates.sort(key=lambda row: float(row.get("grid_hops") or 0.0))
+        picked.append(candidates[len(candidates) // 2]["case_id"])
+    return picked
+
+
 def _fig_runtime_scale_log(rows: list[dict[str, Any]], english: bool, out: Path) -> None:
     """Runtime (median wall ms) vs synthetic grid size, log-log."""
     synth = [
@@ -504,21 +557,27 @@ def _fig_runtime_scale_log(rows: list[dict[str, Any]], english: bool, out: Path)
     print(f"wrote {fig_path} and {fig_path.with_suffix('.svg')}")
 
 
-def _fig_runtime_cost_scatter(runs: dict[str, dict[str, Any]], english: bool, out: Path) -> None:
-    """Scatter: runtime (x) vs total cost (y), real 24h inputs.
+def _fig_runtime_cost_scatter(
+    runs: dict[str, dict[str, Any]],
+    english: bool,
+    out: Path,
+    sweep_rows: list[dict[str, Any]] | None = None,
+) -> None:
+    """Scatter: runtime (x) vs total cost (y), real inputs.
 
-    Proves that the faster algorithm does not sacrifice solution cost.  Cost
-    lives in the raw JSON records, not the CSV, so this figure needs the v2
-    artefacts loaded via ``--experiments-root``.
+    Single-case mode proves that the faster algorithm does not sacrifice
+    solution cost (v2 artefacts).  When sweep rows are available this becomes a
+    paired scatter over all planning cases x objectives, so each algorithm's
+    n is in the hundreds instead of 2.
     """
-    if not runs:
-        print("skipping runtime-cost scatter: no v2 artefacts")
-        return
-    run_labels = _recommended_real_run_keys(runs)
-    if not run_labels:
-        return
-    fig, ax = plt.subplots(figsize=(8, 5))
+    fig, ax = plt.subplots(figsize=(8.2, 5.2))
     markers = {"time_dependent_astar": "o", "dijkstra": "s", "static_field": "^", "risk_blind": "D"}
+    palette = {
+        "time_dependent_astar": "#1f77b4",
+        "dijkstra": "#ff7f0e",
+        "static_field": "#2ca02c",
+        "risk_blind": "#d62728",
+    }
     legend_en = {
         "time_dependent_astar": "A* (ours)",
         "dijkstra": "Dijkstra",
@@ -532,35 +591,88 @@ def _fig_runtime_cost_scatter(runs: dict[str, dict[str, Any]], english: bool, ou
         "risk_blind": "风险无关",
     }
     legend = legend_en if english else legend_zh
-    for run_index, run_label in enumerate(run_labels):
-        obj = "recommended"
-        for algo in ("static_field", "risk_blind", "dijkstra", "time_dependent_astar"):
-            record = runs.get(f"{run_label}|{obj}|{algo}")
-            if not record:
-                continue
-            x = record.get("wall_ms")
-            y = record["route"].get("total_cost_hours")
-            if x is None or y is None:
+    note = None
+    if sweep_rows:
+        # Expanded-sample mode: one point per (case, objective), all feasible.
+        axes = ("time_dependent_astar", "dijkstra", "static_field", "risk_blind")
+        for algo in axes:
+            prefix = {
+                "time_dependent_astar": "ours",
+                "dijkstra": "dijkstra",
+                "static_field": "static",
+                "risk_blind": "risk_blind",
+            }[algo]
+            x_key, y_key = f"{prefix}_wall_ms", f"{prefix}_cost_hours"
+            xs, ys = [], []
+            for row in sweep_rows:
+                x, y = row.get(x_key), row.get(y_key)
+                if x in (None, "") or y in (None, ""):
+                    continue
+                xs.append(float(x))
+                ys.append(float(y))
+            if not xs:
                 continue
             ax.scatter(
-                x,
-                y,
+                xs,
+                ys,
                 marker=markers[algo],
-                s=100,
-                color={
-                    "time_dependent_astar": "#1f77b4",
-                    "dijkstra": "#ff7f0e",
-                    "static_field": "#2ca02c",
-                    "risk_blind": "#d62728",
-                }[algo],
-                label=legend[algo] if run_index == 0 else None,
+                s=26,
+                alpha=0.75,
+                edgecolor="white",
+                linewidth=0.3,
+                color=palette[algo],
+                label=f"{legend[algo]} (n={len(xs)})",
             )
+        note = (
+            "n = feasible (case, objective) cells; dots jittered by objective"
+            if english
+            else "n = 可行（算例, 目标）单元；按目标微扰避免重叠"
+        )
+        title = "Runtime vs total cost across 104 planning cases"
+        title_zh = "运行时间 vs 总代价（104 个规划算例）"
+    else:
+        if not runs:
+            print("skipping runtime-cost scatter: no v2 artefacts or sweep rows")
+            return
+        run_labels = _recommended_real_run_keys(runs)
+        if not run_labels:
+            return
+        for run_index, run_label in enumerate(run_labels):
+            obj = "recommended"
+            for algo in ("static_field", "risk_blind", "dijkstra", "time_dependent_astar"):
+                record = runs.get(f"{run_label}|{obj}|{algo}")
+                if not record:
+                    continue
+                x = record.get("wall_ms")
+                y = record["route"].get("total_cost_hours")
+                if x is None or y is None:
+                    continue
+                ax.scatter(
+                    x,
+                    y,
+                    marker=markers[algo],
+                    s=100,
+                    color=palette[algo],
+                    label=legend[algo] if run_index == 0 else None,
+                )
+        note = "n=1 route/window" if english else "单窗口单次航线（n=1）"
+        title = "Runtime vs total cost (real 24h)"
+        title_zh = "运行时间 vs 总代价（真实 24h）"
     ax.set_xscale("log")
     ax.set_xlabel("Runtime / ms" if english else "运行时间 / ms")
     ax.set_ylabel("Total cost / hours" if english else "总代价 / 小时")
-    ax.set_title(
-        "Runtime vs total cost (real 24h)" if english else "运行时间 vs 总代价（真实 24h）"
-    )
+    ax.set_title(title if english else title_zh)
+    if note:
+        ax.text(
+            0.98,
+            0.02,
+            note,
+            transform=ax.transAxes,
+            ha="right",
+            va="bottom",
+            fontsize=7.5,
+            color="#555555",
+        )
     fig.subplots_adjust(right=0.76)
     ax.legend(fontsize=9, loc="upper left", bbox_to_anchor=(1.01, 1.0), frameon=False)
     fig_path = out / ("runtime-cost.png" if english else "fig-runtime-cost.png")
@@ -570,28 +682,109 @@ def _fig_runtime_cost_scatter(runs: dict[str, dict[str, Any]], english: bool, ou
     print(f"wrote {fig_path} and {fig_path.with_suffix('.svg')}")
 
 
-def _fig_runtime_risk_scatter(rows: list[dict[str, Any]], english: bool, out: Path) -> None:
-    """Scatter: runtime (x) vs max edge risk (y), real 24h inputs."""
-    real = [r for r in rows if r.get("input_kind") == "real" and r.get("baseline") == "dijkstra"]
-    if not real:
-        return
-    _prepare(real, (), ("ours_wall_ms", "baseline_wall_ms", "ours_max_risk", "baseline_max_risk"))
-    fig, ax = plt.subplots(figsize=(9.6, 5.1))
+def _fig_runtime_risk_scatter(
+    rows: list[dict[str, Any]],
+    english: bool,
+    out: Path,
+    sweep_rows: list[dict[str, Any]] | None = None,
+) -> None:
+    """Scatter: runtime (x) vs max edge risk (y), real inputs.
+
+    Single-case mode uses the six real 24h cells; sweep mode plots every
+    feasible (case, objective) cell per algorithm (n in the hundreds).
+    """
+    fig, ax = plt.subplots(figsize=(9.6, 5.4))
     markers = {"fastest": "o", "low_risk": "s", "recommended": "^"}
     labels = OBJECTIVE_LABELS_EN if english else OBJECTIVE_LABELS_ZH
-    for obj in OBJECTIVES:
-        cells = [r for r in real if r["objective"] == obj]
-        ox = [r["ours_wall_ms"] for r in cells if r.get("ours_wall_ms")]
-        oy = [r["ours_max_risk"] for r in cells if r.get("ours_max_risk")]
-        bx = [r["baseline_wall_ms"] for r in cells if r.get("baseline_wall_ms")]
-        by = [r["baseline_max_risk"] for r in cells if r.get("baseline_max_risk")]
-        ax.scatter(ox, oy, marker=markers[obj], s=90, label=f"{labels[obj]} A*")
-        ax.scatter(bx, by, marker=markers[obj], s=90, alpha=0.4, label=f"{labels[obj]} Dijkstra")
+    if sweep_rows:
+        palette = {
+            "time_dependent_astar": "#1f77b4",
+            "dijkstra": "#ff7f0e",
+            "static_field": "#2ca02c",
+            "risk_blind": "#d62728",
+        }
+        legend_en = {
+            "time_dependent_astar": "A* (ours)",
+            "dijkstra": "Dijkstra",
+            "static_field": "Static field",
+            "risk_blind": "Risk-blind",
+        }
+        legend_zh = {
+            "time_dependent_astar": "本文 A*",
+            "dijkstra": "Dijkstra",
+            "static_field": "静态场",
+            "risk_blind": "风险无关",
+        }
+        legend = legend_en if english else legend_zh
+        for algo in ("time_dependent_astar", "dijkstra", "static_field", "risk_blind"):
+            prefix = {
+                "time_dependent_astar": "ours",
+                "dijkstra": "dijkstra",
+                "static_field": "static",
+                "risk_blind": "risk_blind",
+            }[algo]
+            xs, ys = [], []
+            for row in sweep_rows:
+                x, y = row.get(f"{prefix}_wall_ms"), row.get(f"{prefix}_max_risk")
+                if x in (None, "") or y in (None, ""):
+                    continue
+                xs.append(float(x))
+                ys.append(float(y))
+            if not xs:
+                continue
+            ax.scatter(
+                xs,
+                ys,
+                marker="o",
+                s=26,
+                alpha=0.75,
+                edgecolor="white",
+                linewidth=0.3,
+                color=palette[algo],
+                label=f"{legend[algo]} (n={len(xs)})",
+            )
+        note = (
+            "n = feasible (case, objective) cells across 104 planning cases"
+            if english
+            else "n = 104 个规划算例中的可行（算例, 目标）单元"
+        )
+        title = "Runtime vs max risk across 104 planning cases"
+        title_zh = "运行时间 vs 最大风险（104 个规划算例）"
+    else:
+        real = [
+            r for r in rows if r.get("input_kind") == "real" and r.get("baseline") == "dijkstra"
+        ]
+        if not real:
+            return
+        _prepare(
+            real, (), ("ours_wall_ms", "baseline_wall_ms", "ours_max_risk", "baseline_max_risk")
+        )
+        for obj in OBJECTIVES:
+            cells = [r for r in real if r["objective"] == obj]
+            ox = [r["ours_wall_ms"] for r in cells if r.get("ours_wall_ms")]
+            oy = [r["ours_max_risk"] for r in cells if r.get("ours_max_risk")]
+            bx = [r["baseline_wall_ms"] for r in cells if r.get("baseline_wall_ms")]
+            by = [r["baseline_max_risk"] for r in cells if r.get("baseline_max_risk")]
+            ax.scatter(ox, oy, marker=markers[obj], s=90, label=f"{labels[obj]} A*")
+            ax.scatter(
+                bx, by, marker=markers[obj], s=90, alpha=0.4, label=f"{labels[obj]} Dijkstra"
+            )
+        note = "n=1 route/window" if english else "单窗口单次航线（n=1）"
+        title = "Runtime vs max risk (real 24h)"
+        title_zh = "运行时间 vs 最大风险（真实 24h）"
     ax.set_xscale("log")
     ax.set_xlabel("Runtime / ms" if english else "运行时间 / ms")
     ax.set_ylabel("Max edge risk" if english else "最大边风险")
-    ax.set_title(
-        "Runtime vs max risk (real 24h)" if english else "运行时间 vs 最大风险（真实 24h）"
+    ax.set_title(title if english else title_zh)
+    ax.text(
+        0.98,
+        0.02,
+        note,
+        transform=ax.transAxes,
+        ha="right",
+        va="bottom",
+        fontsize=7.5,
+        color="#555555",
     )
     fig.subplots_adjust(right=0.70)
     ax.legend(fontsize=8, ncol=1, loc="upper left", bbox_to_anchor=(1.01, 1.0), frameon=False)
@@ -602,19 +795,19 @@ def _fig_runtime_risk_scatter(rows: list[dict[str, Any]], english: bool, out: Pa
     print(f"wrote {fig_path} and {fig_path.with_suffix('.svg')}")
 
 
-def _fig_risk_timeseries(runs: dict[str, dict[str, Any]], english: bool, out: Path) -> None:
-    """Per-step risk time series on real 24h inputs.
+def _fig_risk_timeseries(
+    runs: dict[str, dict[str, Any]],
+    english: bool,
+    out: Path,
+    sweep_rows: list[dict[str, Any]] | None = None,
+    sweep_cases: dict[str, dict[str, Any]] | None = None,
+) -> None:
+    """Per-step risk time series on real inputs.
 
-    Reads the per-step ``step_edge_risk_score`` sequences captured in v2
-    artefacts.  One subplot per (run, objective); algorithms as line colours.
+    Single-case mode shows one n=1 corridor per window.  Sweep mode shows three
+    representative corridors per window (short / medium / long), so every panel
+    is backed by n=3 planning cases instead of n=1.
     """
-    if not runs:
-        print("skipping risk time-series: no v2 artefacts")
-        return
-    # Pick real-input runs only, recommended objective.
-    run_labels = _recommended_real_run_keys(runs)
-    if not run_labels:
-        return
     palette = {
         "time_dependent_astar": "#1f77b4",
         "dijkstra": "#ff7f0e",
@@ -634,68 +827,128 @@ def _fig_risk_timeseries(runs: dict[str, dict[str, Any]], english: bool, out: Pa
         "risk_blind": "风险无关",
     }
     legend = legend_en if english else legend_zh
-    n = len(run_labels)
-    fig, axes = plt.subplots(1, n, figsize=(4.5 * n, 5.0), sharey=False)
-    if n == 1:
-        axes = [axes]
-    for ax, run_label in zip(axes, run_labels, strict=False):
-        obj = "recommended"
-        for algo in ("static_field", "risk_blind", "dijkstra", "time_dependent_astar"):
-            lookup = f"{run_label}|{obj}|{algo}"
-            record = runs.get(lookup)
-            if not record:
-                continue
-            risks = record["route"].get("step_edge_risk_score", [])
-            if not risks:
-                continue
-            xs = list(range(1, len(risks) + 1))
-            ax.plot(
-                xs,
-                risks,
-                marker={
-                    "time_dependent_astar": "o",
-                    "dijkstra": "s",
-                    "static_field": "^",
-                    "risk_blind": "D",
-                }[algo],
-                markersize=4,
-                linewidth=1.5,
-                linestyle={
-                    "time_dependent_astar": "-",
-                    "dijkstra": "--",
-                    "static_field": "-.",
-                    "risk_blind": ":",
-                }[algo],
-                color=palette[algo],
-                label=legend[algo],
-                zorder={
-                    "time_dependent_astar": 4,
-                    "dijkstra": 3,
-                    "static_field": 2,
-                    "risk_blind": 1,
-                }[algo],
-            )
-        ax.set_xlabel("Step index" if english else "航段序号")
-        ax.set_ylabel("Edge risk" if english else "边风险")
-        ax.set_title(f"{run_label} / {obj}")
-        ax.legend(fontsize=8, loc="upper left", frameon=False)
-        note = "n=1 route/window" if english else "单窗口单次航线（n=1）"
-        if "development" in run_label:
-            note += "\nrisk-blind = recommended" if english else "\n风险无关与推荐航线重合"
-        ax.text(
-            0.98,
-            0.02,
-            note,
-            transform=ax.transAxes,
-            ha="right",
-            va="bottom",
-            fontsize=7.5,
-            color="#555555",
+    line_style = {
+        "time_dependent_astar": "-",
+        "dijkstra": "--",
+        "static_field": "-.",
+        "risk_blind": ":",
+    }
+    algo_order = ("static_field", "risk_blind", "dijkstra", "time_dependent_astar")
+    if sweep_rows and sweep_cases:
+        windows = ("holdout", "development")
+        panels: list[tuple[str, str]] = []
+        for window in windows:
+            for case_id in _representative_case_ids(sweep_rows, window):
+                panels.append((window, case_id))
+        if not panels:
+            print("skipping sweep risk time-series: no representative cases")
+            return
+        fig, axes = plt.subplots(
+            2,
+            3,
+            figsize=(13.5, 8.0),
+            sharey=True,
+            squeeze=False,
         )
-    fig.suptitle(
-        "Per-step edge risk on real 24h inputs" if english else "真实 24h 输入上的逐段风险序列"
-    )
-    fig.tight_layout(rect=(0, 0, 1, 0.94))
+        for (window, case_id), ax in zip(panels, axes.ravel(), strict=False):
+            obj = "recommended"
+            for algo in algo_order:
+                record = sweep_cases.get(f"{case_id}|{obj}|{algo}")
+                if not record:
+                    continue
+                risks = record["route"].get("step_edge_risk_score", [])
+                if not risks:
+                    continue
+                xs = list(range(1, len(risks) + 1))
+                ax.plot(
+                    xs,
+                    risks,
+                    marker={
+                        "time_dependent_astar": "o",
+                        "dijkstra": "s",
+                        "static_field": "^",
+                        "risk_blind": "D",
+                    }[algo],
+                    markersize=3.5,
+                    linewidth=1.4,
+                    linestyle=line_style[algo],
+                    color=palette[algo],
+                    label=legend[algo],
+                )
+            bucket = ""
+            for row in sweep_rows:
+                if row.get("case_id") == case_id:
+                    bucket = str(row.get("length_bucket") or "")
+                    break
+            ax.set_title(f"{window} · {bucket} (n=3 cases)")
+            ax.legend(fontsize=8, loc="upper left", frameon=False)
+        for ax in axes.ravel()[len(panels) :]:
+            ax.set_visible(False)
+        for ax in axes.ravel():
+            ax.set_xlabel("Step index" if english else "航段序号")
+            ax.set_ylabel("Edge risk" if english else "边风险")
+        fig.suptitle(
+            "Per-step edge risk: 3 representative corridors per window"
+            if english
+            else "逐段风险序列：每窗口 3 条代表走廊（n=3/窗口）"
+        )
+        fig.tight_layout(rect=(0, 0, 1, 0.95))
+    else:
+        if not runs:
+            print("skipping risk time-series: no v2 artefacts")
+            return
+        run_labels = _recommended_real_run_keys(runs)
+        if not run_labels:
+            return
+        fig, axes = plt.subplots(1, len(run_labels), figsize=(4.5 * len(run_labels), 5.0))
+        if len(run_labels) == 1:
+            axes = [axes]
+        for ax, run_label in zip(axes, run_labels, strict=False):
+            obj = "recommended"
+            for algo in algo_order:
+                record = runs.get(f"{run_label}|{obj}|{algo}")
+                if not record:
+                    continue
+                risks = record["route"].get("step_edge_risk_score", [])
+                if not risks:
+                    continue
+                xs = list(range(1, len(risks) + 1))
+                ax.plot(
+                    xs,
+                    risks,
+                    marker={
+                        "time_dependent_astar": "o",
+                        "dijkstra": "s",
+                        "static_field": "^",
+                        "risk_blind": "D",
+                    }[algo],
+                    markersize=4,
+                    linewidth=1.5,
+                    linestyle=line_style[algo],
+                    color=palette[algo],
+                    label=legend[algo],
+                )
+            ax.set_xlabel("Step index" if english else "航段序号")
+            ax.set_ylabel("Edge risk" if english else "边风险")
+            ax.set_title(f"{run_label} / {obj}")
+            ax.legend(fontsize=8, loc="upper left", frameon=False)
+            note = "n=1 route/window" if english else "单窗口单次航线（n=1）"
+            if "development" in run_label:
+                note += "\nrisk-blind = recommended" if english else "\n风险无关与推荐航线重合"
+            ax.text(
+                0.98,
+                0.02,
+                note,
+                transform=ax.transAxes,
+                ha="right",
+                va="bottom",
+                fontsize=7.5,
+                color="#555555",
+            )
+        fig.suptitle(
+            "Per-step edge risk on real 24h inputs" if english else "真实 24h 输入上的逐段风险序列"
+        )
+        fig.tight_layout(rect=(0, 0, 1, 0.94))
     fig_path = out / ("risk-timeseries.png" if english else "fig-risk-timeseries.png")
     fig.savefig(fig_path)
     fig.savefig(fig_path.with_suffix(".svg"))
@@ -703,18 +956,19 @@ def _fig_risk_timeseries(runs: dict[str, dict[str, Any]], english: bool, out: Pa
     print(f"wrote {fig_path} and {fig_path.with_suffix('.svg')}")
 
 
-def _fig_risk_distribution(runs: dict[str, dict[str, Any]], english: bool, out: Path) -> None:
-    """Box-and-whisker of per-step edge risk, real 24h inputs.
+def _fig_risk_distribution(
+    runs: dict[str, dict[str, Any]],
+    english: bool,
+    out: Path,
+    sweep_rows: list[dict[str, Any]] | None = None,
+    sweep_cases: dict[str, dict[str, Any]] | None = None,
+) -> None:
+    """Box-and-whisker of per-step edge risk, real inputs.
 
-    Each algorithm contributes one box per (run, objective).  When n=1 the
-    box is degenerate (a single point) and is annotated accordingly.
+    Single-case mode draws one degenerate box per n=1 corridor.  Sweep mode
+    pools every step across every feasible planning case per algorithm, so each
+    box is built from thousands of observed steps across 100+ cases.
     """
-    if not runs:
-        print("skipping risk distribution: no v2 artefacts")
-        return
-    run_labels = _recommended_real_run_keys(runs)
-    if not run_labels:
-        return
     palette = {
         "time_dependent_astar": "#1f77b4",
         "dijkstra": "#ff7f0e",
@@ -734,49 +988,118 @@ def _fig_risk_distribution(runs: dict[str, dict[str, Any]], english: bool, out: 
         "risk_blind": "风险无关",
     }
     legend = legend_en if english else legend_zh
-    fig, axes = plt.subplots(1, len(run_labels), figsize=(6.2 * len(run_labels), 4.5), sharey=False)
-    if len(run_labels) == 1:
-        axes = [axes]
-    for ax, run_label in zip(axes, run_labels, strict=False):
-        obj = "recommended"
+    if sweep_rows and sweep_cases:
+        case_ids = {
+            row["case_id"]
+            for row in sweep_rows
+            if row.get("case_id") and row["case_status"] == "ok"
+        }
         data: list[list[float]] = []
         labels: list[str] = []
         colours: list[str] = []
+        counts: list[int] = []
         for algo in ("time_dependent_astar", "dijkstra", "static_field", "risk_blind"):
-            record = runs.get(f"{run_label}|{obj}|{algo}")
-            if not record:
+            pooled: list[float] = []
+            for case_id in sorted(case_ids):
+                record = sweep_cases.get(f"{case_id}|recommended|{algo}")
+                if not record:
+                    continue
+                risks = record["route"].get("step_edge_risk_score", [])
+                pooled.extend(risks)
+            if not pooled:
                 continue
-            risks = record["route"].get("step_edge_risk_score", [])
-            if not risks:
-                continue
-            data.append(risks)
+            data.append(pooled)
             labels.append(legend[algo])
             colours.append(palette[algo])
+            counts.append(len(pooled))
+        if not data:
+            print("skipping sweep risk distribution: no step data")
+            return
+        fig, ax = plt.subplots(figsize=(8.5, 5.4))
         bp = ax.boxplot(data, tick_labels=labels, patch_artist=True, showmeans=True)
         for patch, colour in zip(bp["boxes"], colours, strict=False):
             patch.set_facecolor(colour)
             patch.set_alpha(0.6)
+        for index, count in enumerate(counts, start=1):
+            ax.text(
+                index,
+                ax.get_ylim()[0],
+                f"steps={count}",
+                ha="center",
+                va="bottom",
+                fontsize=7.5,
+                color="#555555",
+            )
         ax.set_ylabel("Edge risk distribution" if english else "边风险分布")
-        ax.set_title(f"{run_label} / {obj}")
-        note = "n=1 route/window" if english else "单窗口单次航线（n=1）"
-        if "development" in run_label:
-            note += "\nrisk-blind = recommended" if english else "\n风险无关与推荐航线重合"
+        ax.set_title(
+            "Per-step risk across 104 planning cases"
+            if english
+            else "逐段风险分布（聚合 104 个规划算例）"
+        )
         ax.text(
             0.98,
             0.02,
-            note,
+            "pooled steps over all feasible cases (n=104 cases)"
+            if english
+            else "聚合全部可行算例的所有航段（n=104 算例）",
             transform=ax.transAxes,
             ha="right",
             va="bottom",
             fontsize=7.5,
             color="#555555",
         )
-    fig.suptitle(
-        "Per-step risk distribution on real 24h inputs"
-        if english
-        else "真实 24h 输入上的逐段风险分布"
-    )
-    fig.tight_layout(rect=(0, 0, 1, 0.94))
+    else:
+        if not runs:
+            print("skipping risk distribution: no v2 artefacts")
+            return
+        run_labels = _recommended_real_run_keys(runs)
+        if not run_labels:
+            return
+        fig, axes = plt.subplots(
+            1, len(run_labels), figsize=(6.2 * len(run_labels), 4.5), sharey=False
+        )
+        if len(run_labels) == 1:
+            axes = [axes]
+        for ax, run_label in zip(axes, run_labels, strict=False):
+            obj = "recommended"
+            data = []
+            labels = []
+            colours = []
+            for algo in ("time_dependent_astar", "dijkstra", "static_field", "risk_blind"):
+                record = runs.get(f"{run_label}|{obj}|{algo}")
+                if not record:
+                    continue
+                risks = record["route"].get("step_edge_risk_score", [])
+                if not risks:
+                    continue
+                data.append(risks)
+                labels.append(legend[algo])
+                colours.append(palette[algo])
+            bp = ax.boxplot(data, tick_labels=labels, patch_artist=True, showmeans=True)
+            for patch, colour in zip(bp["boxes"], colours, strict=False):
+                patch.set_facecolor(colour)
+                patch.set_alpha(0.6)
+            ax.set_ylabel("Edge risk distribution" if english else "边风险分布")
+            ax.set_title(f"{run_label} / {obj}")
+            note = "n=1 route/window" if english else "单窗口单次航线（n=1）"
+            if "development" in run_label:
+                note += "\nrisk-blind = recommended" if english else "\n风险无关与推荐航线重合"
+            ax.text(
+                0.98,
+                0.02,
+                note,
+                transform=ax.transAxes,
+                ha="right",
+                va="bottom",
+                fontsize=7.5,
+                color="#555555",
+            )
+        fig.suptitle(
+            "Per-step risk distribution on real 24h inputs"
+            if english
+            else "真实 24h 输入上的逐段风险分布"
+        )
+        fig.tight_layout(rect=(0, 0, 1, 0.94))
     fig_path = out / ("risk-distribution.png" if english else "fig-risk-distribution.png")
     fig.savefig(fig_path)
     fig.savefig(fig_path.with_suffix(".svg"))
@@ -1029,6 +1352,13 @@ def main() -> int:
         default=None,
         help="summary-sweep.csv produced by the expanded-sample sweep",
     )
+    parser.add_argument(
+        "--sweep-cases-root",
+        type=Path,
+        default=None,
+        help="c-algorithm-comparison-sweep/cases directory with per-case raw "
+        "comparison.json artefacts",
+    )
     args = parser.parse_args()
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -1038,6 +1368,11 @@ def main() -> int:
 
     runs = _load_run_documents(args.experiments_root) if args.experiments_root is not None else {}
     sweep_rows = _read_sweep_csv(args.sweep_csv) if args.sweep_csv is not None else []
+    sweep_cases = (
+        _load_sweep_run_documents(args.sweep_cases_root)
+        if args.sweep_cases_root is not None
+        else {}
+    )
 
     variants = [False] if not (args.english or args.both) else []
     if args.english:
@@ -1055,10 +1390,14 @@ def main() -> int:
         _fig_speedup(rows, english, args.output_dir)
         _fig_funnel(english, args.output_dir)
         _fig_runtime_scale_log(rows, english, args.output_dir)
-        _fig_runtime_cost_scatter(runs, english, args.output_dir)
-        _fig_runtime_risk_scatter(rows, english, args.output_dir)
-        _fig_risk_timeseries(runs, english, args.output_dir)
-        _fig_risk_distribution(runs, english, args.output_dir)
+        _fig_runtime_cost_scatter(runs, english, args.output_dir, sweep_rows=sweep_rows)
+        _fig_runtime_risk_scatter(rows, english, args.output_dir, sweep_rows=sweep_rows)
+        _fig_risk_timeseries(
+            runs, english, args.output_dir, sweep_rows=sweep_rows, sweep_cases=sweep_cases
+        )
+        _fig_risk_distribution(
+            runs, english, args.output_dir, sweep_rows=sweep_rows, sweep_cases=sweep_cases
+        )
         if sweep_rows:
             _fig_sweep_distribution(sweep_rows, english, args.output_dir)
             _fig_sweep_outcome(sweep_rows, english, args.output_dir)

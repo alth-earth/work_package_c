@@ -28,16 +28,18 @@
 
 ## 2. 推荐图表
 
-所有图：PNG+SVG、中文主版本（Noto Sans CJK SC）、白底、无 3D、坐标轴/单位/图例完整、同一算法跨图视觉一致（A*=蓝、Dijkstra=橙、Static=绿、Risk-blind=红）。单算例图（图4-2 至图4-6）显式标注 n=1；扩样本图（图4-7 至图4-9）标注真实算例数（n=246 / 239）与精确符号检验 p 值。
+所有图：PNG+SVG、中文主版本（Noto Sans CJK SC）、白底、无 3D、坐标轴/单位/图例完整、同一算法跨图视觉一致（A*=蓝、Dijkstra=橙、Static=绿、Risk-blind=红）。
+
+**图4-3~4-6 已升级为扩样本版（2026-09-01 19:11 +08:00 起）**：原单算例版（n=1/窗口）已替换为基于 104 算例 sweep 的版本（图标题与 n 标注已更新，PNG/SVG 同名覆盖；图说文字见下表"100-200 字分析"列的扩样本版条目）。如需保留单算例版供对照，可在 `figures/` 同目录读取备份或回退 `git log` 中的旧文件。
 
 | 图号 | 文件（中/英） | 论文结论 | 100-200 字分析 | 数据来源 | 局限性 | 建议插入 |
 |---|---|---|---|---|---|---|
 | 图4-1 | `fig-framework.png`/`framework.png` | 整体框架 | 7 主链路节点 + 3 反馈环节点，蓝实线主链、红虚线反馈环。 | 描述性，无数据依赖 | 仅框架示意，不证明任何性能 | §4.1 引言后 |
 | 图4-2 | `fig-runtime-scale-log.png`/`runtime-scale-log.png` | 效率随规模放大 | 4 档合成 log-log：A*（实线）与 Dijkstra（虚线）随格点数对数线性增长；加速 fastest 5.67×→17.58×。增长趋势稳定且 ours 始终位于左下方。 | `summary-data.csv` synthetic 4 档 | 4 档规模较粗 | §4.3.2 效率对比 |
-| 图4-3 | `fig-runtime-cost.png`/`runtime-cost.png` | 更快 ≠ 牺牲代价 | 真实 24h 上 A* 与 Dijkstra 点几乎重合在 cost 轴；横向拉开 1 个数量级。证明启发式加速不牺牲解代价。 | raw JSON cost+wall_ms | n=2 真实窗口 | §4.3.3 |
-| 图4-4 | `fig-runtime-risk.png`/`runtime-risk.png` | 更快 ≠ 更高风险 | A* 在两窗口 6 单元中风险均低于 Dijkstra；dev 上 risk_blind ≡ recommended（n=1 标注）。效率优势与风险降低同向。 | `summary-data.csv` wall_ms+max_risk | n=2、dev 上 risk_blind 与 recommended 等价 | §4.3.3 |
-| 图4-5 | `fig-risk-timeseries.png`/`risk-timeseries.png` | 风险降低不只是均值 | 真实 24h recommended：holdout（左）/dev（右）逐段风险序列：A*（蓝）始终位于绿/红线下方，峰值被显著压制；dev 上蓝/橙/红几乎重合（窗口风险可压低空间小）。 | raw JSON `step_edge_risk_score` | n=1 推荐目标每窗口 | §4.4.1 |
-| 图4-6 | `fig-risk-distribution.png`/`risk-distribution.png` | 多数场景下都更好 | holdout：A* 与 Dijkstra（低风险箱子窄小）位于下方；static 与 risk_blind（红）箱子更宽、上移。极端风险（须须）被静态规划抬升。 | 同图4-5 | n=1 | §4.4.2 |
+| 图4-3 | `fig-runtime-cost.png`/`runtime-cost.png` | 更快 ≠ 牺牲代价 | **扩样本版**：246/239/246 个可行（算例,目标）单元上，A*/Dijkstra/静态场/风险无关四算法散点沿 cost 轴几乎重合（同一走廊成本量级一致），运行时间横向拉开 1~2 个数量级；启发式加速不牺牲解代价。 | sweep CSV wall_ms+cost_hours | n≥239/算法（104 算例 × 3 目标） | §4.3.3 |
+| 图4-4 | `fig-runtime-risk.png`/`runtime-risk.png` | 更快 ≠ 更高风险 | **扩样本版**：四算法逐（算例,目标）单元散点：A*（蓝）整体位于 Dijkstra（橙）左侧（更快），且风险不再由 Dijkstra 主导；静态场（绿）与风险无关（红）右上漂移——慢且高风险。 | sweep CSV wall_ms+max_risk | n≥239/算法 | §4.3.3 |
+| 图4-5 | `fig-risk-timeseries.png`/`risk-timeseries.png` | 风险降低不只是均值 | **扩样本版**：每窗口 3 条代表走廊（短/中/长，n=3/窗口）的逐段风险序列，2×3 子图：A*（蓝）在多数走廊整体位于静态场（绿）下方，峰值被压制；development 各走廊上蓝/橙/红重合（窗口风险可压低空间小）。 | sweep case raw `step_edge_risk_score` | n=3 代表走廊/窗口 | §4.4.1 |
+| 图4-6 | `fig-risk-distribution.png`/`risk-distribution.png` | 多数场景下都更好 | **扩样本版**：四算法逐段风险聚合箱线（104 算例所有航段合并，每箱约 600 步）：A* 与 Dijkstra 箱子窄小且位于下方；静态场与风险无关箱子更宽、上移。极端风险（须须）被静态规划抬升。 | 同图4-5 | 聚合 104 算例全部航段 | §4.4.2 |
 
 **配套表**：
 
@@ -63,10 +65,10 @@
 | 图表 | 原始数据 | 落盘路径 |
 |---|---|---|
 | 图4-2 runtime-scale log | `summary-data.csv` synthetic 4 档 | `.runtime/experiments/c-algorithm-comparison-synthetic-{small,medium,large,stress}/comparison.json` |
-| 图4-3 runtime-cost | raw JSON real 24h wall_ms + total_cost_hours | `.runtime/experiments/c-algorithm-comparison-{holdout,development}-24h/comparison.json` |
-| 图4-4 runtime-risk | `summary-data.csv` real 24h wall_ms + max_risk | 同上 |
-| 图4-5 risk-timeseries | raw JSON recommended `step_edge_risk_score` | 同上（v2 schema） |
-| 图4-6 risk-distribution | 同图4-5 | 同上（v2 schema） |
+| 图4-3 runtime-cost | `summary-sweep.csv`（wall_ms + cost_hours 四算法） | `.runtime/experiments/c-algorithm-comparison-summary/summary-sweep.csv` |
+| 图4-4 runtime-risk | `summary-sweep.csv`（wall_ms + max_risk 四算法） | 同上 |
+| 图4-5 risk-timeseries | 每窗口 3 条代表走廊的 raw `step_edge_risk_score`（`recommended`） | `.runtime/experiments/c-algorithm-comparison-sweep/cases/*/comparison.json` |
+| 图4-6 risk-distribution | 104 算例全部航段的 raw `step_edge_risk_score` | 同上 |
 | 图4-7/4-8/4-9 sweep | `summary-sweep.csv`（312 单元） | `.runtime/experiments/c-algorithm-comparison-summary/summary-sweep.csv` |
 | 表4-X fairness | fixture + 算法名清单 | `work_package_c/scripts/benchmark_algorithm_comparison.py` 内置 |
 | 表4-Y ablation | 4 档从既有数据派生 | 同图4-4/4-5 |

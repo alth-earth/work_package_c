@@ -146,10 +146,10 @@
 |---|---|---|
 | `fig-framework.png` | 图4-1 | 总体技术框架 |
 | `fig-runtime-scale-log.png` | 图4-2 | 规模—运行时间（双对数） |
-| `fig-runtime-cost.png` | 图4-3 | 运行时间—总代价散点 |
-| `fig-runtime-risk.png` | 图4-4 | 运行时间—最大风险散点 |
-| `fig-risk-timeseries.png` | 图4-5 | 真实 24h 逐段风险时序 |
-| `fig-risk-distribution.png` | 图4-6 | 风险分布箱线 |
+| `fig-runtime-cost.png` | 图4-3 | 运行时间—总代价散点（扩样本版，n≥239/算法） |
+| `fig-runtime-risk.png` | 图4-4 | 运行时间—最大风险散点（扩样本版，n≥239/算法） |
+| `fig-risk-timeseries.png` | 图4-5 | 逐段风险时序（扩样本版：每窗口 3 条代表走廊，n=3/窗口） |
+| `fig-risk-distribution.png` | 图4-6 | 风险分布箱线（扩样本版：聚合 104 算例全部航段） |
 | `fig-scaling-expansion.png` | 图4-7 | 规模—扩展数（线性，已有） |
 | `fig-risk-comparison.png` | 图4-8 | 风险对比柱状（已有） |
 | `fig-speedup.png` | 图4-9 | 加速比（已有） |

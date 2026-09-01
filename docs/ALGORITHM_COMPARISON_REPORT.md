@@ -500,6 +500,8 @@ risk_blind 是目标函数消融（该目标自身 risk/uncertainty 权重置零
 | `fig-sweep-outcome-counts` | 逐算例胜负计数柱状图 + 精确符号检验 p 值 |
 | `fig-sweep-risk-vs-hops` | 最大风险变化随航段长度（网格跳数）的散点，按窗口着色；显示优势集中在偶数跳走廊 |
 
+> **原图4-3~4-6 已升级为扩样本版（2026-09-01 19:11 +08:00）**：`fig-runtime-cost` / `fig-runtime-risk` / `fig-risk-timeseries` / `fig-risk-distribution` 四张单算例图（n=1/窗口）已替换为基于 104 算例 sweep 数据的版本——runtime-cost/risk 散点 n≥239/算法、risk-timeseries 每窗口 3 条代表走廊（n=3/窗口）、risk-distribution 聚合 104 算例全部航段（每箱约 600 步）。文件名与图号不变（PNG/SVG 同名覆盖），以满足第四章"n≥3"的展示要求；单算例观测值在 §3/§4 表格与 §12.2 锚点中仍完整保留。
+
 ### 12.7 扩样本的诚实性边界
 
 - 104 个算例**不是** 104 个独立天气样本：它们共享 2 个真实窗口（同一冻结 RiskFrame 序列），起终点与出发时刻在同一走廊/窗口内高度相关。配对检验反映的是**算法在走廊内不同 OD/时段的稳健性**。
