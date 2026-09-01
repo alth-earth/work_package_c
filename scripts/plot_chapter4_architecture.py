@@ -109,109 +109,149 @@ def _draw_arrow(ax, x1, y1, x2, y2, *, color="#1f3a68", style="-|>"):
 
 
 def _draw_framework(english: bool, out: Path) -> None:
-    fig, ax = plt.subplots(figsize=(9.5, 12.5))
-    ax.set_xlim(0, 10)
-    ax.set_ylim(0, 13)
+    fig, ax = plt.subplots(figsize=(10.0, 7.2))
+    ax.set_xlim(0, 13)
+    ax.set_ylim(0, 10.2)
     ax.axis("off")
     ax.set_facecolor("white")
     fig.patch.set_facecolor("white")
 
-    # Title band.
-    title_zh = "图4-1 动态风险预测与风险约束自主规划总体技术框架"
-    title_en = (
-        "Fig.4-1 Overall framework: dynamic risk prediction and "
-        "risk-constrained autonomous planning"
-    )
+    title_zh = "风险约束时变航路规划技术框架"
+    title_en = "Technical framework for risk-constrained time-dependent route planning"
     ax.text(
-        5,
-        12.5,
+        6.7,
+        9.75,
         title_en if english else title_zh,
         ha="center",
         va="center",
-        fontsize=13,
+        fontsize=13.5,
         fontweight="bold",
         color="#0f2a4f",
     )
 
-    # Main vertical chain (centred at x=3.5).
-    chain_x = 2.2
-    chain_w = 4.6
-    block_h = 1.05
-    gap = 0.45
-    y_top = 11.4
-    ys = []
-    y = y_top
-    for _ in MAIN_CHAIN:
-        ys.append(y)
-        y -= block_h + gap
-    for i, (zh, en) in enumerate(MAIN_CHAIN):
-        _draw_block(ax, chain_x, ys[i], chain_w, block_h, en if english else zh)
-        if i < len(MAIN_CHAIN) - 1:
-            _draw_arrow(
-                ax,
-                chain_x + chain_w / 2,
-                ys[i],
-                chain_x + chain_w / 2,
-                ys[i + 1] + block_h,
-            )
-
-    # Side feedback loop (right column, x=7.4).
-    fb_x = 7.0
-    fb_w = 2.6
-    fb_h = 0.9
-    fb_y_top = 9.6
-    fb_gap = 0.35
-    fb_ys = []
-    fy = fb_y_top
-    for _ in FEEDBACK:
-        fb_ys.append(fy)
-        fy -= fb_h + fb_gap
-    for i, (zh, en) in enumerate(FEEDBACK):
-        _draw_block(
-            ax,
-            fb_x,
-            fb_ys[i],
-            fb_w,
-            fb_h,
-            en if english else zh,
-            color="#a02020",
-            face="#fbeaea",
-        )
-        if i < len(FEEDBACK) - 1:
-            _draw_arrow(
-                ax,
-                fb_x + fb_w / 2,
-                fb_ys[i],
-                fb_x + fb_w / 2,
-                fb_ys[i + 1] + fb_h,
-                color="#a02020",
-            )
-
-    # Link the main chain to the feedback loop and back.
-    # From "risk prediction model" (index 2) to "error feedback" (index 0).
-    src_y = ys[2] + block_h / 2
-    dst_y = fb_ys[0] + fb_h / 2
-    _draw_arrow(
-        ax,
-        chain_x + chain_w,
-        src_y,
-        fb_x,
-        dst_y,
-        color="#a02020",
-        style="-|>",
+    rows = (
+        (
+            "数据输入",
+            "Inputs",
+            7.65,
+            ("时变风险场", "Time-varying risk field"),
+            ("船舶性能模型", "Vessel performance model"),
+            ("航行任务与可航约束", "Mission and navigability constraints"),
+        ),
+        (
+            "边代价建模",
+            "Edge-cost model",
+            5.55,
+            ("时间展开状态", "Time-expanded state"),
+            ("风险—速度—ETA耦合", "Risk-speed-ETA coupling"),
+            ("全局失效保护约束", "Global fail-closed constraints"),
+        ),
+        (
+            "航路规划",
+            "Route planning",
+            3.45,
+            ("时间依赖 A* 搜索", "Time-dependent A* search"),
+            ("最快 / 低风险 / 推荐", "Fastest / low-risk / recommended"),
+            ("全程 / 走廊 / 滚动 / 执行", "Voyage / corridor / rolling / executable"),
+        ),
+        (
+            "验证与输出",
+            "Validation & output",
+            1.35,
+            ("同图基线与消融验证", "Same-graph baselines and ablations"),
+            ("事件触发动态重规划", "Event-triggered dynamic replanning"),
+            ("12 条航路与 ETA/风险摘要", "12 routes with ETA/risk summaries"),
+        ),
     )
-    # From "planner parameter correction" (fb index 2) back to
-    # "risk-constrained route planning" (main index 4).
-    src_y_fb = fb_ys[2] + fb_h / 2
-    dst_y_main = ys[4] + block_h / 2
-    _draw_arrow(
-        ax,
-        fb_x,
-        src_y_fb,
-        chain_x + chain_w,
-        dst_y_main,
-        color="#a02020",
-        style="-|>",
+    label_x, label_w = 0.18, 1.42
+    content_x, content_w = 1.85, 10.70
+    box_w, box_h, gap = 3.05, 1.05, 0.48
+    faces = ("#EAF2FD", "#E8F7F5", "#EDF7E8", "#FFF4D6")
+    for row_index, row in enumerate(rows):
+        zh_label, en_label, y, *blocks = row
+        label_box = FancyBboxPatch(
+            (label_x, y),
+            label_w,
+            box_h,
+            boxstyle="round,pad=0.02,rounding_size=0.10",
+            linewidth=1.2,
+            edgecolor="#3C78B5",
+            facecolor="#EFF5FD",
+        )
+        ax.add_patch(label_box)
+        ax.text(
+            label_x + label_w / 2,
+            y + box_h / 2,
+            en_label if english else zh_label,
+            ha="center",
+            va="center",
+            fontsize=8.7,
+            fontweight="bold",
+            color="#17365D",
+            wrap=True,
+        )
+        group = FancyBboxPatch(
+            (content_x - 0.15, y - 0.15),
+            content_w,
+            box_h + 0.30,
+            boxstyle="round,pad=0.02,rounding_size=0.08",
+            linewidth=1.0,
+            linestyle=(0, (4, 3)) if row_index in (1, 2) else "solid",
+            edgecolor="#5B9BD5",
+            facecolor="white",
+        )
+        ax.add_patch(group)
+        for block_index, (zh, en) in enumerate(blocks):
+            x = content_x + block_index * (box_w + gap)
+            _draw_block(
+                ax,
+                x,
+                y,
+                box_w,
+                box_h,
+                en if english else zh,
+                color="#3C78B5",
+                face=faces[row_index],
+            )
+            if block_index < 2:
+                _draw_arrow(
+                    ax,
+                    x + box_w,
+                    y + box_h / 2,
+                    x + box_w + gap - 0.08,
+                    y + box_h / 2,
+                    color="#2F6FB0",
+                )
+        if row_index < len(rows) - 1:
+            _draw_arrow(
+                ax,
+                content_x + content_w / 2 - 0.15,
+                y - 0.15,
+                content_x + content_w / 2 - 0.15,
+                rows[row_index + 1][2] + box_h + 0.15,
+                color="#2F6FB0",
+            )
+
+    # Validation and replanning feed back into state and edge-cost construction.
+    feedback = FancyArrowPatch(
+        (8.25, 1.32),
+        (4.8, 6.62),
+        connectionstyle="arc3,rad=-0.28",
+        arrowstyle="-|>",
+        mutation_scale=16,
+        linewidth=1.5,
+        linestyle=(0, (4, 3)),
+        color="#A73535",
+    )
+    ax.add_patch(feedback)
+    ax.text(
+        10.9,
+        5.05,
+        "Replanning feedback" if english else "重规划反馈",
+        ha="center",
+        va="center",
+        fontsize=9,
+        color="#A73535",
     )
 
     fig_path = out / ("framework.png" if english else "fig-framework.png")

@@ -12,6 +12,8 @@ milliseconds and can be executed on every commit.
 from __future__ import annotations
 
 import importlib.util
+import math
+import subprocess
 import sys
 from dataclasses import replace
 from datetime import timedelta
@@ -32,6 +34,22 @@ assert _SPEC is not None and _SPEC.loader is not None
 _SCRIPT = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _SCRIPT
 _SPEC.loader.exec_module(_SCRIPT)
+
+_SWEEP_PATH = Path(__file__).parents[2] / "scripts" / "benchmark_algorithm_comparison_sweep.py"
+_SWEEP_SPEC = importlib.util.spec_from_file_location("c_sweep_driver", _SWEEP_PATH)
+assert _SWEEP_SPEC is not None and _SWEEP_SPEC.loader is not None
+_SWEEP = importlib.util.module_from_spec(_SWEEP_SPEC)
+sys.modules[_SWEEP_SPEC.name] = _SWEEP
+_SWEEP_SPEC.loader.exec_module(_SWEEP)
+
+_SUMMARIZE_PATH = Path(__file__).parents[2] / "scripts" / "summarize_algorithm_comparison.py"
+_SUMMARIZE_SPEC = importlib.util.spec_from_file_location(
+    "c_summarize_algorithm_comparison", _SUMMARIZE_PATH
+)
+assert _SUMMARIZE_SPEC is not None and _SUMMARIZE_SPEC.loader is not None
+_SUMMARIZE = importlib.util.module_from_spec(_SUMMARIZE_SPEC)
+sys.modules[_SUMMARIZE_SPEC.name] = _SUMMARIZE
+_SUMMARIZE_SPEC.loader.exec_module(_SUMMARIZE)
 
 _PROFILE = SyntheticProfileConfig(rows=5, cols=7, frame_count=7)
 
@@ -154,3 +172,167 @@ def test_runner_rejects_real_input_without_route_plan_set(
         ],
     )
     assert _SCRIPT.main() == 2
+
+
+def test_parse_node_accepts_row_col() -> None:
+    assert _SCRIPT._parse_node("5,7") == (5, 7)
+    assert _SCRIPT._parse_node("0,0") == (0, 0)
+
+
+def test_parse_node_rejects_malformed() -> None:
+    with pytest.raises(SystemExit):
+        _SCRIPT._parse_node("5-7")
+    with pytest.raises(SystemExit):
+        _SCRIPT._parse_node("abc")
+
+
+def test_departure_frame_index_matches_departure() -> None:
+    frames = _frames()
+    assert _SCRIPT._departure_frame_index(frames, frames[0].valid_time) == 0
+    assert _SCRIPT._departure_frame_index(frames, frames[2].valid_time) == 2
+    # A departure between frames keeps the earlier frame (the "current" field).
+    between = frames[2].valid_time + timedelta(minutes=30)
+    assert _SCRIPT._departure_frame_index(frames, between) == 2
+
+
+def test_static_field_freeze_index_tracks_departure() -> None:
+    """The static baseline must freeze the field at *departure*, not frame 0."""
+    frames = _frames()
+    grid = RegularGrid.from_risk_frame(frames[0], allow_diagonal=False)
+    late_departure = frames[3].valid_time
+    frozen = [replace(frame, payload=frames[3].payload) for frame in frames]
+    sampler = RiskSampler(frozen)
+    planner = TimeDependentAStar(grid, sampler, _vessel())
+    request = replace(_request(frames), departure_time=late_departure)
+    result = planner.plan(request)
+    assert result.nodes
+
+
+def test_sweep_build_od_cases_filters_by_length_bucket() -> None:
+    """Every sampled case must fall into a short/medium/long hop bucket."""
+    frames = _frames()
+    grid = RegularGrid.from_risk_frame(frames[0], allow_diagonal=False)
+    navigable = {(row, col) for row in range(grid.shape[0]) for col in range(grid.shape[1])}
+    cases = _SWEEP._build_od_cases(
+        window="holdout",
+        navigable=navigable,
+        grid=grid,
+        per_bucket=2,
+        axis="od_pair",
+        departure_offset_hours=0.0,
+        starts=[(1, 1)],
+    )
+    assert cases
+    for case in cases:
+        assert case.hops in range(4, 10)
+        assert case.length_bucket in _SWEEP.LENGTH_BUCKETS
+        assert case.case_id.startswith("holdout-od-")
+
+
+def test_sweep_child_command_includes_all_four_algorithms(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The sweep must re-run every algorithm cell, including risk_blind.
+
+    Regression guard: the first sweep only passed the search-strategy trio and
+    silently dropped the risk-blind objective baseline, which would have left
+    the motivation evidence at n=1.
+    """
+
+    captured: list[list[str]] = []
+
+    def fake_run(command, **_kwargs):  # type: ignore[no-untyped-def]
+        captured.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(_SWEEP.subprocess, "run", fake_run)
+    case = _SWEEP.Case(
+        window="holdout",
+        case_id="x-canary",
+        start=(5, 7),
+        goal=(13, 7),
+        departure_offset_hours=0.0,
+        axis="od_pair",
+        length_bucket="medium",
+        hops=6,
+    )
+    _SWEEP._run_case(
+        case,
+        tmp_path,
+        cpu=0,
+        repetitions=1,
+        warmup=0,
+        max_expansions=50_000,
+    )
+    command = captured[0]
+    assert "--algorithm" in command
+    algorithms = [
+        command[index + 1]
+        for index, token in enumerate(command)
+        if token == "--algorithm"
+    ]
+    assert algorithms == ["time_dependent_astar", "dijkstra", "static_field", "risk_blind"]
+
+
+def test_sweep_plan_case_ids_are_unique() -> None:
+    """Two construction axes must not collide on case ids."""
+    frames = _frames()
+    grid = RegularGrid.from_risk_frame(frames[0], allow_diagonal=False)
+    navigable = {(r, c) for r in range(grid.shape[0]) for c in range(grid.shape[1])}
+    cases = _SWEEP._build_od_cases(
+        window="holdout",
+        navigable=navigable,
+        grid=grid,
+        per_bucket=2,
+        axis="od_pair",
+        departure_offset_hours=0.0,
+        starts=[(1, 1)],
+    ) + _SWEEP._build_od_cases(
+        window="holdout",
+        navigable=navigable,
+        grid=grid,
+        per_bucket=1,
+        axis="departure_time",
+        departure_offset_hours=36.0,
+        starts=[(1, 1)],
+    )
+    ids = [case.case_id for case in cases]
+    assert len(ids) == len(set(ids))
+
+
+def test_sign_test_is_exact_and_symmetric() -> None:
+    # Two-sided exact sign test: p = 2 * P(X <= min(wins, losses)).
+    # 4-4 on n=8 saturates at 1.0; the one-sided cases are small.
+    assert _SUMMARIZE._sign_test_p_value(4, 4) == pytest.approx(1.0)
+    assert _SUMMARIZE._sign_test_p_value(10, 0) == pytest.approx(2 / 2**10)
+    assert _SUMMARIZE._sign_test_p_value(8, 2) == pytest.approx(2 * 56 / 2**10)
+    # Swapping wins and losses must not change the two-sided p-value.
+    assert _SUMMARIZE._sign_test_p_value(2, 8) == pytest.approx(
+        _SUMMARIZE._sign_test_p_value(8, 2)
+    )
+    # An empty sample (no non-tied cases) is NaN, never a fake p-value.
+    assert math.isnan(_SUMMARIZE._sign_test_p_value(0, 0))
+
+
+def test_percentile_is_nearest_rank() -> None:
+    values = [1, 2, 3, 4]
+    assert _SUMMARIZE._percentile(values, 0.25) == 1
+    assert _SUMMARIZE._percentile(values, 0.75) == 3
+    assert _SUMMARIZE._percentile(values, 1.0) == 4
+    assert math.isnan(_SUMMARIZE._percentile([], 0.5))
+
+
+def test_tally_counts_wins_ties_losses() -> None:
+    rows = [
+        {"metric": -5.0},
+        {"metric": -1.0},
+        {"metric": 0.0},
+        {"metric": 2.0},
+        {"metric": None},
+    ]
+    stats = _SUMMARIZE._tally(rows, "metric", better_when_negative=True)
+    assert stats["wins"] == 2
+    assert stats["ties"] == 1
+    assert stats["losses"] == 1
+    assert stats["n"] == 4

@@ -38,6 +38,16 @@ Selectable via ``--algorithm`` but deliberately kept out of ``ALGORITHMS``:
                                 **not** advantage claims for this baseline; only
                                 the realised route qualities (risk, travel time,
                                 distance) are comparable.
+
+Multi-case sampling (2026-09-01):
+  The frozen real fixture hard-codes one origin/destination pair and one
+  departure time, which caps the real evidence at two windows.  ``--real-start``,
+  ``--real-goal``, ``--real-horizon-hours`` and ``--real-departure-offset-hours``
+  override that single case so one frozen window yields many independent
+  planning cases.  Every override is recorded in ``input_identity``; the frozen
+  fixture is still used to validate the input, and the canonical case (offset 0,
+  fixture start/goal) remains reproducible and is identified by
+  ``input_identity.od_override = false``.
 """
 
 from __future__ import annotations
@@ -46,6 +56,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import os
 import platform
 import statistics
 import subprocess
@@ -64,7 +75,7 @@ from arctic_route_planning.planners import PlanningRequest, TimeDependentAStar
 from arctic_route_planning.profiling import SyntheticProfileConfig
 from arctic_route_planning.risk import RiskSampler
 
-SCHEMA_VERSION = "c.algorithm-comparison.v2"
+SCHEMA_VERSION = "c.algorithm-comparison.v3"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 OBJECTIVES = tuple(ObjectiveMode)
 
@@ -155,6 +166,47 @@ def _rss_peak_kib() -> int | None:
     return None
 
 
+def _set_cpu_affinity(cpu: int | None) -> None:
+    """Pin the process to one core so wall-clock ratios stay comparable.
+
+    The expanded-sample sweep runs several cases in parallel.  Without pinning,
+    a migrating process would mix scheduler noise into the A*/Dijkstra speedup
+    ratio, which is exactly the quantity the sweep aggregates over dozens of
+    cases.
+    """
+    if cpu is None or cpu < 0:
+        return
+    if not hasattr(os, "sched_setaffinity"):
+        raise RuntimeError("fixed CPU evidence is unavailable on this platform")
+    os.sched_setaffinity(0, {cpu})
+
+
+def _parse_node(value: str) -> tuple[int, int]:
+    """Parse a ``row,col`` grid reference from the command line."""
+    row, _, col = value.partition(",")
+    try:
+        return (int(row), int(col))
+    except ValueError as error:  # pragma: no cover - CLI misuse
+        raise SystemExit(f"invalid grid node {value!r}, expected 'row,col'") from error
+
+
+def _departure_frame_index(frames: list[Any], departure: Any) -> int:
+    """Index of the frame that the static-field baseline freezes to.
+
+    The static baseline represents "plan on current conditions", so it must
+    freeze the field observed **at departure**, not the first frame of the
+    window.  For the canonical case (``offset = 0``) both are the same frame, so
+    previously published numbers are unchanged.
+    """
+    index = 0
+    for position, frame in enumerate(frames):
+        if frame.valid_time <= departure:
+            index = position
+        else:
+            break
+    return index
+
+
 # --------------------------------------------------------------------------- #
 # fixtures
 # --------------------------------------------------------------------------- #
@@ -195,7 +247,11 @@ def _load_fixture_runner() -> Any:
 
 
 def _build_real(
-    commit_path: Path, route_path: Path, config_root: Path, segment: str
+    commit_path: Path,
+    route_path: Path,
+    config_root: Path,
+    segment: str,
+    departure_offset_hours: float = 0.0,
 ) -> tuple[list[Any], tuple[int, int], tuple[int, int], timedelta, dict[str, Any], dict[str, Any]]:
     runner = _load_fixture_runner()
     args = argparse.Namespace(
@@ -207,6 +263,7 @@ def _build_real(
     fixture = runner._load_fixture(args)  # type: ignore[attr-defined]
     frames = list(fixture.frames)
     horizon = timedelta(hours=24) if "24h" in segment else timedelta(hours=6)
+    departure = fixture.departure + timedelta(hours=departure_offset_hours)
     identity = {
         "kind": "real",
         "input_name": fixture.input_name,
@@ -218,6 +275,8 @@ def _build_real(
         "config_root": str(config_root),
         "segment": segment,
         "frame_count": len(frames),
+        "departure_offset_hours": departure_offset_hours,
+        "static_frame_index": _departure_frame_index(frames, departure),
     }
     # Reuse the frozen real-input configuration so the comparison uses the same
     # vessel model, grid, time bucket, edge sampling and frame-gap policy that
@@ -231,7 +290,8 @@ def _build_real(
         "time_bucket": timedelta(minutes=fixture.planner_config.time_bucket_minutes),
         "edge_sample_count": fixture.planner_config.edge_sample_count,
         "max_frame_gap": timedelta(minutes=fixture.planner_config.max_risk_frame_gap_minutes),
-        "departure": fixture.departure,
+        "departure": departure,
+        "static_frame_index": identity["static_frame_index"],
     }
     return frames, fixture.start, fixture.goal, horizon, identity, real_context
 
@@ -259,7 +319,8 @@ def _run_one(
     """Run a single (objective, algorithm) cell and return comparable metrics."""
     source = frames
     if algorithm == "static_field":
-        source = [replace(frame, payload=frames[0].payload) for frame in frames]
+        freeze_index = (real_context or {}).get("static_frame_index", 0)
+        source = [replace(frame, payload=frames[freeze_index].payload) for frame in frames]
 
     # ``risk_blind`` keeps the *same* search and the *same* temporal field; only
     # the objective function changes (the ice risk / uncertainty terms are
@@ -311,6 +372,7 @@ def _run_one(
     max_risk = max((step.edge_maximum_risk for step in steps), default=0.0)
 
     return {
+        "status": "ok",
         "algorithm": algorithm,
         "objective": objective.value,
         "wall_ms": wall_ms,
@@ -382,18 +444,49 @@ def _parser() -> argparse.ArgumentParser:
     source.add_argument("--real-commit", type=Path, help="bc.risk-window-commit.v1 path")
     parser.add_argument("--real-route-plan-set", type=Path)
     parser.add_argument("--real-segment", default="rolling_0_24h")
+    parser.add_argument(
+        "--real-start",
+        help="override the frozen origin as 'row,col' (multi-case sampling)",
+    )
+    parser.add_argument(
+        "--real-goal",
+        help="override the frozen destination as 'row,col' (multi-case sampling)",
+    )
+    parser.add_argument(
+        "--real-horizon-hours",
+        type=float,
+        help="override the planning horizon derived from the segment name",
+    )
+    parser.add_argument(
+        "--real-departure-offset-hours",
+        type=float,
+        default=0.0,
+        help="shift the departure inside the frozen 145-frame window",
+    )
+    parser.add_argument(
+        "--case-id",
+        default="",
+        help="sweep case identifier recorded verbatim in the artefact",
+    )
     parser.add_argument("--config-root", type=Path, default=REPO_ROOT / "configs")
     parser.add_argument("--objective", action="append", choices=[o.value for o in OBJECTIVES])
     parser.add_argument("--algorithm", action="append", choices=ALL_ALGORITHMS)
     parser.add_argument("--repetitions", type=int, default=5)
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--max-expansions", type=int, default=250_000)
+    parser.add_argument(
+        "--cpu",
+        type=int,
+        default=-1,
+        help="pin the process to this core (-1 keeps the scheduler default)",
+    )
     parser.add_argument("--output-dir", type=Path, required=True)
     return parser
 
 
 def main() -> int:
     args = _parser().parse_args()
+    _set_cpu_affinity(args.cpu)
     objectives = tuple(ObjectiveMode(o) for o in (args.objective or [o.value for o in OBJECTIVES]))
     algorithms = tuple(args.algorithm or ALGORITHMS)
 
@@ -407,49 +500,97 @@ def main() -> int:
             print(parser_error, file=sys.stderr)
             return 2
         frames, start, goal, horizon, identity, real_context = _build_real(
-            args.real_commit, args.real_route_plan_set, args.config_root, args.real_segment
+            args.real_commit,
+            args.real_route_plan_set,
+            args.config_root,
+            args.real_segment,
+            args.real_departure_offset_hours,
         )
-        label = f"real-{args.real_segment}"
+        # Multi-case sampling: the frozen fixture still validates the input, but
+        # the single hard-coded origin/destination pair is replaced by the case
+        # under test.  The override is recorded so artefacts stay self-describing.
+        od_override = bool(args.real_start or args.real_goal or args.real_horizon_hours)
+        if args.real_start:
+            start = _parse_node(args.real_start)
+        if args.real_goal:
+            goal = _parse_node(args.real_goal)
+        if args.real_horizon_hours:
+            horizon = timedelta(hours=args.real_horizon_hours)
+        identity["od_override"] = od_override
+        identity["case_id"] = args.case_id
+        identity["start"] = list(start)
+        identity["goal"] = list(goal)
+        identity["horizon_hours"] = horizon.total_seconds() / 3600.0
+        label = args.case_id or f"real-{args.real_segment}"
 
     output_dir: Path = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
 
     raw: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
+
+    def attempt(objective: ObjectiveMode, algorithm: str, repetition: int) -> dict[str, Any] | None:
+        try:
+            record = _run_one(
+                frames,
+                start,
+                goal,
+                horizon,
+                objective,
+                algorithm,
+                args.max_expansions,
+                real_context,
+            )
+        except Exception as error:
+            # A sampled origin/destination pair can be unreachable inside the
+            # horizon (fail-closed).  One bad case must not abort the sweep; it
+            # is recorded instead so the report can count it honestly.
+            failures.append(
+                {
+                    "objective": objective.value,
+                    "algorithm": algorithm,
+                    "repetition": repetition,
+                    "error_type": type(error).__name__,
+                    "error_message": str(error),
+                }
+            )
+            return {
+                "status": "failed",
+                "algorithm": algorithm,
+                "objective": objective.value,
+                "repetition": repetition,
+                "error_type": type(error).__name__,
+                "error_message": str(error),
+            }
+        record["repetition"] = repetition
+        return record
+
     for _ in range(args.warmup):
-        _run_one(
-            frames,
-            start,
-            goal,
-            horizon,
-            objectives[0],
-            algorithms[0],
-            args.max_expansions,
-            real_context,
-        )
+        attempt(objectives[0], algorithms[0], -1)
 
     for repetition in range(args.repetitions):
         for objective in objectives:
             for algorithm in algorithms:
-                record = _run_one(
-                    frames,
-                    start,
-                    goal,
-                    horizon,
-                    objective,
-                    algorithm,
-                    args.max_expansions,
-                    real_context,
-                )
-                record["repetition"] = repetition
-                raw.append(record)
+                record = attempt(objective, algorithm, repetition)
+                if record is not None:
+                    raw.append(record)
 
     # aggregate median per (objective, algorithm)
     summary_cells: list[dict[str, Any]] = []
     for objective in objectives:
         for algorithm in algorithms:
             cells = [
-                r for r in raw if r["objective"] == objective.value and r["algorithm"] == algorithm
+                r
+                for r in raw
+                if r["objective"] == objective.value
+                and r["algorithm"] == algorithm
+                and r.get("status") == "ok"
             ]
+            if not cells:
+                # Every repetition of this cell failed (e.g. the sampled origin
+                # cannot reach the destination within the horizon).  Emitting no
+                # cell keeps the comparison blocks from dividing by zero.
+                continue
             summary_cells.append(
                 {
                     "objective": objective.value,
@@ -619,7 +760,11 @@ def main() -> int:
             "start": list(start),
             "goal": list(goal),
             "horizon_hours": horizon.total_seconds() / 3600.0,
-            "departure": frames[0].valid_time.isoformat(),
+            "departure": (
+                real_context["departure"].isoformat()
+                if real_context is not None
+                else frames[0].valid_time.isoformat()
+            ),
             "frame_count": len(frames),
         },
         "parameters": {
@@ -628,7 +773,10 @@ def main() -> int:
             "max_expansions": args.max_expansions,
             "objectives": [o.value for o in objectives],
             "algorithms": list(algorithms),
+            "cpu": args.cpu,
         },
+        "status": "ok" if not failures else "partial",
+        "failures": failures,
         "summary": summary_cells,
         "comparisons": comparisons,
         "raw": raw,
@@ -642,6 +790,11 @@ def main() -> int:
     )
 
     print(f"[{label}] comparison written to {output_dir / 'comparison.json'}")
+    for failure in failures:
+        print(
+            f"  FAILED {failure['objective']:12s} {failure['algorithm']:14s} "
+            f"rep={failure['repetition']} {failure['error_type']}: {failure['error_message']}"
+        )
     for row in comparisons:
         if row["baseline_kind"] == "objective_function":
             print(
@@ -654,7 +807,7 @@ def main() -> int:
             continue
         print(
             f"  {row['objective']:12s} vs {row['baseline']:14s} "
-            f"expansion -{row['expansion_reduction_pct']:.1f}%  "
+            f"expansion {row['expansion_reduction_pct']:+.1f}%  "
             f"speedup {row['wall_speedup']:.2f}x  "
             f"cost_identical={row['cost_identical']}"
         )

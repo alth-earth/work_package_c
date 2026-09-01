@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import sys
 from pathlib import Path
 from typing import Any
@@ -125,8 +126,14 @@ def _meta(doc: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-SCHEMA_VERSIONS = ("c.algorithm-comparison.v1", "c.algorithm-comparison.v2")
+SCHEMA_VERSIONS = (
+    "c.algorithm-comparison.v1",
+    "c.algorithm-comparison.v2",
+    "c.algorithm-comparison.v3",
+)
 DEFAULT_RUN_PREFIX = "c-algorithm-comparison-"
+SWEEP_MANIFEST = "sweep-manifest.json"
+SWEEP_SCHEMA = "c.algorithm-comparison-sweep.v1"
 
 
 def _load_runs(args: argparse.Namespace) -> list[tuple[str, dict[str, Any]]]:
@@ -392,6 +399,355 @@ def _scaling_section(runs: list[tuple[str, dict[str, Any]]]) -> list[str]:
     return md
 
 
+# --------------------------------------------------------------------------- #
+# expanded-sample sweep (2026-09-01)
+# --------------------------------------------------------------------------- #
+# One row per (planning case, objective).  A case is one frozen window plus one
+# origin/destination pair plus one departure offset; the single-case runs above
+# yield 6 rows per window, which is too few to support a distribution claim.
+SWEEP_CSV_FIELDS: tuple[str, ...] = (
+    "case_id",
+    "window",
+    "axis",
+    "length_bucket",
+    "grid_hops",
+    "departure_offset_hours",
+    "objective",
+    "case_status",
+    "ours_feasible",
+    "dijkstra_feasible",
+    "static_feasible",
+    "risk_blind_feasible",
+    "ours_expanded",
+    "dijkstra_expanded",
+    "expansion_reduction_pct",
+    "ours_wall_ms",
+    "dijkstra_wall_ms",
+    "speedup",
+    "cost_identical",
+    "ours_avg_risk",
+    "static_avg_risk",
+    "avg_risk_delta_pct",
+    "ours_max_risk",
+    "static_max_risk",
+    "max_risk_delta_pct",
+    "ours_distance_km",
+    "static_distance_km",
+    "ours_travel_hours",
+    "static_travel_hours",
+    "risk_blind_avg_risk",
+    "avg_risk_paid_pct",
+    "risk_blind_max_risk",
+    "max_risk_paid_pct",
+    "risk_blind_travel_hours",
+)
+
+TIE_TOLERANCE = 1e-9
+
+
+def _median(values: list[float]) -> float:
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[middle]
+    return (ordered[middle - 1] + ordered[middle]) / 2.0
+
+
+def _percentile(values: list[float], fraction: float) -> float:
+    """Nearest-rank percentile; no interpolation, so every value is observed."""
+    ordered = sorted(values)
+    if not ordered:
+        return float("nan")
+    rank = max(1, math.ceil(fraction * len(ordered)))
+    return ordered[min(rank, len(ordered)) - 1]
+
+
+def _sign_test_p_value(wins: int, losses: int) -> float:
+    """Two-sided exact sign test over the non-tied cases.
+
+    The sweep is *paired* (every algorithm sees the same case), and the per-case
+    deltas are not assumed to be normal, so the distribution-free sign test is
+    the honest choice.  Ties are excluded from the sample, exactly as the
+    standard test requires, and the tie count is reported alongside the p-value.
+    """
+    total = wins + losses
+    if total == 0:
+        return float("nan")
+    tail = min(wins, losses)
+    cumulative = sum(math.comb(total, index) for index in range(tail + 1))
+    return min(1.0, 2.0 * cumulative / (2**total))
+
+
+def _describe(values: list[float]) -> dict[str, float | int]:
+    if not values:
+        return {"n": 0}
+    return {
+        "n": len(values),
+        "min": min(values),
+        "p25": _percentile(values, 0.25),
+        "median": _median(values),
+        "p75": _percentile(values, 0.75),
+        "max": max(values),
+    }
+
+
+def _fetch(cells: dict[str, dict[str, Any]], key: str) -> Any:
+    return cells.get(key)
+
+
+def _load_sweep(sweep_root: Path) -> list[dict[str, Any]]:
+    """Read every case artefact produced by the sweep driver."""
+    manifest_path = sweep_root / SWEEP_MANIFEST
+    if not manifest_path.is_file():
+        raise SystemExit(f"no sweep manifest at {manifest_path}")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("schema_version") != SWEEP_SCHEMA:
+        raise SystemExit(f"{manifest_path} is not {SWEEP_SCHEMA}")
+    rows: list[dict[str, Any]] = []
+    for entry in manifest["cases"]:
+        case_dir = sweep_root / "cases" / entry["case_id"]
+        artefact = case_dir / "comparison-summary.json"
+        if not artefact.is_file():
+            continue
+        document = json.loads(artefact.read_text(encoding="utf-8"))
+        if document.get("schema_version") not in SCHEMA_VERSIONS:
+            continue
+        identity = document.get("input_identity", {})
+        cells = {f"{cell['objective']}|{cell['algorithm']}": cell for cell in document["summary"]}
+        for objective in OBJECTIVES:
+            ours = _fetch(cells, f"{objective}|{OURS}")
+            dij = _fetch(cells, f"{objective}|{DIJKSTRA}")
+            static = _fetch(cells, f"{objective}|{STATIC}")
+            blind = _fetch(cells, f"{objective}|{RISK_BLIND}")
+            row: dict[str, Any] = {field: None for field in SWEEP_CSV_FIELDS}
+            row.update(
+                {
+                    "case_id": entry["case_id"],
+                    "window": entry["window"],
+                    "axis": entry["axis"],
+                    "length_bucket": entry.get("length_bucket") or "",
+                    "grid_hops": entry.get("grid_hops"),
+                    "departure_offset_hours": entry.get("departure_offset_hours"),
+                    "objective": objective,
+                    "case_status": document.get("status", "ok"),
+                    "ours_feasible": ours is not None,
+                    "dijkstra_feasible": dij is not None,
+                    "static_feasible": static is not None,
+                    "risk_blind_feasible": blind is not None,
+                }
+            )
+            if ours is not None and dij is not None:
+                row["ours_expanded"] = ours["expanded_states_median"]
+                row["dijkstra_expanded"] = dij["expanded_states_median"]
+                row["expansion_reduction_pct"] = round(
+                    100.0 * (1.0 - ours["expanded_states_median"] / dij["expanded_states_median"]),
+                    4,
+                )
+                row["ours_wall_ms"] = round(ours["wall_ms_median"], 2)
+                row["dijkstra_wall_ms"] = round(dij["wall_ms_median"], 2)
+                row["speedup"] = round(dij["wall_ms_median"] / ours["wall_ms_median"], 3)
+                row["cost_identical"] = (
+                    abs(ours["total_cost_hours_median"] - dij["total_cost_hours_median"]) < 1e-9
+                )
+            if ours is not None and static is not None:
+                row["ours_avg_risk"] = ours["average_edge_risk_median"]
+                row["static_avg_risk"] = static["average_edge_risk_median"]
+                row["avg_risk_delta_pct"] = round(
+                    _pct(
+                        ours["average_edge_risk_median"],
+                        static["average_edge_risk_median"],
+                    ),
+                    4,
+                )
+                row["ours_max_risk"] = ours["maximum_edge_risk_median"]
+                row["static_max_risk"] = static["maximum_edge_risk_median"]
+                row["max_risk_delta_pct"] = round(
+                    _pct(
+                        ours["maximum_edge_risk_median"],
+                        static["maximum_edge_risk_median"],
+                    ),
+                    4,
+                )
+                row["ours_distance_km"] = ours["distance_km_median"]
+                row["static_distance_km"] = static["distance_km_median"]
+                row["ours_travel_hours"] = ours["travel_hours_median"]
+                row["static_travel_hours"] = static["travel_hours_median"]
+            if ours is not None and blind is not None:
+                row["risk_blind_avg_risk"] = blind["average_edge_risk_median"]
+                row["avg_risk_paid_pct"] = round(
+                    _pct(
+                        blind["average_edge_risk_median"],
+                        ours["average_edge_risk_median"],
+                    ),
+                    4,
+                )
+                row["risk_blind_max_risk"] = blind["maximum_edge_risk_median"]
+                row["max_risk_paid_pct"] = round(
+                    _pct(
+                        blind["maximum_edge_risk_median"],
+                        ours["maximum_edge_risk_median"],
+                    ),
+                    4,
+                )
+                row["risk_blind_travel_hours"] = blind["travel_hours_median"]
+            row["_identity"] = identity
+            rows.append(row)
+    return rows
+
+
+def _tally(
+    rows: list[dict[str, Any]], metric: str, *, better_when_negative: bool
+) -> dict[str, Any]:
+    """Aggregate one paired metric across cases, counting wins/ties/losses."""
+    values = [
+        float(row[metric])
+        for row in rows
+        if row.get(metric) is not None and isinstance(row[metric], (int, float))
+    ]
+    wins = sum(1 for value in values if (-value if better_when_negative else value) > TIE_TOLERANCE)
+    losses = sum(
+        1 for value in values if (-value if better_when_negative else value) < -TIE_TOLERANCE
+    )
+    summary = _describe(values)
+    summary.update(
+        {
+            "wins": wins,
+            "ties": len(values) - wins - losses,
+            "losses": losses,
+            "p_value": _sign_test_p_value(wins, losses),
+        }
+    )
+    return summary
+
+
+def _fmt_stat(value: Any, digits: int = 2) -> str:
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return "—"
+    return f"{value:.{digits}f}"
+
+
+def _sweep_markdown(rows: list[dict[str, Any]]) -> list[str]:
+    md: list[str] = ["# 扩样本扫描聚合统计（多样本证据）", ""]
+    md.append(
+        "> 冻结真实窗口只有 2 个，且单窗口只有一对起终点、一个出发时刻，"
+        "因此单算例证据最多只有 4 条独立航线。本扫描把每个窗口拆成多个"
+        "**起终点算例**（走廊内 5 个起点 × 短/中/长三档航段）与多个"
+        "**出发时刻**（窗口内 0/36/72/108 h），使配对样本量扩大一个数量级。"
+    )
+    md.append("")
+
+    total_cases = len({row["case_id"] for row in rows})
+    feasible_ours = len({row["case_id"] for row in rows if row["ours_feasible"]})
+    feasible_static = len({row["case_id"] for row in rows if row["static_feasible"]})
+    md.append("## 1. 样本量与可行性")
+    md.append("")
+    md.append("| 项 | 数值 |")
+    md.append("|---|---:|")
+    md.append(f"| 扫描算例数（窗口 × 起终点 × 出发时刻） | {total_cases} |")
+    md.append(f"| 算例 × 目标单元数 | {len(rows)} |")
+    md.append(f"| 本文算法在 24h 时限内求得航线的算例数 | {feasible_ours} |")
+    md.append(f"| 静态场基线在 24h 时限内求得航线的算例数 | {feasible_static} |")
+    md.append(f"| 静态场基线不可行（本文算法可行）的算例数 | {feasible_ours - feasible_static} |")
+    md.append("")
+
+    # NOTE on polarity: ``expansion_reduction_pct`` is stored as a *positive*
+    # number ("86.6" means a 86.6% reduction), so larger is better; the risk
+    # deltas are stored as signed percentages where more negative is better.
+    metrics = [
+        # NOTE on polarity: ``expansion_reduction_pct`` is stored as a *positive*
+        # number ("86.6" means a 86.6% reduction), so larger is better; the risk
+        # deltas are signed percentages where more negative is better.
+        ("扩展状态数减少（vs Dijkstra）", "expansion_reduction_pct", False, "%"),
+        ("墙钟加速比（vs Dijkstra）", "speedup", False, "×"),
+        ("平均航段风险变化（vs 静态场）", "avg_risk_delta_pct", True, "%"),
+        ("最大航段风险变化（vs 静态场）", "max_risk_delta_pct", True, "%"),
+    ]
+    # ``risk_blind`` is an objective-function ablation (it prices time and
+    # distance, zeroing ice risk/uncertainty), so its deltas are **motivation**
+    # evidence, not a paired win/loss claim.  They are reported as a distribution
+    # and excluded from the sign-test tally.
+    motivation_metrics = [
+        ("风险无关路径多付的平均风险", "avg_risk_paid_pct", "%"),
+        ("风险无关路径多付的最大风险", "max_risk_paid_pct", "%"),
+    ]
+    md.append("## 2. 配对指标聚合（全部算例，不分窗口）")
+    md.append("")
+    md.append(
+        "| 指标 | n | 最小 | P25 | 中位数 | P75 | 最大 | 本文更优 | 持平 | 本文更差 | 符号检验 p |"
+    )
+    md.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+    for title, metric, negative_better, _unit in metrics:
+        stats = _tally(rows, metric, better_when_negative=negative_better)
+        if not stats.get("n"):
+            continue
+        md.append(
+            f"| {title} | {stats['n']} | {_fmt_stat(stats['min'])} | "
+            f"{_fmt_stat(stats['p25'])} | **{_fmt_stat(stats['median'])}** | "
+            f"{_fmt_stat(stats['p75'])} | {_fmt_stat(stats['max'])} | "
+            f"{stats['wins']} | {stats['ties']} | {stats['losses']} | "
+            f"{_fmt_stat(stats['p_value'], 4)} |"
+        )
+    md.append("")
+    md.append("**动机证据（风险无关基线，非配对优势主张）**：")
+    md.append("")
+    md.append("| 指标 | n | 最小 | P25 | 中位数 | P75 | 最大 | 其中风险无关多付 > 0 | 其中持平 |")
+    md.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|")
+    for title, metric, _unit in motivation_metrics:
+        values = [
+            float(row[metric])
+            for row in rows
+            if row.get(metric) is not None and isinstance(row[metric], (int, float))
+        ]
+        if not values:
+            continue
+        summary = _describe(values)
+        positive = sum(1 for value in values if value > 1e-9)
+        ties = sum(1 for value in values if abs(value) <= 1e-9)
+        md.append(
+            f"| {title} | {summary['n']} | {_fmt_stat(summary['min'])} | "
+            f"{_fmt_stat(summary['p25'])} | **{_fmt_stat(summary['median'])}** | "
+            f"{_fmt_stat(summary['p75'])} | {_fmt_stat(summary['max'])} | "
+            f"{positive} | {ties} |"
+        )
+    md.append(
+        "> 注：risk_blind 是目标函数消融，与本文目标不同，差异不构成配对优势主张；"
+        "上表只报告它相对本文多付风险的**分布**，作为『为什么必须用时变风险感知规划』的动机。"
+    )
+    md.append("")
+
+    md.append("## 3. 按窗口拆分（两窗口独立复现）")
+    md.append("")
+    md.append("| 窗口 | 指标 | n | 中位数 | P25 | P75 | 本文更优 | 持平 | 本文更差 | p |")
+    md.append("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|")
+    for window in sorted({row["window"] for row in rows}):
+        subset = [row for row in rows if row["window"] == window]
+        for title, metric, negative_better, _unit in metrics:
+            stats = _tally(subset, metric, better_when_negative=negative_better)
+            if not stats.get("n"):
+                continue
+            md.append(
+                f"| {window} | {title} | {stats['n']} | "
+                f"**{_fmt_stat(stats['median'])}** | {_fmt_stat(stats['p25'])} | "
+                f"{_fmt_stat(stats['p75'])} | {stats['wins']} | {stats['ties']} | "
+                f"{stats['losses']} | {_fmt_stat(stats['p_value'], 4)} |"
+            )
+    md.append("")
+
+    md.append("## 4. 最优性守卫（代价一致性）")
+    md.append("")
+    comparable = [row for row in rows if row.get("cost_identical") is not None]
+    identical = sum(1 for row in comparable if row["cost_identical"])
+    md.append(
+        f"- 与无信息 Dijkstra 可直接比较的单元：**{len(comparable)}**；"
+        f"总代价严格相同：**{identical}**（{100.0 * identical / max(len(comparable), 1):.1f}%）。"
+    )
+    md.append(
+        "- 其余单元为某一方在 24h 时限内 fail-closed 不可行，不构成最优性反例，也不计入质量对比。"
+    )
+    md.append("")
+    return md
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -413,6 +769,11 @@ def main() -> int:
         help="directory-name prefix used when auto-discovering runs",
     )
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument(
+        "--sweep-root",
+        type=Path,
+        help="expanded-sample sweep directory holding " + SWEEP_MANIFEST,
+    )
     args = parser.parse_args()
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -511,6 +872,22 @@ def main() -> int:
 
     print(f"wrote {args.output_dir / 'summary-tables.md'}")
     print(f"wrote {args.output_dir / 'summary-data.csv'} ({len(all_rows)} rows)")
+
+    if args.sweep_root:
+        sweep_rows = _load_sweep(args.sweep_root)
+        with (args.output_dir / "summary-sweep.csv").open(
+            "w", newline="", encoding="utf-8"
+        ) as handle:
+            writer = csv.DictWriter(handle, fieldnames=list(SWEEP_CSV_FIELDS))
+            writer.writeheader()
+            for row in sweep_rows:
+                row.pop("_identity", None)
+                writer.writerow(row)
+        (args.output_dir / "summary-sweep.md").write_text(
+            "\n".join(_sweep_markdown(sweep_rows)), encoding="utf-8"
+        )
+        print(f"wrote {args.output_dir / 'summary-sweep.csv'} ({len(sweep_rows)} rows)")
+        print(f"wrote {args.output_dir / 'summary-sweep.md'}")
     return 0
 
 

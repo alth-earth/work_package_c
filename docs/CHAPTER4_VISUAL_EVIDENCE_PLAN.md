@@ -3,8 +3,8 @@
 > 文档性质：第四章"工作包 C 算法对比"部分的视觉证据清单。说明**每条论文结论需要什么指标**、**当前数据是否支持**、**新增实验清单**、**推荐图表与表格**、**原始数据位置**。
 
 **代码提交**：`a4d7d72`（HEAD），分支 `research-validation-system`
-**生成日期**：2026-09-01
-**关联主报告**：`docs/ALGORITHM_COMPARISON_REPORT.md`（11 章，含 §6 创新性、§6.6 反向论证）
+**生成日期**：2026-09-01（初版）；2026-09-01 19:11 +08:00（扩样本修订，见 §2.1）
+**关联主报告**：`docs/ALGORITHM_COMPARISON_REPORT.md`（13 章，含 §6 创新性、§6.6 反向论证、§12 扩样本聚合）
 
 ---
 
@@ -14,20 +14,21 @@
 |---|---|---|---|---|---|
 | 1 | 算法框架完整闭环 | 整体性 | 多源输入→规划→验证的全链路 | ✅ 不依赖数据 | **图4-1 总体技术框架** |
 | 2 | 比较公平 | 公平性 | 各算法输入/目标/约束一致 | ✅ fixture 配置齐全 | **表4-X 算法公平性表** |
-| 3 | 效率优势随规模放大 | 效率 × 可扩展性 | 运行时间 vs 规模 + 加速比 | ✅ 4 档合成 + 真实窗口 | **图4-2 runtime-scale（log-log）** |
+| 3 | 效率优势随规模放大 | 效率 × 可扩展性 | 运行时间 vs 规模 + 加速比 | ✅ 4 档合成 + 104 算例扩样本 | **图4-2 runtime-scale、图4-7 sweep 分布/胜负** |
 | 4 | 效率提升不牺牲解质量 | 效率 × 质量 | 代价/风险 vs 运行时间 | ✅ real 24h raw 记录 | **图4-3 runtime-cost、图4-4 runtime-risk 散点** |
-| 5 | 风险降低不只是均值 | 质量 × 稳定性 | per-step 风险分布 | ✅ v2 schema 含 step 字段 | **图4-5 时序、图4-6 箱线** |
+| 5 | 风险降低不只是均值 | 质量 × 稳定性 | per-step 风险分布 + 算例级聚合 | ✅ v2 schema + summary-sweep.csv | **图4-5 时序、图4-6 箱线、图4-8 风险-航程** |
 | 6 | 改进候选未超越当前 | 稳定性 × 鲁棒性 | 候选全部 FAIL | ✅ SSOT §3 成熟度表 | （见主报告 §6.6 漏斗图） |
 | 7 | "未被超越"≠"性能最优" | 边界 | 红线声明 | ✅ 已声明 | （见主报告 §8 注意点 12） |
 | 8 | 消融：每个模块都贡献 | 必要性 | full/risk_blind/no_heuristic/no_temporal | ✅ 4 档可严格定义；no_replanning 缺失 | **表4-Y 消融研究** |
 | 9 | 性能随规模严格单调 | 可扩展性 | 绝对扩展差值 | ✅ fastest 32→247→1352→3755 | （见主报告 §5） |
 | 10 | 真实 145 帧下的不一致性 | 边界 | `REAL_INPUT_FIFO_VIOLATED`/ETA 不动点不存在 | ✅ 真实数据 | （见主报告 §6.3） |
+| 11 | 配对差异非偶发 | 效率 × 质量 × 鲁棒性 | 逐算例配对差异的分布与符号检验 | ✅ 104 算例 × 3 目标（246 对可比较） | **图4-7 分布/图4-8 胜负/图4-9 风险-航程** |
 
 ---
 
 ## 2. 推荐图表
 
-所有图：PNG+SVG、中文主版本（Noto Sans CJK SC）、白底、无 3D、坐标轴/单位/图例完整、同一算法跨图视觉一致（A*=蓝、Dijkstra=橙、Static=绿、Risk-blind=红）、有重复实验显示中位数、n=1 显式标注。
+所有图：PNG+SVG、中文主版本（Noto Sans CJK SC）、白底、无 3D、坐标轴/单位/图例完整、同一算法跨图视觉一致（A*=蓝、Dijkstra=橙、Static=绿、Risk-blind=红）。单算例图（图4-2 至图4-6）显式标注 n=1；扩样本图（图4-7 至图4-9）标注真实算例数（n=246 / 239）与精确符号检验 p 值。
 
 | 图号 | 文件（中/英） | 论文结论 | 100-200 字分析 | 数据来源 | 局限性 | 建议插入 |
 |---|---|---|---|---|---|---|
@@ -45,6 +46,16 @@
 | 表4-X | `docs/CHAPTER4_FAIRNESS_TABLE.md` | 比较公平 | §4.2.1 |
 | 表4-Y | `docs/CHAPTER4_ABLATION.md` | 消融研究 | §4.5.1 |
 
+### 2.1 扩样本新增图（2026-09-01 19:11 +08:00）
+
+单算例图（图4-2 至图4-6）只能支撑 n=1~4 的观测；为回应"样本太少、说服力不足"，新增 104 算例（2 窗口 × 5 起点 × 3 档航段 × 0/36/72/108h 出发时刻）配对图。数据源 `summary-sweep.csv`（312 单元，其中 246 个效率对、239 个质量对可比较）。全部图：PNG+SVG、中文主版本 + 英文版、白底、逐算例散点（真实 n，不再是 n=1）。
+
+| 图号 | 文件（中/英） | 论文结论 | 100-200 字分析 | 数据来源 | 局限性 | 建议插入 |
+|---|---|---|---|---|---|---|
+| 图4-7 | `fig-sweep-delta-distribution`/`sweep-delta-distribution` | 配对差异非偶发 | 三个面板（扩展减少 / 最大风险 / 平均风险）箱线 + 逐算例散点：扩展减少全部为正（中位数 84.24%），平均风险多数为负（176 优 / 63 差），最大风险围绕 0（holdout 持平）——效率优势一致、平均风险显著、最大风险走廊相关。 | `summary-sweep.csv` | 共享 2 个天气窗口 | §4.3.2 后 |
+| 图4-8 | `fig-sweep-outcome-counts`/`sweep-outcome-counts` | 胜负计数可检验 | 每指标「本文更优 / 持平 / 本文更差」计数柱状图 + 精确符号检验 p 值：扩展 246/0/0、加速 246/0/0、平均风险 176/63、最大风险 127/42/70。 | 同图4-7 | 目标单元间相关 | §4.3.3 |
+| 图4-9 | `fig-sweep-risk-vs-hops`/`sweep-risk-vs-hops` | 风险优势与航段长度 | 最大风险变化 vs 网格跳数散点（按窗口着色）：偶数跳走廊（4/6/8）风险优势明显，奇数跳（5/7）与静态场持平——解释"最大风险优势走廊相关"。 | 同图4-7 | 跳数粒度有限 | §4.4 末 |
+
 ---
 
 ## 3. 原始数据位置索引
@@ -56,8 +67,11 @@
 | 图4-4 runtime-risk | `summary-data.csv` real 24h wall_ms + max_risk | 同上 |
 | 图4-5 risk-timeseries | raw JSON recommended `step_edge_risk_score` | 同上（v2 schema） |
 | 图4-6 risk-distribution | 同图4-5 | 同上（v2 schema） |
+| 图4-7/4-8/4-9 sweep | `summary-sweep.csv`（312 单元） | `.runtime/experiments/c-algorithm-comparison-summary/summary-sweep.csv` |
 | 表4-X fairness | fixture + 算法名清单 | `work_package_c/scripts/benchmark_algorithm_comparison.py` 内置 |
 | 表4-Y ablation | 4 档从既有数据派生 | 同图4-4/4-5 |
+
+扩样本原始构件：`.runtime/experiments/c-algorithm-comparison-sweep/`（`sweep-manifest.json` 列出 104 个算例的身份、起终点、出发偏移与状态；每个算例一个 `cases/<case-id>/comparison-summary.json`，schema `c.algorithm-comparison.v3`，含 `od_override/case_id/departure_offset_hours/static_frame_index`）。
 
 ---
 
@@ -83,11 +97,13 @@
 - **缺失原因**：构建敏感性需 4-5 个参数笛卡尔积扫描，每组合保留 v2 raw 数据，汇总到 sensitivity matrix，预算与时间超出本轮 12h 截止线。
 - **替代**：在主报告 §2 声明"实验设置一致"。**第四章不画敏感性图**。
 
-### 4.4 development 24h 上 `recommended` 目标下 `risk_blind` 与本文完全一致
+### 4.4 development 窗口上 `risk_blind` 与本文部分目标路线重合
 
-- **现状**：`c-algorithm-comparison-development-24h/comparison.json` 中 `risk_blind` 与 `recommended` 在同一 departure 下三条路线完全相同。
+- **现状**：单算例证据（`c-algorithm-comparison-development-24h/comparison.json`）中 `risk_blind` 与 `recommended` 在同一 departure 下三条路线完全相同；扩样本（§12，104 算例）后 development 上 risk_blind 与本文路线仍有较高重合（risk 权重在该窗口不占决定作用），而 holdout 上两路线通常不同。
 - **缺失原因**：development 窗口 risk 权重不起决定性作用，**真实数据特征**，非缺失。
-- **替代**：图4-4/4-6 **明确标注 `dev/risk_blind ≡ recommended`**，避免读者误判 n=1 偏差。
+- **替代**：图4-4/4-6 对规范算例**明确标注 `dev/risk_blind ≡ recommended`**；扩样本聚合图（图4-7/4-8）单独呈现 risk_blind 多付风险的分布，不再依赖单算例观测。
+
+> 扩样本对 §4.1–§4.3 三项"未做"声明**没有改变**：风险场热力底图/路径地理叠加（4.1）、no_replanning 消融（4.2）、参数敏感性（4.3）仍然不做、不画。
 
 ---
 
@@ -115,14 +131,23 @@ for p in small medium large stress; do
     --output-dir /root/my_project/.runtime/experiments/c-algorithm-comparison-synthetic-$p
 done
 
-# 3) 汇总 + 渲染全部图（含新增 4 类）
+# 2b) 扩样本扫描（104 算例 = 2 窗口 × 5 起点 × 3 档航段 + 3 个额外出发时刻；含 risk_blind）
+uv run python scripts/benchmark_algorithm_comparison_sweep.py \
+  --od-per-bucket 2 --temporal-per-bucket 1 \
+  --departure-offset-hours 36 --departure-offset-hours 72 --departure-offset-hours 108 \
+  --workers 6 --repetitions 1 --warmup 1 \
+  --output-dir /root/my_project/.runtime/experiments/c-algorithm-comparison-sweep
+
+# 3) 汇总（单算例 + 扩样本聚合）+ 渲染全部图（含新增 sweep 3 类）
 uv run python scripts/summarize_algorithm_comparison.py \
   --runs-root /root/my_project/.runtime/experiments \
+  --sweep-root /root/my_project/.runtime/experiments/c-algorithm-comparison-sweep \
   --output-dir /root/my_project/.runtime/experiments/c-algorithm-comparison-summary
 uv run --with matplotlib python scripts/plot_algorithm_comparison.py \
   --csv /root/my_project/.runtime/experiments/c-algorithm-comparison-summary/summary-data.csv \
+  --sweep-csv /root/my_project/.runtime/experiments/c-algorithm-comparison-summary/summary-sweep.csv \
   --experiments-root /root/my_project/.runtime/experiments \
-  --output-dir /root/my_project/.runtime/experiments/c-algorithm-comparison-summary/figures
+  --output-dir /root/my_project/.runtime/experiments/c-algorithm-comparison-summary/figures --both
 
 # 4) 总体框架图
 uv run --with matplotlib python scripts/plot_chapter4_architecture.py \

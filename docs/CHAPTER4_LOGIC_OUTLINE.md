@@ -127,10 +127,10 @@
 |---|---|---|---|---|---|---|---|---|
 | 算法框架完整闭环 | 整体性 | — | 描述性 | 图4-1 框架 | — | — | — | 仅框架示意，不证明性能 |
 | 比较公平 | 公平性 | 4 算法 | 全部 | — | 表4-1 公平性 | — | `benchmark_algorithm_comparison.py` | 仅"实验设置一致"，非性能结论 |
-| 搜索效率更高 | 节点扩展数、运行时间、加速比 | 无信息 Dijkstra | synthetic 4 档 + 真实 2 窗口 | 图4-2 runtime-scale(log-log)、图4-3 runtime-cost、图4-4 runtime-risk | 表4-2 效率对比 | `summary-data.csv` | `--real-segment rolling_0_24h --repetitions 3` | 保持路径代价一致的条件下成立 |
-| 航线质量更好 | 平均风险、最大风险 | 静态场规划 | 真实 24h 2 窗口 | 图4-5 风险时序、图4-6 风险分布、图4-7 质量柱状 | 表4-3 质量对比 | `summary-data.csv` raw JSON | 同上 | n=2 真实窗口，development 上三目标同路线 |
+| 搜索效率更高 | 节点扩展数、运行时间、加速比 | 无信息 Dijkstra | synthetic 4 档 + 真实 104 算例 | 图4-2 runtime-scale(log-log)、图4-3 runtime-cost、图4-4 runtime-risk、图4-7 sweep 分布/胜负 | 表4-2 效率对比 | `summary-data.csv`、`summary-sweep.csv` | `--real-segment rolling_0_24h`、扩样本 sweep | 246/246 单元扩展减少（中位数 -84.24%）、代价一致 |
+| 航线质量更好 | 平均风险、最大风险 | 静态场规划 | 真实 104 算例 | 图4-5 风险时序、图4-6 风险分布、图4-7 质量柱状、图4-9 风险-航程 | 表4-3 质量对比 | `summary-data.csv` `summary-sweep.csv` raw JSON | 同上 | 平均风险稳健显著（176/63，p<0.0001）；**最大风险走廊相关**（holdout 中位数 0） |
 | 可扩展性 | 绝对扩展差值、加速比 | 无信息 Dijkstra | synthetic 4 档 | 图4-2 | — | 同上 | `--synthetic-profile {small,medium,large,stress}` | 百分比已饱和，用绝对差值 |
-| 风险感知必要性 | 风险/时间/航程权衡 | 风险无关基线 | 真实 24h 2 窗口 | （图4-5、4-6 内含） | 表4-4 消融 | raw JSON | `--algorithm risk_blind` | n=1 有效（development=0%） |
+| 风险感知必要性 | 风险/时间/航程权衡 | 风险无关基线 | 真实 104 算例 | （图4-5、4-6 内含）、图4-7/4-8 | 表4-4 消融 | raw JSON `summary-sweep.csv` | `--algorithm risk_blind` | 单算例 n=1（development=0%）；扩样本后约 239 单元，只作动机 |
 | 改进候选未超越 | 候选评估结果 | 改进候选 | SSOT §3 | 图4-8 漏斗 | 表4-5 候选评估矩阵 | SSOT 引用 | — | "未被超越"≠"性能最优" |
 | 真实数据违反 FIFO | interval 级负跳变计数 | FIFO 假设 | 真实 145 帧 | — | 表4-6 FIFO 反例 | SSOT 引用 | M24 分支 §P0.2-M1.12 | 改变了算法设计，非性能证据 |
 
@@ -197,11 +197,11 @@
 - 构建敏感性需 4-5 个参数笛卡尔积扫描，每组合保留 raw 数据，预算超出本轮。
 - 替代：在 §4.6 实验设计中声明"实验设置一致"。**第四章不画敏感性图**。
 
-### 6.4 development 24h 上 `risk_blind` 与 `recommended` 路线完全相同
+### 6.4 development 24h 上 `risk_blind` 与 `recommended` 路线重合
 
 - development 窗口 risk 权重不起决定性作用，**真实数据特征**，非缺失。
-- 图4-4/4-6 **明确标注 `dev / risk_blind ≡ recommended`**，避免读者误判 n=1 偏差。
-- 报告中已声明 n=1。
+- 规范算例图4-4/4-6 **明确标注 `dev / risk_blind ≡ recommended`**，避免读者误判 n=1 偏差。
+- 扩样本（2026-09-01，104 算例，主报告 §12）后，risk_blind 已加入全部算例并给出约 239 个可比较单元的动机证据分布；**不再只有 n=1**。单算例图仍保留 n=1 标注。
 
 ---
 

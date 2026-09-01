@@ -13,21 +13,83 @@ Run with::
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from docx import Document
+from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 from docx.shared import Cm, Pt
+from lxml import etree
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIGURES = (
     REPO_ROOT.parent / ".runtime" / "experiments" / "c-algorithm-comparison-summary" / "figures"
 )
-OUTPUT = REPO_ROOT / "docs" / "CHAPTER4.docx"
+REFERENCE_DOCX = Path("/mnt/c/Users/asd233/Downloads/第一章(1).docx")
+OUTPUT = REPO_ROOT / "docs" / "第四章.docx"
+
+
+def _normalise_labels(text: str) -> str:
+    """Match the compact numbering convention used by Chapter 1."""
+    text = re.sub(r"第\s+4\s+章", "第4章", text)
+    text = re.sub(r"([图表])\s+4-", r"\g<1>4-", text)
+    text = re.sub(r"式\s+\(4-", "式(4-", text)
+    return text
+
+
+def _set_font(style, east_asia: str, latin: str, size_pt: float, *, bold: bool = False) -> None:
+    style.font.name = latin
+    style.font.size = Pt(size_pt)
+    style.font.bold = bold
+    style.font.color.rgb = None
+    style._element.get_or_add_rPr().rFonts.set(qn("w:eastAsia"), east_asia)
+
+
+def _clear_body(doc: Document) -> None:
+    body = doc._element.body
+    for child in list(body):
+        if child.tag != qn("w:sectPr"):
+            body.remove(child)
+
+
+def _configure_document(doc: Document) -> None:
+    normal = doc.styles["Normal"]
+    _set_font(normal, "宋体", "Times New Roman", 10.5)
+    normal.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+    normal.paragraph_format.line_spacing = Pt(15.6)
+    normal.paragraph_format.space_before = Pt(0)
+    normal.paragraph_format.space_after = Pt(0)
+
+    heading_specs = {
+        "Heading 1": (14, WD_ALIGN_PARAGRAPH.CENTER, 0, 6),
+        "Heading 2": (12, WD_ALIGN_PARAGRAPH.LEFT, 6, 0),
+        "Heading 3": (10.5, WD_ALIGN_PARAGRAPH.LEFT, 6, 0),
+    }
+    for name, (size, alignment, before, after) in heading_specs.items():
+        style = doc.styles[name]
+        _set_font(style, "黑体", "Times New Roman", size, bold=True)
+        style.paragraph_format.alignment = alignment
+        style.paragraph_format.first_line_indent = Cm(0)
+        style.paragraph_format.space_before = Pt(before)
+        style.paragraph_format.space_after = Pt(after)
+        style.paragraph_format.keep_with_next = True
+        style.paragraph_format.keep_together = True
+
+    caption = doc.styles["Caption"]
+    _set_font(caption, "宋体", "Times New Roman", 10, bold=True)
+    caption.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    caption.paragraph_format.first_line_indent = Cm(0)
+    caption.paragraph_format.line_spacing = Pt(15)
+    caption.paragraph_format.space_before = Pt(3)
+    caption.paragraph_format.space_after = Pt(6)
+    caption.paragraph_format.keep_together = True
 
 
 def _add_heading(doc: Document, text: str, level: int) -> None:
-    doc.add_heading(text, level=level)
+    doc.add_heading(_normalise_labels(text), level=level + 1)
 
 
 def _add_para(doc: Document, text: str, *, indent: bool = False, align: str = "justify") -> None:
@@ -40,7 +102,9 @@ def _add_para(doc: Document, text: str, *, indent: bool = False, align: str = "j
         p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
     else:
         p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-    p.add_run(text)
+    p.paragraph_format.space_after = Pt(0)
+    p.paragraph_format.line_spacing = Pt(15.6)
+    p.add_run(_normalise_labels(text))
 
 
 def _add_figure(doc: Document, path: Path, caption: str, *, width_cm: float = 14.0) -> None:
@@ -50,15 +114,17 @@ def _add_figure(doc: Document, path: Path, caption: str, *, width_cm: float = 14
         doc.add_picture(str(path), width=Cm(width_cm))
         last = doc.paragraphs[-1]
         last.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    cap = doc.add_paragraph()
-    cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    cap.add_run(caption)
+        last.paragraph_format.space_before = Pt(3)
+        last.paragraph_format.space_after = Pt(0)
+        last.paragraph_format.keep_with_next = True
+    cap = doc.add_paragraph(style="Caption")
+    cap.add_run(_normalise_labels(caption))
 
 
 def _add_table_caption(doc: Document, caption: str) -> None:
-    p = doc.add_paragraph()
-    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    p.add_run(caption).bold = True
+    p = doc.add_paragraph(style="Caption")
+    p.paragraph_format.keep_with_next = True
+    p.add_run(_normalise_labels(caption))
 
 
 def _add_table(
@@ -67,35 +133,225 @@ def _add_table(
     rows: list[list[str]],
     *,
     col_widths_cm: list[float] | None = None,
+    font_size_pt: float = 8.5,
+    line_spacing_pt: float = 12,
 ) -> None:
     table = doc.add_table(rows=1 + len(rows), cols=len(header))
-    table.style = "Light Grid Accent 1"
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    table.autofit = True
+    borders = OxmlElement("w:tblBorders")
+    for edge in ("top", "left", "bottom", "right", "insideH", "insideV"):
+        border = OxmlElement(f"w:{edge}")
+        border.set(qn("w:val"), "single")
+        border.set(qn("w:sz"), "4")
+        border.set(qn("w:space"), "0")
+        border.set(qn("w:color"), "7F7F7F")
+        borders.append(border)
+    table._tbl.tblPr.append(borders)
     for i, h in enumerate(header):
         cell = table.rows[0].cells[i]
         cell.text = h
+        shading = OxmlElement("w:shd")
+        shading.set(qn("w:fill"), "DDEBF7")
+        cell._tc.get_or_add_tcPr().append(shading)
         for p in cell.paragraphs:
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
             for r in p.runs:
                 r.bold = True
     for ri, row in enumerate(rows, start=1):
         for ci, val in enumerate(row):
             table.rows[ri].cells[ci].text = str(val)
+    header_pr = table.rows[0]._tr.get_or_add_trPr()
+    repeat = OxmlElement("w:tblHeader")
+    repeat.set(qn("w:val"), "true")
+    header_pr.append(repeat)
+    for row in table.rows:
+        row_pr = row._tr.get_or_add_trPr()
+        cant_split = OxmlElement("w:cantSplit")
+        cant_split.set(qn("w:val"), "true")
+        row_pr.append(cant_split)
+        for cell in row.cells:
+            cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+            for p in cell.paragraphs:
+                p.paragraph_format.first_line_indent = Cm(0)
+                p.paragraph_format.space_before = Pt(0)
+                p.paragraph_format.space_after = Pt(0)
+                p.paragraph_format.line_spacing = Pt(line_spacing_pt)
+                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                for run in p.runs:
+                    run.font.name = "Times New Roman"
+                    run.font.size = Pt(font_size_pt)
+                    run._element.get_or_add_rPr().rFonts.set(qn("w:eastAsia"), "宋体")
     if col_widths_cm:
         for ci, w in enumerate(col_widths_cm):
             for row in table.rows:
                 row.cells[ci].width = Cm(w)
 
 
-def _add_formula(doc: Document, body: str, number: str) -> None:
-    p = doc.add_paragraph()
-    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    p.add_run(f"{body}    {number}")
+def _math_run(text: str) -> OxmlElement:
+    run = OxmlElement("m:r")
+    value = OxmlElement("m:t")
+    value.text = text
+    run.append(value)
+    return run
+
+
+def _math_subscript(base: str, subscript: str) -> OxmlElement:
+    item = OxmlElement("m:sSub")
+    base_node = OxmlElement("m:e")
+    base_node.append(_math_run(base))
+    sub_node = OxmlElement("m:sub")
+    sub_node.append(_math_run(subscript))
+    item.extend((base_node, sub_node))
+    return item
+
+
+def _math_superscript(base: str, superscript: str) -> OxmlElement:
+    item = OxmlElement("m:sSup")
+    base_node = OxmlElement("m:e")
+    base_node.append(_math_run(base))
+    sup_node = OxmlElement("m:sup")
+    sup_node.append(_math_run(superscript))
+    item.extend((base_node, sup_node))
+    return item
+
+
+def _math_fraction(numerator: list[OxmlElement], denominator: list[OxmlElement]) -> OxmlElement:
+    fraction = OxmlElement("m:f")
+    numerator_node = OxmlElement("m:num")
+    numerator_node.extend(numerator)
+    denominator_node = OxmlElement("m:den")
+    denominator_node.extend(denominator)
+    fraction.extend((numerator_node, denominator_node))
+    return fraction
+
+
+def _formula_elements(number: str) -> list[OxmlElement]:
+    """Return structured OMML for the four numbered equations in this chapter."""
+    if number == "(4-1)":
+        return [
+            _math_subscript("τ", "e"),
+            _math_run("(t) = "),
+            _math_fraction(
+                [_math_subscript("d", "e")],
+                [_math_subscript("v", "eff"), _math_run("(risk(t), env(t))")],
+            ),
+        ]
+    if number == "(4-2)":
+        parts: list[OxmlElement] = [_math_run("C(path) = ")]
+        for index, (weight, term) in enumerate(
+            (("d", "d"), ("t", "τ"), ("r", "risk"), ("v", "Δv"), ("u", "u"))
+        ):
+            if index:
+                parts.append(_math_run(" + "))
+            parts.extend((_math_subscript("w", weight), _math_run("·∑ ")))
+            if term == "d":
+                parts.append(_math_subscript("d", "e"))
+            elif term == "τ":
+                parts.extend((_math_subscript("τ", "e"), _math_run("(t)")))
+            elif term == "risk":
+                parts.append(_math_run("risk(t)"))
+            elif term == "Δv":
+                parts.extend((_math_subscript("Δv", "e"), _math_run("(t)")))
+            else:
+                parts.extend((_math_subscript("u", "e"), _math_run("(t)")))
+        return parts
+    if number == "(4-3)":
+        return [_math_run("R(x, y, "), _math_subscript("t", "arrive"), _math_run(")")]
+    if number == "(4-4)":
+        return [
+            _math_superscript("t", "*"),
+            _math_run(" = "),
+            _math_subscript("t", "depart"),
+            _math_run(" + "),
+            _math_subscript("τ", "e"),
+            _math_run("("),
+            _math_superscript("t", "*"),
+            _math_run(")"),
+        ]
+    raise ValueError(f"unsupported formula number: {number}")
+
+
+def _formula_fallback_text(number: str) -> str:
+    return {
+        "(4-1)": "τₑ(t) = dₑ / v_eff(risk(t), env(t))",
+        "(4-2)": (
+            "C(path) = w_d·∑dₑ + w_t·∑τₑ(t) + w_r·∑risk(t) + "
+            "w_v·∑Δvₑ(t) + w_u·∑uₑ(t)"
+        ),
+        "(4-3)": "R(x, y, t_arrive)",
+        "(4-4)": "t* = t_depart + τₑ(t*)",
+    }[number]
+
+
+def _add_formula(doc: Document, _body: str, number: str) -> None:
+    """Insert a native Word equation (OMML) with a right-aligned number."""
+    table = doc.add_table(rows=1, cols=3)
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    table.autofit = False
+    widths = (Cm(0.1), Cm(14.1), Cm(1.2))
+    for cell, width in zip(table.rows[0].cells, widths, strict=True):
+        cell.width = width
+        cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+        cell_width = cell._tc.get_or_add_tcPr().first_child_found_in("w:tcW")
+        if cell_width is not None:
+            cell_width.set(qn("w:w"), str(int(width.twips)))
+            cell_width.set(qn("w:type"), "dxa")
+    borders = OxmlElement("w:tblBorders")
+    for edge in ("top", "left", "bottom", "right", "insideH", "insideV"):
+        border = OxmlElement(f"w:{edge}")
+        border.set(qn("w:val"), "nil")
+        borders.append(border)
+    table._tbl.tblPr.append(borders)
+    row_properties = table.rows[0]._tr.get_or_add_trPr()
+    cant_split = OxmlElement("w:cantSplit")
+    cant_split.set(qn("w:val"), "true")
+    row_properties.append(cant_split)
+
+    equation_paragraph = table.rows[0].cells[1].paragraphs[0]
+    equation_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    equation_paragraph.paragraph_format.space_before = Pt(3)
+    equation_paragraph.paragraph_format.space_after = Pt(3)
+    compatibility_namespace = "http://schemas.openxmlformats.org/markup-compatibility/2006"
+    alternate = etree.Element(f"{{{compatibility_namespace}}}AlternateContent")
+    choice = etree.Element(f"{{{compatibility_namespace}}}Choice")
+    choice.set("Requires", "w16cex")
+    equation = OxmlElement("m:oMath")
+    equation.extend(_formula_elements(number))
+    choice.append(equation)
+    fallback = etree.Element(f"{{{compatibility_namespace}}}Fallback")
+    fallback_run = OxmlElement("w:r")
+    fallback_properties = OxmlElement("w:rPr")
+    fallback_fonts = OxmlElement("w:rFonts")
+    fallback_fonts.set(qn("w:ascii"), "Cambria Math")
+    fallback_fonts.set(qn("w:hAnsi"), "Cambria Math")
+    fallback_properties.append(fallback_fonts)
+    fallback_size = OxmlElement("w:sz")
+    fallback_size.set(qn("w:val"), "19")
+    fallback_properties.append(fallback_size)
+    fallback_run.append(fallback_properties)
+    fallback_text = OxmlElement("w:t")
+    fallback_text.text = _formula_fallback_text(number)
+    fallback_run.append(fallback_text)
+    fallback.append(fallback_run)
+    alternate.extend((choice, fallback))
+    equation_paragraph._p.append(alternate)
+
+    number_paragraph = table.rows[0].cells[2].paragraphs[0]
+    number_paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    number_paragraph.paragraph_format.space_before = Pt(3)
+    number_paragraph.paragraph_format.space_after = Pt(3)
+    number_run = number_paragraph.add_run(number)
+    number_run.font.name = "Times New Roman"
+    number_run.font.size = Pt(10.5)
 
 
 def build() -> None:
-    doc = Document()
-    style = doc.styles["Normal"]
-    style.font.name = "宋体"
-    style.font.size = Pt(11)
+    if not REFERENCE_DOCX.is_file():
+        raise FileNotFoundError(f"reference document not found: {REFERENCE_DOCX}")
+    doc = Document(str(REFERENCE_DOCX))
+    _clear_body(doc)
+    _configure_document(doc)
 
     _build_title(doc)
     _build_4_1(doc)
@@ -118,7 +374,7 @@ def build() -> None:
 # 章标题
 # ---------------------------------------------------------------------------
 def _build_title(doc: Document) -> None:
-    h = doc.add_heading("第 4 章 风险约束动态气象导航与边缘决策方法", level=0)
+    h = doc.add_heading("第4章 风险约束时变航路规划与动态重规划方法", level=1)
     h.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
 
@@ -141,7 +397,7 @@ def _build_4_1(doc: Document) -> None:
     _add_para(
         doc,
         "本章的核心链条为：环境影响航速 → 风险进入航路代价 → 生成不同航行策略"
-        " → 环境变化后主动改线 → 弱通信条件下快速传递关键决策。即系统并不是"
+        " → 环境变化后主动改线 → 输出多层多目标航路。即系统并不是"
         "在生成风险图后停止，而是将风险场进一步转化为航线规划可以理解的代价"
         "约束，使后续规划模块能够根据不同时间尺度和不同风险水平生成可执行航"
         "行方案。",
@@ -151,7 +407,7 @@ def _build_4_1(doc: Document) -> None:
         doc,
         "由此凝练出本章的科学问题：在时变预测风险约束下，如何构造同时考虑航"
         "程、航行时间、环境风险、航速损失与不确定性的综合航路代价模型，并在"
-        "弱通信条件下提供可执行的边缘决策摘要。该问题包含三个子问题：(1) 冰"
+        "环境变化时生成可执行的动态重规划结果。该问题包含三个子问题：(1) 冰"
         "—浪—风耦合作用下船舶有效航速的机理表达；(2) 时空耦合风险进入航路代"
         "价的建模方法；(3) 在保证解质量与搜索效率的同时，使规划结果可在真实"
         "北极海洋数据上复现且对未知数据 fail-closed。",
@@ -161,22 +417,22 @@ def _build_4_1(doc: Document) -> None:
     _add_heading(doc, "4.1.2 总体技术框架与数据流", level=2)
     _add_para(
         doc,
-        "本章建立的总体技术框架如图 4-1 所示，由七级主链路与三级反馈闭环构成"
-        "。主链路依次为：多源环境与状态输入、时空状态构建、风险预测模型、风"
-        "险代价场、风险约束航迹规划、在线重规划与控制接口、仿真/实测验证；"
-        "反馈闭环由“误差反馈—风险场更新—规划参数修正”构成，使规划结果在环境"
-        "变化时能够主动修正。",
+        "本章建立的总体技术框架如图 4-1 所示，由数据输入、边代价建模、航路规"
+        "划、验证与输出四个阶段构成"
+        "。时变风险场、船舶性能模型与航行任务共同构成规划输入，经时间展开状"
+        "态、风险—速度—ETA 耦合边代价与全局失效保护约束建模后，由时间依赖"
+        " A* 生成三目标、四层级航路集合；同图基线、消融验证与事件触发动态重"
+        "规划共同形成反馈闭环。",
         indent=True,
     )
-    _add_figure(doc, FIGURES / "fig-framework.png", "图 4-1 风险约束动态气象导航总体技术框架")
+    _add_figure(doc, FIGURES / "fig-framework.png", "图 4-1 风险约束时变航路规划技术框架")
 
     _add_para(
         doc,
         "该框架的关键特征在于：风险预测结果并非仅作为背景信息显示，而是进入"
         "航路代价函数（4.2 节）并驱动时空航路优化模型（4.3 节）；规划模块在"
         "时间展开状态图上搜索（4.4 节），并支持事件触发的动态重规划（4.5 节"
-        "）；在弱通信条件下，系统将完整风险场压缩为关键风险摘要，支持船端"
-        "在数据受限时仍能完成基本航行判断。",
+        "）；输出保持航路、ETA 与风险摘要的生产者语义，供下游模块验证和展示。",
         indent=True,
     )
 
@@ -293,8 +549,9 @@ def _build_4_3(doc: Document) -> None:
         "即需要找到一个 t*，使得船舶在 t* 出发的航行时间 τ_e(t*) 恰好使其到达"
         "时刻 t_depart + τ_e(t*) 等于 t*。本章采用固定两轮精化逼近该不动点："
         "第一轮以出发时刻的风险场估算 τ_e，第二轮以第一轮到达时刻的风险场修"
-        "正 τ_e。两轮精化在真实北极冬航 145 帧风险场上的实测表现稳定（详见"
-        "4.7 节效率对比），但本章亦发现其存在收敛性盲点（详见 4.9.2 节）。",
+        "正 τ_e。固定两轮精化是当前正式求值语义，但它并不构成一般收敛性证明；"
+        "本章在受控振荡场中发现不动点可能不存在，因此相关安全改进仅作为默认"
+        "关闭的研究方法讨论（详见 4.9.2 节）。",
         indent=True,
     )
 
@@ -333,21 +590,28 @@ def _build_4_4(doc: Document) -> None:
     _add_heading(doc, "4.4.1 时间展开状态图上的 A* 搜索", level=2)
     _add_para(
         doc,
-        "本章在时间展开状态图上采用 A* 算法搜索最优航路。状态图的节点为 (网"
-        "格位置, 离散到达时刻)，边代价由式 (4-2) 的综合航路代价给出。A* 使用"
-        " admissible 启发式估计从当前节点到目标节点的最小剩余代价，按 f = g + h "
-        "的优先级展开节点，其中 g 为已付出代价、h 为启发式估计。",
+        "本章以 A* 为确定性搜索骨架，但搜索对象不是静态几何网格，而是由空"
+        "间节点、离散到达时间桶和入射航向编码构成的时间展开状态 (node, "
+        "time_bucket, heading_code)。时间维度使同一空间节点在不同抵达时刻能保"
+        "留不同的风险和航速语义，航向维度则使转向代价能进入状态转移；因而该方"
+        "法不是将静态 A* 直接套用于风险底图。每条候选边都调用式(4-1)至式(4-4)"
+        "实现风险—速度—ETA 联合求值，再由式(4-2)累积对应目标的综合代价。A* "
+        "按 f=g+h 的优先级展开状态，其中 g 为已付出代价，h 为不高估剩余代价的"
+        "启发式下界。",
         indent=True,
     )
 
     _add_heading(doc, "4.4.2 admissible 启发式与最优性保证", level=2)
     _add_para(
         doc,
-        " admissible 启发式保证不高估真实剩余代价，从而使 A* 在 admissible 条"
-        "件下返回的解与无信息 Dijkstra 在同一状态图上的解代价严格一致。该性"
-        "质将在 4.7.1 节通过实验定量验证：本文 A* 与无信息 Dijkstra 在真实 "
-        "24 小时航段上的总代价 cost_identical=True，即启发式加速未牺牲最优性"
-        "。",
+        "启发式下界仅使用目标间的几何下界、物理可达的最大航速与非负代"
+        "价项，因而不高估真实剩余代价。这一设计将“加速”与“修改问题定"
+        "义”分离：A* 与无信息 Dijkstra 共享同一时间展开图、边评估器、风险拒"
+        "绝语义与终止条件，两者的差别只是节点展开顺序。4.7.1 节的真实 24 小时"
+        "实验中，两者总代价满足 cost_identical=True，同时本文 A* 的运行时间为"
+        " Dijkstra 的 1/2.31～1/7.84。因此，本章可以在“同一离散状态图”边界内"
+        "同时给出代价一致性与搜索效率证据，但不把这一结果外推为连续海洋模型的"
+        "全局最优性。",
         indent=True,
     )
 
@@ -363,12 +627,36 @@ def _build_4_4(doc: Document) -> None:
         indent=True,
     )
 
+    _add_heading(doc, "4.4.4 算法创新性与设计合理性", level=2)
+    _add_para(
+        doc,
+        "本章的方法贡献不在于重新命名 A* 搜索，而在于将北极航行问题中原本"
+        "分散的四类语义统一到一个可复现的时间依赖规划闭环中：一是以 (node, "
+        "time_bucket, heading_code) 显式表示“何时、以何航向抵达”；二是在单边"
+        "评估中闭合风险、环境降速与 ETA；三是将缺失覆盖、身份不匹配、hard_mask "
+        "与超界风险作为 fail-closed 硬拒绝，而不是当作零风险；四是在同一计算"
+        "语义下独立生成四个时效层与三类偏好的 12 条航路，使全局参考、滚动决策"
+        "与近期执行能够在一致风险尺度上对照。",
+        indent=True,
+    )
+    _add_para(
+        doc,
+        "上述创新性的核心是“对象建模 + 语义约束 + 可验证搜索”，而非仅用更多"
+        "参数换取局部速度。对所有加速候选，本章固定风险输入、船舶模型、网格、"
+        "目标函数和失败语义，并同时检查路线一致性、运行时间、P95、命中率、RSS "
+        "与真实输入前提。4.9.2 节进一步表明，即使候选在某个局部指标上获得"
+        "数十个百分点的改善，只要其正确性前提、单元回归或资源上界未通过，就不改"
+        "变当前默认。这种可证伪的候选筛选机制是本方法的合理性与工程竞争力来"
+        "源之一。",
+        indent=True,
+    )
+
 
 # ---------------------------------------------------------------------------
-# 4.5 事件触发动态重规划与弱通信边缘决策
+# 4.5 事件触发动态重规划与规划结果接口
 # ---------------------------------------------------------------------------
 def _build_4_5(doc: Document) -> None:
-    _add_heading(doc, "4.5 事件触发动态重规划与弱通信边缘决策", level=1)
+    _add_heading(doc, "4.5 事件触发动态重规划与规划结果接口", level=1)
 
     _add_heading(doc, "4.5.1 事件触发机制与触发阈值", level=2)
     _add_para(
@@ -392,25 +680,23 @@ def _build_4_5(doc: Document) -> None:
         indent=True,
     )
 
-    _add_heading(doc, "4.5.2 关键风险摘要与边缘信息压缩", level=2)
+    _add_heading(doc, "4.5.2 多层航路结果与关键风险摘要", level=2)
     _add_para(
         doc,
-        "弱通信条件下，船端最需要的不是全部原始数据，而是经过筛选与解释后的"
-        "风险摘要。该摘要至少应包括五类内容：当前航线前方的主要高风险区域、"
-        "风险升高的主要原因、不可通行区域、推荐规避方向以及风险预测的可信程"
-        "度。具体而言，系统将完整风险场压缩为风险等级信息、主要风险来源信息"
-        "、硬约束信息、时间有效性信息与建议动作信息。这样，即使通信带宽有限"
-        "，船端仍能获得足以支持安全判断的核心内容。",
+        "规划结果按全航程、主走廊、滚动窗口与可执行段四个层级组织，并在每个"
+        "层级给出最快、低风险与均衡推荐三类目标。除航路几何外，结果还保留到"
+        "达时间、航段风险、约束状态与重规划标志，形成 12 条航路及其关键风险"
+        "摘要。该组织方式既支持长期航路选择，也支持滚动窗口内的局部调整。",
         indent=True,
     )
 
-    _add_heading(doc, "4.5.3 弱通信条件下的导航决策接口", level=2)
+    _add_heading(doc, "4.5.3 航路规划结果的下游接口", level=2)
     _add_para(
         doc,
-        "在工程实现上，本章将弱通信条件下的输出定位为“关键风险摘要 + 标准化风"
-        "险网格”的组合形式。完整风险网格服务于云端或岸端规划计算，关键风险摘"
-        "要服务于船端快速理解与应急响应。这种设计既保留了模型计算所需的数据"
-        "完整性，也增强了系统在北极弱通信环境下的实际可用性。",
+        "本章输出由多层多目标航路、到达时间、航段风险与规划状态构成，并以标"
+        "准化结果接口供后续展示与导航决策模块使用。风险场属于上游规划输入，"
+        "航路可视化与弱通信呈现属于下游消费过程；二者均不在本章内重新计算。"
+        "这种边界既保持了规划结果的可追溯性，也避免下游展示改变航路与风险语义。",
         indent=True,
     )
 
@@ -449,7 +735,7 @@ def _build_4_6(doc: Document) -> None:
     _add_table_caption(doc, "表 4-1 算法公平性与实验统一设置")
     _add_table(
         doc,
-        ["项目", "Proposed A*", "Dijkstra", "Static-field", "Risk-blind"],
+        ["项目", "本文 A*", "Dijkstra", "静态场", "风险无关"],
         [
             ["起终点", "一致", "一致", "一致", "一致"],
             ["网格", "一致", "一致", "一致", "一致"],
@@ -458,19 +744,19 @@ def _build_4_6(doc: Document) -> None:
             ["时间离散桶", "一致", "一致", "一致", "一致"],
             ["硬约束(fail-closed)", "是", "是", "是", "是"],
             ["风险信息", "全程使用", "同图无信息", "仅出发时刻帧", "权重置零"],
-            ["时变信息", "时间展开图", "同图", "冻结为静态", "risk项取消"],
-            ["启发式", "admissible", "无(use_heuristic=False)", "admissible", "admissible"],
-            ["目标函数", "三目标一致", "一致", "一致", "risk+uncertainty置零"],
+            ["时变信息", "时间展开图", "同图", "冻结为静态", "风险项取消"],
+            ["启发式", "可采纳", "关闭", "可采纳", "可采纳"],
+            ["目标函数", "三目标一致", "一致", "一致", "风险与不确定性权重置零"],
             ["硬件", "统一", "统一", "统一", "统一"],
             ["数据集", "同源", "同源", "同源", "同源"],
-            ["终止条件", "max_expansions=250000", "同", "同", "同"],
+            ["终止条件", "最大扩展数250000", "同", "同", "同"],
         ],
     )
     _add_para(
         doc,
-        "由表 4-1 可知，四种算法仅在搜索策略或目标函数上不同，其余输入、约束"
-        "与硬件环境完全一致。因此，任何观测到的性能差异均可归因于算法本身，"
-        "而非模型或约束的强弱。其中，Risk-blind 是目标函数消融（仅将 risk 与 "
+        "由表 4-1 可知，四种算法仅改变预先定义的单一对比因素，其余输入、约束"
+        "与硬件环境保持一致。因此，各组差异可归因于对应的搜索策略、时变信息"
+        "或风险项，而非无关实验条件。其中，Risk-blind 是目标函数消融（仅将 risk 与 "
         "uncertainty 权重置零，其余权重保持不变），其搜索效率指标（扩展数、"
         "加速比）不作为优势对比，仅比较风险/时间/航程权衡。",
         indent=True,
@@ -494,18 +780,18 @@ def _build_4_7(doc: Document) -> None:
         doc,
         ["算例", "目标", "扩展数(本文)", "扩展数(Dijkstra)", "扩展减少", "加速比", "代价相同"],
         [
-            ["holdout", "fastest", "653", "4864", "-86.6%", "7.15×", "✓"],
-            ["holdout", "low_risk", "1828", "4904", "-62.7%", "2.67×", "✓"],
-            ["holdout", "recommended", "954", "4845", "-80.3%", "5.18×", "✓"],
-            ["development", "fastest", "567", "4185", "-86.5%", "7.65×", "✓"],
-            ["development", "low_risk", "1864", "4211", "-55.7%", "2.16×", "✓"],
-            ["development", "recommended", "945", "4173", "-77.4%", "4.37×", "✓"],
+            ["holdout", "最快", "653", "4864", "-86.6%", "7.84×", "✓"],
+            ["holdout", "低风险", "1828", "4904", "-62.7%", "2.77×", "✓"],
+            ["holdout", "推荐", "954", "4845", "-80.3%", "5.17×", "✓"],
+            ["development", "最快", "567", "4185", "-86.5%", "7.36×", "✓"],
+            ["development", "低风险", "1864", "4211", "-55.7%", "2.31×", "✓"],
+            ["development", "推荐", "945", "4173", "-77.4%", "4.65×", "✓"],
         ],
     )
     _add_para(
         doc,
         "由表 4-2 可知，在真实 145 帧风险预报序列上，本文 A* 的节点扩展数较无"
-        "信息 Dijkstra 减少 55.7%～86.6%，加速 2.16×～7.65×。更关键的是，全"
+        "信息 Dijkstra 减少 55.7%～86.6%，加速 2.31×～7.84×。更关键的是，全"
         "部 6 个对比单元的总代价严格一致（cost_identical=True），这表明启发"
         "式搜索在保持解质量的前提下有效压缩了搜索空间。其原因在于 admissible "
         "启发式保证不高估真实剩余代价，使 A* 与 Dijkstra 在同一时间展开状态图"
@@ -525,9 +811,9 @@ def _build_4_7(doc: Document) -> None:
         doc,
         ["算例", "目标", "最大风险(本文)", "最大风险(静态)", "降幅", "平均风险降幅"],
         [
-            ["holdout", "fastest", "0.09007", "0.12832", "-29.8%", "-15.7%"],
-            ["holdout", "low_risk", "0.07802", "0.09213", "-15.3%", "-15.9%"],
-            ["holdout", "recommended", "0.07802", "0.09213", "-15.3%", "-16.5%"],
+            ["holdout", "最快", "0.09007", "0.12832", "-29.8%", "-15.7%"],
+            ["holdout", "低风险", "0.07802", "0.09213", "-15.3%", "-15.9%"],
+            ["holdout", "推荐", "0.07802", "0.09213", "-15.3%", "-16.5%"],
             ["development", "三目标", "0.18733", "0.24421", "-23.3%", "-10.7%"],
         ],
     )
@@ -567,15 +853,15 @@ def _build_4_7(doc: Document) -> None:
         "为进一步验证“效率提升不以牺牲解质量为代价”，绘制运行时间与总代价、最大风险的二维散点图，分别如图 4-3 与图 4-4 所示。",  # noqa: E501
         indent=True,
     )
-    _add_figure(doc, FIGURES / "fig-runtime-cost.png", "图 4-3 运行时间 vs 总代价（真实 24h）")
-    _add_figure(doc, FIGURES / "fig-runtime-risk.png", "图 4-4 运行时间 vs 最大风险（真实 24h）")
+    _add_figure(doc, FIGURES / "fig-runtime-cost.png", "图 4-3 运行时间—总代价关系（真实 24h）")
+    _add_figure(doc, FIGURES / "fig-runtime-risk.png", "图 4-4 运行时间—最大风险关系（真实 24h）")
     _add_para(
         doc,
         "由图 4-3 可知，本文 A*（蓝色）与 Dijkstra（橙色）在总代价轴上几乎重"
         "合，但在运行时间轴上横向拉开约一个数量级，证明启发式加速未牺牲解代"
-        "价。由图 4-4 可知，本文 A* 在两窗口 6 单元中最大风险均低于 Dijkstra "
-        "（Dijkstra 与本文 A* 共享同一目标函数，故风险相同；图中差异主要反映"
-        " Risk-blind 与 Static-field 的风险上移）。需说明的是，development 窗"
+        "价。由图 4-4 可知，本文 A* 与 Dijkstra 共享同一目标函数并得到相同总代"
+        "价，其风险点相互重合；图中风险差异主要用于比较 Static-field 与 Risk-"
+        "blind 的风险变化，而不是声称 A* 相对 Dijkstra 降低风险。需说明的是，development 窗"
         "口上 Risk-blind 与 recommended 路线完全相同（n=1 有效样本，详见 4.9.1 "
         "节），该结果仅用于现象说明，不构成统计意义上的性能结论。",
         indent=True,
@@ -597,7 +883,7 @@ def _build_4_8(doc: Document) -> None:
     _add_figure(
         doc,
         FIGURES / "fig-risk-timeseries.png",
-        "图 4-5 真实 24h 航段逐段风险时间序列（recommended 目标）",
+        "图 4-5 真实 24h 航段逐段风险序列（推荐目标）",
     )
     _add_para(
         doc,
@@ -619,7 +905,7 @@ def _build_4_8(doc: Document) -> None:
     _add_figure(
         doc,
         FIGURES / "fig-risk-distribution.png",
-        "图 4-6 真实 24h 航段风险分布箱线图（recommended 目标）",
+        "图 4-6 真实 24h 航段风险分布箱线图（推荐目标）",
     )
     _add_para(
         doc,
@@ -643,30 +929,42 @@ def _build_4_9(doc: Document) -> None:
         "为回答“本文性能提升到底是哪一部分带来的”，进行模块消融研究，结果如表 4-4 所示。",
         indent=True,
     )
-    _add_table_caption(doc, "表 4-4 模块消融研究（真实 24h，recommended 目标）")
+    _add_table_caption(doc, "表 4-4 模块消融研究（真实 24h 匹配对照）")
     _add_table(
         doc,
-        ["Variant", "描述", "Runtime", "Expanded", "Cost", "Mean Risk", "Max Risk"],
+        ["消融档", "描述", "运行时间", "扩展数", "代价/质量", "样本"],
         [
-            ["Full", "完整模型", "2147.5 ms", "653", "基准", "0.07552", "0.09007"],
             [
-                "No risk",
-                "risk+uncertainty置零",
-                "≈Full",
-                "≈Full",
-                "dev: 0%差异; hold: +10.4%/+15.4%",
-                "高",
-                "高",
+                "完整模型",
+                "完整模型",
+                "2012.3 ms(dev) / 2147.5 ms(hold)",
+                "567 / 653",
+                "匹配对照基准",
+                "n=2窗口",
             ],
-            ["No heuristic", "Dijkstra", "16839.5 ms", "4864", "严格一致", "0.07552", "0.09007"],
             [
-                "No temporal",
+                "去风险项",
+                "风险与不确定性权重置零",
+                "与Full接近",
+                "同图",
+                "dev: 0%; hold: 风险+10.4%/+15.4%",
+                "n=1有效",
+            ],
+            [
+                "去启发式",
+                "Dijkstra",
+                "14818.9 ms(dev) / 16839.5 ms(hold)",
+                "4185 / 4864",
+                "代价严格一致",
+                "n=2窗口",
+            ],
+            [
+                "去时变信息",
                 "静态场",
                 "≈Full",
                 "≈Full",
-                "航程同397.4km; 风险+15.3%/+29.8%",
-                "高",
-                "高",
+                "hold: 航程同397.4 km; 风险+15.3%/+29.8%",
+                "n=2窗口",
             ],
         ],
     )
@@ -703,24 +1001,83 @@ def _build_4_9(doc: Document) -> None:
         indent=True,
     )
     _add_figure(doc, FIGURES / "fig-funnel.png", "图 4-7 改进候选门禁漏斗：当前实现未被超越")
+    _add_table_caption(doc, "表 4-5 改进候选的正向观测、失败门禁与当前结论")
+    _add_table(
+        doc,
+        ["候选方案", "已观测的正向证据", "未通过的门禁与实证数据", "当前结论"],
+        [
+            [
+                "P0.1 FIFO 支配剪枝",
+                "synthetic small/medium 各60个证书化剪枝；compute_ms改善58.22%/76.52%",
+                "两套145帧真实输入发现43500/40776个interval级FIFO违反，前提性门禁失败",
+                "真实FIFO支配禁用（REAL_INPUT_FIFO_VIOLATED）",
+            ],
+            [
+                "P0.2 non-FIFO exact-arrival/Pareto",
+                "synthetic 90/90通过；18个partial cases、12次transition预剪枝；"
+                "真实24h两窗6/6语义/frontier等价",
+                "development/holdout真实transition检查271120/499536次，新增预剪枝均0；cgroup强资源上界证据不完整",
+                "完成至M34并冻结；不构成默认启用资格",
+            ],
+            [
+                "LTCR-TDA* / P2.1轨迹复用",
+                "Winter正式4次重复观测总耗时中位改善47.86%，路线完整性48/48",
+                "rolling_0_24h×fastest单元回归5.94%>5%冻结上限；后续短复测样本不足，不能改写原门禁",
+                "测量不确定；正式M2失败不变",
+            ],
+            [
+                "SMO-A* 共享记忆化",
+                "synthetic small/medium改善55.02%/46.27%；真实路线一致性与P95通过",
+                "holdout改善11.22%<15%、命中率14.27%<50%、RSS比3.367>1.10；development命中率19.19%、RSS比3.380",
+                "DEFERRED/RETIRED；不进入正式M2",
+            ],
+            [
+                "ARA* anytime备选",
+                "medium三目标首解改善44.57%/82.19%/63.16%，gap=0%",
+                "small的fastest/recommended首解仅改善4.14%/4.19%<每目标20%，low_risk虽为40.42%仍触发全目标门禁",
+                "M0_FAIL/DEFERRED；不进入Winter",
+            ],
+            [
+                "bounded LRU风险采样缓存",
+                "direct medium 76.281s→65.012s，中位改善14.77%",
+                "RSS增劦约38.6MiB，且未覆盖正式ingress、四层三目标的12航路门禁",
+                "EXPERIMENTAL；默认关闭",
+            ],
+        ],
+        col_widths_cm=[2.4, 4.0, 5.4, 2.5],
+        font_size_pt=7.5,
+        line_spacing_pt=10.5,
+    )
     _add_para(
         doc,
-        "由图 4-7 可知，6 个候选进入评估，4 个在真实输入或正式门禁上 FAIL，2 "
-        "个无剪枝增益或撤回，最终 0 个被启用。这一事实不能推出“当前实现性能"
-        "最优”——本章明确声明相对传统算法的生产级稳定性能优势尚未证明，但可"
-        "以给出一条更站得住的结论：当前实现是“正确性优先”框架下未被超越的实"
-        "现，且每个候选的失败方式都反过来印证了当前设计选择是对的。例如，"
-        "FIFO 支配剪枝失败是因为真实数据违反 FIFO 性质（4.9.3 节），证明当前"
-        "不做支配剪枝是正确的保守；non-FIFO Pareto 在真实 24h 上语义/frontier "
-        "等价但无新增剪枝，证明当前搜索结果与完整 Pareto frontier 语义一致，"
-        "没有丢任何解。",
+        "图4-7与表4-5共同给出的不是简单的“失败清单”，而是一组同源、可证"
+        "伪的对抗性消融实验。6个候选分别攻击当前方法的标签数量、重复搜索、风险"
+        "采样、首解速度和非FIFO语义处理等瓶颈；其中多个候选曾在synthetic或局部工程"
+        "指标上获得40%～80%量级的改善，但仍因真实输入前提、单元回归、跨规模"
+        "一致性、缓存命中率或资源上界失败而被拒绝。这说明候选未被启用并非因为"
+        "没有尝试改进，而是因为本章要求“快”必须与“语义不变、最差单元不退化、"
+        "资源可控”同时成立。",
         indent=True,
     )
     _add_para(
         doc,
-        "需特别说明：该漏斗图与反向论证仅用于说明“正确性保守与候选策略筛选"
-        "”，不得作为算法性能最优的证据。当前实现是未被超越的正确性保守实现"
-        "，而非性能最优实现。",
+        "从反向论证看，P0.1证明真实海洋输入不允许直接套用教科书式FIFO支配；"
+        "P0.2在有限真实24h状态域内得到与完整Pareto frontier一致的业务语义，但"
+        "没有带来新的transition剪枝，说明当前基线在已验证有限域内没有被该更完整"
+        "标签语义改写；P2.1则证明即使总体加速接近48%，也必须因单个业务单元"
+        "5.94%回归而停止；SMO-A*与bounded LRU共同说明缓存收益必须与记忆体上界"
+        "一起评价；ARA*则说明中等规模的显著改善不能掩盖小规模上两个目标未达"
+        "门禁。因此，当前时间依赖A*的竞争力更准确地体现为：在同一风险—速度"
+        "—ETA状态图上，它是目前唯一同时保持语义完整、失败关闭、资源可预期与"
+        "12航路输出一致性的默认实现。",
+        indent=True,
+    )
+    _add_para(
+        doc,
+        "需特别说明：该漏斗图与表4-5仅支持“当前默认未被通过全部冻结门禁的"
+        "候选超越”，不支持“已证明为所有传统算法中的性能最优解”。表4-5中的正向"
+        "数据是研究贡献和候选设计有效性的证据，失败门禁则是不将局部收益误报为"
+        "已实现算法优势的证据。",
         indent=True,
     )
 
@@ -729,11 +1086,11 @@ def _build_4_9(doc: Document) -> None:
         doc,
         "教科书时依赖最短路算法（time-dependent A* / Dijkstra）的时间支配剪"
         "枝成立的前提是 FIFO 性质：出发越晚，到达不更早。本章用分区证据扫描"
-        "真实北极冬航 145 帧输入，发现该前提在真实海洋数据上不成立，如表 4-5 "
+        "真实北极冬航 145 帧输入，发现该前提在真实海洋数据上不成立，如表 4-6 "
         "所示。",
         indent=True,
     )
-    _add_table_caption(doc, "表 4-5 真实海洋数据违反 FIFO 的实证发现")
+    _add_table_caption(doc, "表 4-6 真实海洋数据违反 FIFO 的实证发现")
     _add_table(
         doc,
         ["输入", "有向边×目标", "interval评估", "FIFO违反", "certified probes", "首个反例"],
@@ -758,12 +1115,12 @@ def _build_4_9(doc: Document) -> None:
     )
     _add_para(
         doc,
-        "由表 4-5 可知，跨两独立窗口、每目标约 1.4 万个 interval 级 FIFO 违反"
+        "由表 4-6 可知，跨两独立窗口、每目标约 1.4 万个 interval 级 FIFO 违反"
         "。即“同一时刻出发的左 image 到达时间”比“晚 2 小时出发的右 image”更"
         "晚——出发晚反而到得早。这一发现使教科书时依赖最短路的支配剪枝在真实"
         "数据上不安全，也是本章采取“先证明、后启用”保守工程纪律的直接原因："
-        "任何想剪枝的候选都必须在真实数据上先证明其前提，而真实数据拒绝了所"
-        "有前提。需说明的是，这是科学发现，不是已解决的问题；正式控制仍采用"
+        "任何想使用FIFO支配剪枝的候选都必须在真实数据上先证明其前提，而当前真"
+        "实输入已拒绝该前提。需说明的是，这是科学发现，不是已解决的问题；正式控制仍采用"
         "固定两轮 ETA 精化（详见 4.3.2 节）。",
         indent=True,
     )
@@ -796,11 +1153,11 @@ def _build_4_10(doc: Document) -> None:
         "本章针对北极航道动态气象导航的科学问题，建立了风险-速度-ETA 三方耦"
         "合不动点边代价模型与预测风险约束的时空航路优化模型，采用时间依赖 A* "
         "算法在时间展开状态图上搜索多模式气象航路，并支持事件触发的动态重规"
-        "划与弱通信边缘决策。实验结果表明：在真实北极冬航 145 帧风险预报序列"
+        "划及标准化结果输出。实验结果表明：在真实北极冬航 145 帧风险预报序列"
         "上，相比静态场规划，本文方法的最大航段风险降低 15.3%～29.8%、平均航"
         "段风险降低 10.7%～16.5%，且在 fastest 目标下航程与基线完全相同（397.4 "
         "km）而风险显著更低，说明优势来自对通行时机的选择而非绕行；相比无信息 "
-        "Dijkstra，节点扩展数减少 55.7%～86.6%、加速 2.16×～7.65×，且总代价"
+        "Dijkstra，节点扩展数减少 55.7%～86.6%、加速 2.31×～7.84×，且总代价"
         "严格相同，证明启发式加速未牺牲最优性；在合成规模曲线上，加速比随网格"
         "规模单调增大（5.67×→17.58×）。本章还发现真实北极海洋数据违反 FIFO "
         "性质（两窗口 43 500 / 40 776 次 interval 级违反），使教科书时依赖最"
