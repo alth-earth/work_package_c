@@ -31,6 +31,9 @@ from .route_motion_serialization import (
     canonical_sha256 as canonical_route_motion_sha256,
 )
 from .route_motion_serialization import (
+    route_motion_candidate_set_from_dict,
+    route_motion_candidate_set_semantic_digest,
+    route_motion_candidate_set_to_dict,
     route_motion_set_from_dict,
     route_motion_set_semantic_digest,
     route_motion_set_to_dict,
@@ -73,6 +76,9 @@ __all__ = [
     "four_layer_route_plan_set_semantic_digest",
     "four_layer_route_plan_set_to_dict",
     "four_layer_route_plan_set_to_geojson",
+    "route_motion_candidate_set_from_dict",
+    "route_motion_candidate_set_semantic_digest",
+    "route_motion_candidate_set_to_dict",
     "route_motion_set_from_dict",
     "route_motion_set_semantic_digest",
     "route_motion_set_to_dict",

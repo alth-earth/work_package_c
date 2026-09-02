@@ -27,6 +27,7 @@ from arctic_route_planning.layered import (
 )
 from arctic_route_planning.motion import (
     EngineeringRouteMotionProfile,
+    build_route_motion_candidate_set,
     build_route_motion_set,
 )
 from arctic_route_planning.planners import PlanningResult, RouteStep, SearchMetrics
@@ -39,6 +40,8 @@ from arctic_route_planning.publishing import (
     four_layer_route_plan_set_from_geojson,
     four_layer_route_plan_set_to_dict,
     four_layer_route_plan_set_to_geojson,
+    route_motion_candidate_set_from_dict,
+    route_motion_candidate_set_to_dict,
     route_motion_set_from_dict,
     route_motion_set_to_dict,
     route_plan_v3_from_dict,
@@ -270,6 +273,34 @@ def test_route_motion_set_is_a_four_recommended_sibling_contract() -> None:
     tampered["records"][0]["motion_samples"][0]["lon"] += 0.01
     with pytest.raises(ValueError, match=r"digest|motion_set_id"):
         route_motion_set_from_dict(tampered)
+
+
+def test_route_motion_candidate_set_keeps_three_full_voyage_objectives() -> None:
+    _configuration, _planner, _store, service, request = _case()
+    outcome = service.execute(request)
+
+    candidate_set = build_route_motion_candidate_set(
+        outcome.plan_set,
+        risk_window_id="risk-window-fixture",
+        risk_window_digest="2" * 64,
+        vessel_profile_digest="3" * 64,
+        producer_digest="4" * 64,
+        generated_at=request.start_time,
+    )
+    document = route_motion_candidate_set_to_dict(candidate_set)
+
+    assert route_motion_candidate_set_from_dict(document) == candidate_set
+    assert [item["objective_mode"] for item in document["records"]] == [
+        objective.value for objective in ObjectiveMode
+    ]
+    assert all(
+        item["record"]["planning_layer"] == PlanLayer.FULL_VOYAGE.value
+        for item in document["records"]
+    )
+    assert all(item["record"]["mode"] == "RAW_PASSTHROUGH" for item in document["records"])
+    assert _validate_schema(
+        "route-motion-candidate-set-v1.schema.json", document
+    ) is None
 
 
 def test_route_motion_set_qualifies_curves_and_keeps_short_layer_raw() -> None:
@@ -629,9 +660,10 @@ def _validate_schema(name: str, document: dict[str, object]) -> None:
         "route-plan-v3.schema.json",
         "route-plan-v3.geojson.schema.json",
         "four-layer-route-plan-set-v3.schema.json",
-        "four-layer-route-plan-set-v3.geojson.schema.json",
-        "route-motion-set-v1.schema.json",
-    )
+            "four-layer-route-plan-set-v3.geojson.schema.json",
+            "route-motion-set-v1.schema.json",
+            "route-motion-candidate-set-v1.schema.json",
+        )
     resources = []
     schemas = {}
     for filename in names:

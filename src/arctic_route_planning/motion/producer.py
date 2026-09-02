@@ -9,20 +9,29 @@ from datetime import UTC, datetime
 from itertools import pairwise
 from typing import Any
 
-from arctic_route_planning.contracts.layered import FourLayerRoutePlanSet, RoutePlanV3
+from arctic_route_planning.contracts.layered import (
+    FourLayerRoutePlanSet,
+    PlanLayer,
+    RoutePlanV3,
+)
 from arctic_route_planning.contracts.route_motion import (
     CONTINUOUS_RASTER_MODEL_SCOPE,
+    ROUTE_MOTION_CANDIDATE_SET_SCHEMA_VERSION,
     ROUTE_MOTION_INTERPOLATION,
     ROUTE_MOTION_SET_SCHEMA_VERSION,
     MotionSample,
+    RouteMotionCandidateRecord,
+    RouteMotionCandidateSet,
     RouteMotionMode,
     RouteMotionQualification,
     RouteMotionRecord,
     RouteMotionSet,
     WaypointMotionAnchor,
 )
+from arctic_route_planning.domain.models import ObjectiveMode
 from arctic_route_planning.publishing.route_motion_serialization import (
     canonical_sha256,
+    route_motion_candidate_set_semantic_digest,
     route_motion_set_semantic_digest,
 )
 from arctic_route_planning.risk.sampler import RiskSampler, SampledRisk
@@ -118,6 +127,91 @@ def build_route_motion_set(
         provisional,
         motion_set_id="route-motion-set-sha256-"
         + route_motion_set_semantic_digest(provisional),
+    )
+
+
+def build_route_motion_candidate_set(
+    plan_set: FourLayerRoutePlanSet,
+    *,
+    risk_window_id: str,
+    risk_window_digest: str,
+    vessel_profile_digest: str,
+    producer_digest: str,
+    profile: EngineeringRouteMotionProfile | None = None,
+    risk_sampler: RiskSampler | None = None,
+    corridor_validator: CorridorValidator | None = None,
+    position_error_m: float = 0.0,
+    transform_error_m: float = 0.0,
+    chord_error_m: float = 0.0,
+    generated_at: datetime | None = None,
+    policy: RouteSmoothingPolicy | None = None,
+) -> RouteMotionCandidateSet:
+    """Build C motion for the three complete-voyage objective candidates.
+
+    The existing :func:`build_route_motion_set` deliberately remains a
+    four-layer recommended-only contract.  This additive artifact is used by
+    the Viewer only when a user explicitly chooses a full-voyage objective
+    before playback.  Every record is produced by the same B-spline gates and
+    raw fallback path as the formal sibling contract.
+    """
+
+    chosen = profile or EngineeringRouteMotionProfile()
+    if plan_set.vessel_profile_id != chosen.vessel_profile_id:
+        raise ValueError("motion profile does not match plan-set vessel_profile_id")
+    _digest(risk_window_digest, "risk_window_digest")
+    _digest(vessel_profile_digest, "vessel_profile_digest")
+    _digest(producer_digest, "producer_digest")
+    if risk_sampler is not None:
+        _validate_sampler_identity(plan_set, risk_sampler)
+    chosen_policy = policy or FORMAL_ROUTE_SMOOTHING_POLICY
+    full = plan_set.bundle_for(PlanLayer.FULL_VOYAGE)
+    records = tuple(
+        RouteMotionCandidateRecord(
+            objective_mode=objective,
+            record=_build_record(
+                full.plans[objective],
+                profile=chosen,
+                risk_sampler=risk_sampler,
+                corridor_validator=corridor_validator,
+                corridor_buffer_m=chosen.corridor_buffer_m(
+                    position_error_m=position_error_m,
+                    transform_error_m=transform_error_m,
+                    chord_error_m=chord_error_m,
+                ),
+                policy=chosen_policy,
+            ),
+        )
+        for objective in ObjectiveMode
+    )
+    provisional = RouteMotionCandidateSet(
+        schema_version=ROUTE_MOTION_CANDIDATE_SET_SCHEMA_VERSION,
+        motion_candidate_set_id="route-motion-candidate-set-sha256-" + "0" * 64,
+        layer_set_id=plan_set.layer_set_id,
+        run_id=plan_set.run_id,
+        scenario_id=plan_set.scenario_id,
+        corridor_id=plan_set.corridor_id,
+        generation_id=plan_set.generation_id,
+        input_revision=plan_set.input_revision,
+        risk_window_id=risk_window_id,
+        risk_window_digest=risk_window_digest,
+        vessel_profile_id=plan_set.vessel_profile_id,
+        vessel_profile_version=chosen.vessel_profile_version,
+        vessel_profile_digest=vessel_profile_digest,
+        motion_profile_id=chosen.profile_id,
+        motion_profile_digest=chosen.digest,
+        config_digest=plan_set.config_digest,
+        model_config_digest=plan_set.model_config_digest,
+        planner_config_digest=plan_set.planner_config_digest,
+        producer_digest=producer_digest,
+        generated_at=(generated_at or plan_set.generated_at),
+        records=records,
+    )
+    return replace(
+        provisional,
+        motion_candidate_set_id=(
+            "route-motion-candidate-set-sha256-"
+            + route_motion_candidate_set_semantic_digest(provisional)
+        ),
     )
 
 

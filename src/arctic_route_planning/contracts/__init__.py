@@ -28,10 +28,13 @@ from arctic_route_planning.contracts.models import (
 )
 from arctic_route_planning.contracts.route_motion import (
     CONTINUOUS_RASTER_MODEL_SCOPE,
+    ROUTE_MOTION_CANDIDATE_SET_SCHEMA_VERSION,
     ROUTE_MOTION_INTERPOLATION,
     ROUTE_MOTION_PROFILE_SCHEMA_VERSION,
     ROUTE_MOTION_SET_SCHEMA_VERSION,
     MotionSample,
+    RouteMotionCandidateRecord,
+    RouteMotionCandidateSet,
     RouteMotionMode,
     RouteMotionQualification,
     RouteMotionRecord,
@@ -53,6 +56,7 @@ from arctic_route_planning.contracts.windows import (
 __all__ = [
     "CONTINUOUS_RASTER_MODEL_SCOPE",
     "HOURLY_RISK_INTERVAL",
+    "ROUTE_MOTION_CANDIDATE_SET_SCHEMA_VERSION",
     "ROUTE_MOTION_INTERPOLATION",
     "ROUTE_MOTION_PROFILE_SCHEMA_VERSION",
     "ROUTE_MOTION_SET_SCHEMA_VERSION",
@@ -71,6 +75,8 @@ __all__ = [
     "RiskSource",
     "RiskWindowQuery",
     "RouteMetrics",
+    "RouteMotionCandidateRecord",
+    "RouteMotionCandidateSet",
     "RouteMotionMode",
     "RouteMotionQualification",
     "RouteMotionRecord",

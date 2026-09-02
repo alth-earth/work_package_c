@@ -10,14 +10,18 @@ from typing import Any
 
 from arctic_route_planning.contracts.layered import PlanLayer
 from arctic_route_planning.contracts.route_motion import (
+    ROUTE_MOTION_CANDIDATE_SET_SCHEMA_VERSION,
     ROUTE_MOTION_SET_SCHEMA_VERSION,
     MotionSample,
+    RouteMotionCandidateRecord,
+    RouteMotionCandidateSet,
     RouteMotionMode,
     RouteMotionQualification,
     RouteMotionRecord,
     RouteMotionSet,
     WaypointMotionAnchor,
 )
+from arctic_route_planning.domain.models import ObjectiveMode
 
 
 def _iso(value: datetime) -> str:
@@ -74,6 +78,42 @@ def route_motion_set_to_dict(value: RouteMotionSet) -> dict[str, Any]:
     }
 
 
+def route_motion_candidate_set_to_dict(
+    value: RouteMotionCandidateSet,
+) -> dict[str, Any]:
+    """Serialize the additive three-objective full-voyage motion artifact."""
+
+    return {
+        "schema_version": value.schema_version,
+        "motion_candidate_set_id": value.motion_candidate_set_id,
+        "layer_set_id": value.layer_set_id,
+        "run_id": value.run_id,
+        "scenario_id": value.scenario_id,
+        "corridor_id": value.corridor_id,
+        "generation_id": value.generation_id,
+        "input_revision": value.input_revision,
+        "risk_window_id": value.risk_window_id,
+        "risk_window_digest": value.risk_window_digest,
+        "vessel_profile_id": value.vessel_profile_id,
+        "vessel_profile_version": value.vessel_profile_version,
+        "vessel_profile_digest": value.vessel_profile_digest,
+        "motion_profile_id": value.motion_profile_id,
+        "motion_profile_digest": value.motion_profile_digest,
+        "config_digest": value.config_digest,
+        "model_config_digest": value.model_config_digest,
+        "planner_config_digest": value.planner_config_digest,
+        "producer_digest": value.producer_digest,
+        "generated_at": _iso(value.generated_at),
+        "records": [
+            {
+                "objective_mode": item.objective_mode.value,
+                "record": _record_to_dict(item.record),
+            }
+            for item in value.records
+        ],
+    }
+
+
 def _record_to_dict(record: RouteMotionRecord) -> dict[str, Any]:
     return {
         "planning_layer": record.planning_layer.value,
@@ -127,6 +167,14 @@ def route_motion_set_semantic_digest(value: RouteMotionSet) -> str:
     return canonical_sha256(document)
 
 
+def route_motion_candidate_set_semantic_digest(
+    value: RouteMotionCandidateSet,
+) -> str:
+    document = route_motion_candidate_set_to_dict(value)
+    document.pop("motion_candidate_set_id", None)
+    return canonical_sha256(document)
+
+
 def route_motion_set_from_dict(value: Mapping[str, Any]) -> RouteMotionSet:
     expected = {
         "schema_version", "motion_set_id", "layer_set_id", "run_id", "scenario_id",
@@ -169,6 +217,66 @@ def route_motion_set_from_dict(value: Mapping[str, Any]) -> RouteMotionSet:
     expected_id = "route-motion-set-sha256-" + route_motion_set_semantic_digest(result)
     if result.motion_set_id != expected_id:
         raise ValueError("motion_set_id does not match canonical content")
+    return result
+
+
+def route_motion_candidate_set_from_dict(
+    value: Mapping[str, Any],
+) -> RouteMotionCandidateSet:
+    expected = {
+        "schema_version", "motion_candidate_set_id", "layer_set_id", "run_id",
+        "scenario_id", "corridor_id", "generation_id", "input_revision",
+        "risk_window_id", "risk_window_digest", "vessel_profile_id",
+        "vessel_profile_version", "vessel_profile_digest", "motion_profile_id",
+        "motion_profile_digest", "config_digest", "model_config_digest",
+        "planner_config_digest", "producer_digest", "generated_at", "records",
+    }
+    if set(value) != expected:
+        raise ValueError("RouteMotionCandidateSet fields differ from v1")
+    if value["schema_version"] != ROUTE_MOTION_CANDIDATE_SET_SCHEMA_VERSION:
+        raise ValueError("unsupported RouteMotionCandidateSet schema")
+    records = value["records"]
+    if not isinstance(records, list):
+        raise ValueError("RouteMotionCandidateSet.records must be an array")
+    parsed_records = []
+    for item in records:
+        if not isinstance(item, Mapping) or set(item) != {"objective_mode", "record"}:
+            raise ValueError("RouteMotionCandidateRecord fields differ from v1")
+        parsed_records.append(
+            RouteMotionCandidateRecord(
+                objective_mode=ObjectiveMode(str(item["objective_mode"])),
+                record=_record_from_dict(item["record"]),
+            )
+        )
+    result = RouteMotionCandidateSet(
+        schema_version=str(value["schema_version"]),
+        motion_candidate_set_id=str(value["motion_candidate_set_id"]),
+        layer_set_id=str(value["layer_set_id"]),
+        run_id=str(value["run_id"]),
+        scenario_id=str(value["scenario_id"]),
+        corridor_id=str(value["corridor_id"]),
+        generation_id=_plain_int(value["generation_id"], "generation_id"),
+        input_revision=_plain_int(value["input_revision"], "input_revision"),
+        risk_window_id=str(value["risk_window_id"]),
+        risk_window_digest=str(value["risk_window_digest"]),
+        vessel_profile_id=str(value["vessel_profile_id"]),
+        vessel_profile_version=str(value["vessel_profile_version"]),
+        vessel_profile_digest=str(value["vessel_profile_digest"]),
+        motion_profile_id=str(value["motion_profile_id"]),
+        motion_profile_digest=str(value["motion_profile_digest"]),
+        config_digest=str(value["config_digest"]),
+        model_config_digest=str(value["model_config_digest"]),
+        planner_config_digest=str(value["planner_config_digest"]),
+        producer_digest=str(value["producer_digest"]),
+        generated_at=_parse_time(value["generated_at"], "generated_at"),
+        records=tuple(parsed_records),
+    )
+    expected_id = (
+        "route-motion-candidate-set-sha256-"
+        + route_motion_candidate_set_semantic_digest(result)
+    )
+    if result.motion_candidate_set_id != expected_id:
+        raise ValueError("motion_candidate_set_id does not match canonical content")
     return result
 
 
@@ -277,6 +385,9 @@ def _plain_bool(value: Any, field: str) -> bool:
 
 __all__ = [
     "canonical_sha256",
+    "route_motion_candidate_set_from_dict",
+    "route_motion_candidate_set_semantic_digest",
+    "route_motion_candidate_set_to_dict",
     "route_motion_set_from_dict",
     "route_motion_set_semantic_digest",
     "route_motion_set_to_dict",

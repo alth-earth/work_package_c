@@ -17,13 +17,14 @@ import xarray as xr
 from arctic_route_planning.contracts import risk_frame_from_document
 from arctic_route_planning.publishing import (
     four_layer_route_plan_set_from_dict,
+    route_motion_candidate_set_to_dict,
     route_motion_set_to_dict,
 )
 from arctic_route_planning.research.route_smoothing import EARTH_RADIUS_M
 from arctic_route_planning.risk import RiskSampler
 
 from .corridor import evaluate_continuous_raster_model_corridor
-from .producer import build_route_motion_set
+from .producer import build_route_motion_candidate_set, build_route_motion_set
 from .profile import EngineeringRouteMotionProfile
 
 
@@ -156,10 +157,25 @@ def produce(args: argparse.Namespace) -> dict[str, Any]:
         risk_sampler=sampler,
         corridor_validator=corridor,
     )
-    return {
+    documents = {
         "route-motion-set.json": route_motion_set_to_dict(result),
         "route-motion-vessel-profile.json": profile.to_dict(),
     }
+    if getattr(args, "include_candidate_set", False):
+        candidate_result = build_route_motion_candidate_set(
+            plan_set,
+            risk_window_id=commit["commit_id"],
+            risk_window_digest=commit["content_digest"],
+            vessel_profile_digest=vessel_digest,
+            producer_digest=_producer_digest(),
+            risk_sampler=sampler,
+            corridor_validator=corridor,
+            profile=profile,
+        )
+        documents["route-motion-candidate-set.json"] = (
+            route_motion_candidate_set_to_dict(candidate_result)
+        )
+    return documents
 
 
 def _publish(output_dir: Path, documents: dict[str, Any]) -> None:
@@ -195,6 +211,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--risk-window-commit", type=Path, required=True)
     parser.add_argument("--land-sea-mask", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument(
+        "--include-candidate-set",
+        action="store_true",
+        help=(
+            "also publish cd.route-motion-candidate-set.v1 for the three "
+            "full-voyage objectives"
+        ),
+    )
     return parser
 
 

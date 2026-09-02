@@ -17,15 +17,20 @@ from datetime import datetime
 from enum import StrEnum
 
 from arctic_route_planning.contracts.layered import PlanLayer
+from arctic_route_planning.domain.models import ObjectiveMode
 from arctic_route_planning.errors import ContractError
 from arctic_route_planning.timeutils import ensure_utc
 
 ROUTE_MOTION_SET_SCHEMA_VERSION = "cd.route-motion-set.v1"
+ROUTE_MOTION_CANDIDATE_SET_SCHEMA_VERSION = "cd.route-motion-candidate-set.v1"
 ROUTE_MOTION_PROFILE_SCHEMA_VERSION = "c.route-motion-vessel-profile.v1"
 ROUTE_MOTION_INTERPOLATION = "linear_time_between_producer_motion_samples"
 CONTINUOUS_RASTER_MODEL_SCOPE = "CONTINUOUS_IN_DECLARED_RASTER_MODEL"
 
 _MOTION_SET_ID = re.compile(r"^route-motion-set-sha256-[0-9a-f]{64}$")
+_MOTION_CANDIDATE_SET_ID = re.compile(
+    r"^route-motion-candidate-set-sha256-[0-9a-f]{64}$"
+)
 _PLAN_ID = re.compile(r"^route-v3-sha256-[0-9a-f]{64}$")
 _DIGEST = re.compile(r"^[0-9a-f]{64}$")
 
@@ -246,6 +251,99 @@ class RouteMotionRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class RouteMotionCandidateRecord:
+    """One objective-specific motion record for a runnable full-voyage plan."""
+
+    objective_mode: ObjectiveMode
+    record: RouteMotionRecord
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "objective_mode", ObjectiveMode(self.objective_mode))
+        if self.record.planning_layer is not PlanLayer.FULL_VOYAGE:
+            raise ContractError(
+                "RouteMotionCandidateRecord 只允许 full_voyage 运行候选"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class RouteMotionCandidateSet:
+    """Additive C artifact containing motion for all three full-voyage objectives.
+
+    ``RouteMotionSet`` remains the four-layer recommended sibling contract.  This
+    set exists only for the pre-run Viewer route chooser and never changes C's
+    authoritative selected candidate or replay adoption semantics.
+    """
+
+    schema_version: str
+    motion_candidate_set_id: str
+    layer_set_id: str
+    run_id: str
+    scenario_id: str
+    corridor_id: str
+    generation_id: int
+    input_revision: int
+    risk_window_id: str
+    risk_window_digest: str
+    vessel_profile_id: str
+    vessel_profile_version: str
+    vessel_profile_digest: str
+    motion_profile_id: str
+    motion_profile_digest: str
+    config_digest: str
+    model_config_digest: str
+    planner_config_digest: str
+    producer_digest: str
+    generated_at: datetime
+    records: tuple[RouteMotionCandidateRecord, ...]
+
+    def __post_init__(self) -> None:
+        if self.schema_version != ROUTE_MOTION_CANDIDATE_SET_SCHEMA_VERSION:
+            raise ContractError("RouteMotionCandidateSet.schema_version 不合法")
+        if _MOTION_CANDIDATE_SET_ID.fullmatch(self.motion_candidate_set_id) is None:
+            raise ContractError("RouteMotionCandidateSet.motion_candidate_set_id 不是规范身份")
+        for name in (
+            "layer_set_id",
+            "run_id",
+            "scenario_id",
+            "corridor_id",
+            "risk_window_id",
+            "vessel_profile_id",
+            "vessel_profile_version",
+            "motion_profile_id",
+        ):
+            if not isinstance(getattr(self, name), str) or not getattr(self, name).strip():
+                raise ContractError(f"RouteMotionCandidateSet.{name} 不能为空")
+        for name in (
+            "risk_window_digest",
+            "vessel_profile_digest",
+            "motion_profile_digest",
+            "config_digest",
+            "model_config_digest",
+            "planner_config_digest",
+            "producer_digest",
+        ):
+            _digest(getattr(self, name), f"RouteMotionCandidateSet.{name}")
+        if any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 0
+            for value in (self.generation_id, self.input_revision)
+        ):
+            raise ContractError("RouteMotionCandidateSet generation/input revision 不合法")
+        object.__setattr__(
+            self, "generated_at", ensure_utc(self.generated_at, field="generated_at")
+        )
+        expected = tuple(ObjectiveMode)
+        if tuple(item.objective_mode for item in self.records) != expected:
+            raise ContractError(
+                "RouteMotionCandidateSet 必须按 fastest/low_risk/recommended 顺序包含 "
+                "三条 full_voyage record"
+            )
+        if len({item.record.plan_id for item in self.records}) != len(expected):
+            raise ContractError("RouteMotionCandidateSet 的 plan_id 必须唯一")
+        if any(item.record.planning_layer is not PlanLayer.FULL_VOYAGE for item in self.records):
+            raise ContractError("RouteMotionCandidateSet 只能包含 full_voyage record")
+
+
+@dataclass(frozen=True, slots=True)
 class RouteMotionSet:
     schema_version: str
     motion_set_id: str
@@ -313,10 +411,13 @@ class RouteMotionSet:
 
 __all__ = [
     "CONTINUOUS_RASTER_MODEL_SCOPE",
+    "ROUTE_MOTION_CANDIDATE_SET_SCHEMA_VERSION",
     "ROUTE_MOTION_INTERPOLATION",
     "ROUTE_MOTION_PROFILE_SCHEMA_VERSION",
     "ROUTE_MOTION_SET_SCHEMA_VERSION",
     "MotionSample",
+    "RouteMotionCandidateRecord",
+    "RouteMotionCandidateSet",
     "RouteMotionMode",
     "RouteMotionQualification",
     "RouteMotionRecord",
