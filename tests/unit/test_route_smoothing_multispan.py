@@ -4,6 +4,7 @@ import math
 
 import pytest
 
+from arctic_route_planning.motion.geometry import FORMAL_ROUTE_SMOOTHING_POLICY
 from arctic_route_planning.motion.geometry import (
     build_multispan_route_smoothing as build_formal_multispan_route_smoothing,
 )
@@ -172,6 +173,25 @@ def test_formal_facade_uses_safe_controls_without_rewriting_research_shape() -> 
     )
     assert research.segments[0].curve.evidence.endpoint_g2_pass is True
     assert formal.segments[0].curve.evidence.endpoint_g2_pass is True
+
+
+def test_formal_policy_uses_qualified_larger_radius_without_sparse_sampling() -> None:
+    assert FORMAL_ROUTE_SMOOTHING_POLICY.max_trim_fraction == 0.49
+    assert FORMAL_ROUTE_SMOOTHING_POLICY.sample_spacing_m == 250.0
+
+    points = [
+        {"lon": 0.0, "lat": 0.0},
+        {"lon": 1.0, "lat": 0.0},
+        {"lon": 1.0, "lat": 1.0},
+    ]
+    research = build_research_multispan_route_smoothing(points)
+    formal = build_formal_multispan_route_smoothing(
+        points,
+        policy=FORMAL_ROUTE_SMOOTHING_POLICY,
+    )
+
+    assert formal.segments[0].selected_radius_m > research.segments[0].selected_radius_m
+    assert formal.segments[0].minimum_radius_m > research.segments[0].minimum_radius_m
 
 
 @pytest.mark.parametrize(

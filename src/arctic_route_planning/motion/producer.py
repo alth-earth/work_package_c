@@ -29,6 +29,8 @@ from arctic_route_planning.risk.sampler import RiskSampler, SampledRisk
 
 from .anchoring import find_anchor_indices, path_metric, time_at_distance
 from .geometry import (
+    FORMAL_ROUTE_SMOOTHING_POLICY,
+    CandidateDecision,
     MultiSpanRouteResult,
     RouteSmoothingPolicy,
     build_multispan_route_smoothing,
@@ -73,6 +75,7 @@ def build_route_motion_set(
     _digest(producer_digest, "producer_digest")
     if risk_sampler is not None:
         _validate_sampler_identity(plan_set, risk_sampler)
+    chosen_policy = policy or FORMAL_ROUTE_SMOOTHING_POLICY
     records = tuple(
         _build_record(
             bundle.recommended,
@@ -84,7 +87,7 @@ def build_route_motion_set(
                 transform_error_m=transform_error_m,
                 chord_error_m=chord_error_m,
             ),
-            policy=policy,
+            policy=chosen_policy,
         )
         for bundle in plan_set.layers
     )
@@ -155,31 +158,115 @@ def _build_record(
             geometry.fallback_reason or "no_qualified_curve",
         )
     try:
-        samples, anchors, curve_distances = _anchored_motion(plan, geometry)
+        return _qualified_curve_record(
+            plan,
+            geometry,
+            raw_digest=raw_digest,
+            profile=profile,
+            risk_sampler=risk_sampler,
+            corridor_validator=corridor_validator,
+            corridor_buffer_m=corridor_buffer_m,
+        )
+    except _QualificationFailure as initial_failure:
+        # A local B-spline implementation must not turn one rejected corner
+        # into an unrelated whole-route loss.  Add corners deterministically
+        # only while the complete candidate route continues to pass every
+        # existing corridor/risk/motion gate.  No tolerance is weakened and
+        # no rejected sample enters the formal artifact.
+        selected: set[int] = set()
+        # Every local candidate is compared with the same authoritative raw
+        # route.  Sampling it once avoids repeating identical risk-store I/O
+        # without caching or approximating any candidate result.
+        try:
+            raw_risks = _sample_risk(risk_sampler, _raw_motion_samples(plan))
+        except _QualificationFailure:
+            return _raw_record(plan, raw_digest, initial_failure.reason)
+        qualified: RouteMotionRecord | None = None
+        for segment in geometry.segments:
+            proposed = selected | {segment.corner_index}
+            candidate_geometry = build_multispan_route_smoothing(
+                [{"lon": lon, "lat": lat} for lon, lat in raw_points],
+                policy=policy,
+                candidate_validator=lambda candidate, _local, allowed=proposed: (
+                    CandidateDecision(True)
+                    if candidate.corner_index in allowed
+                    else CandidateDecision(False, "formal_local_gate_not_selected")
+                ),
+            )
+            if not candidate_geometry.applied:
+                continue
+            try:
+                candidate_record = _qualified_curve_record(
+                    plan,
+                    candidate_geometry,
+                    raw_digest=raw_digest,
+                    profile=profile,
+                    risk_sampler=risk_sampler,
+                    corridor_validator=corridor_validator,
+                    corridor_buffer_m=corridor_buffer_m,
+                    raw_risks=raw_risks,
+                    inexpensive_gates_first=True,
+                )
+            except _QualificationFailure:
+                continue
+            selected = {
+                item.corner_index for item in candidate_geometry.segments
+            }
+            qualified = candidate_record
+        return qualified or _raw_record(plan, raw_digest, initial_failure.reason)
+
+
+def _qualified_curve_record(
+    plan: RoutePlanV3,
+    geometry: MultiSpanRouteResult,
+    *,
+    raw_digest: str,
+    profile: EngineeringRouteMotionProfile,
+    risk_sampler: RiskSampler,
+    corridor_validator: CorridorValidator,
+    corridor_buffer_m: float,
+    raw_risks: Sequence[SampledRisk] | None = None,
+    inexpensive_gates_first: bool = False,
+) -> RouteMotionRecord:
+    samples, anchors, curve_distances = _anchored_motion(plan, geometry)
+    corridor = None
+    if not inexpensive_gates_first:
         corridor = _corridor(
             corridor_validator,
             geometry,
             samples,
             corridor_buffer_m,
         )
-        curve_risks = _sample_risk(risk_sampler, samples)
-        raw_samples = _raw_motion_samples(plan)
-        raw_risks = _sample_risk(risk_sampler, raw_samples)
-        if any(value.hard_mask for value in curve_risks):
-            raise _QualificationFailure("hard_mask")
-        if _maximum_risk(curve_risks) > _maximum_risk(raw_risks) + 1.0e-9:
-            raise _QualificationFailure("maximum_risk_increased")
-        if _integrated_risk(curve_risks) > _integrated_risk(raw_risks) + 1.0e-9:
-            raise _QualificationFailure("integrated_risk_increased")
-        speed_details = _validate_speed_and_motion(profile, geometry, samples)
-    except _QualificationFailure as failure:
-        return _raw_record(plan, raw_digest, failure.reason)
+    curve_risks = _sample_risk(risk_sampler, samples)
+    compared_raw_risks = (
+        tuple(raw_risks)
+        if raw_risks is not None
+        else _sample_risk(risk_sampler, _raw_motion_samples(plan))
+    )
+    if any(value.hard_mask for value in curve_risks):
+        raise _QualificationFailure("hard_mask")
+    if _maximum_risk(curve_risks) > _maximum_risk(compared_raw_risks) + 1.0e-9:
+        raise _QualificationFailure("maximum_risk_increased")
+    if _integrated_risk(curve_risks) > _integrated_risk(compared_raw_risks) + 1.0e-9:
+        raise _QualificationFailure("integrated_risk_increased")
+    speed_details = _validate_speed_and_motion(profile, geometry, samples)
+    if corridor is None:
+        # Continuous containment remains mandatory.  It is merely evaluated
+        # after cheaper fail-closed gates for local recovery candidates, so a
+        # candidate already rejected by risk does not perform expensive,
+        # outcome-irrelevant raster enumeration.
+        corridor = _corridor(
+            corridor_validator,
+            geometry,
+            samples,
+            corridor_buffer_m,
+        )
     evidence = {
         "risk": {
             "curve_maximum": _maximum_risk(curve_risks),
-            "raw_maximum": _maximum_risk(raw_risks),
+            "raw_maximum": _maximum_risk(compared_raw_risks),
             "curve_integrated_risk_hours": _integrated_risk(curve_risks),
-            "raw_integrated_risk_hours": _integrated_risk(raw_risks),
+            "raw_integrated_risk_hours": _integrated_risk(compared_raw_risks),
             "sample_count": len(curve_risks),
         },
         "corridor": corridor,

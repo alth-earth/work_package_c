@@ -110,6 +110,7 @@ def _producer_digest() -> str:
     package = Path(__file__).resolve().parents[1]
     paths = (
         package / "contracts" / "route_motion.py",
+        package / "motion" / "geometry.py",
         package / "motion" / "producer.py",
         package / "motion" / "corridor.py",
         package / "motion" / "profile.py",

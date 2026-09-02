@@ -7,7 +7,7 @@ Content Status:
 Document Role: CANONICAL
 Scope: work package C entrypoint and public boundary
 Branch: research-validation-system
-Last Verified: 2026-08-27
+Last Verified: 2026-09-02
 ---
 
 > [!NOTE]
@@ -23,6 +23,27 @@ Last Verified: 2026-08-27
 > `arctic_route_governance/README.md` 的"路径约定"章节。
 
 # 北极航线工作包 C
+
+## 正式局部 B 样条与批量性能（2026-09-02）
+
+受约束局部三次 B 样条已经通过正式兄弟合同 `cd.route-motion-set.v1` 接入，并非仅有
+Viewer 本地绘制。它只替换满足转角、走廊、hard mask、连续风险、ETA/速度、曲率和操纵性
+门禁的局部窗口；若整条候选失败，producer 会在保持 raw 路线全局合格的前提下逐角恢复
+可安全采用的局部曲线。无合格转角时必须发布 `RAW_PASSTHROUGH`，不能为了连续显示而绕过
+门禁。
+
+当前默认 Winter 原始冻结链共有 9 个 revision。采用正式参数
+`max_trim_fraction=0.49`、`sample_spacing_m=250.0` 后，R1–R4 发布 `CURVE`；R5–R7 因
+`integrated_risk_increased` 回退权威折线，R8–R9 因 `no_eligible_corner` 回退。对 R5–R7
+已经复核 `0.25/0.35/0.45/0.47/0.49`，失败原因不随 trim 改变，不能为了画面连续而绕过
+风险门禁。R1 full-voyage 曲线为 982 个正式样本，最小曲率半径约 7,464 m、最大偏离约
+723 m；曲线测地长度约 919.21 km，相对权威 RoutePlan 约 921.38 km 缩短约 2.17 km。
+
+`max_trim_fraction` 控制转角两侧可参与局部平滑的窗口比例，直接影响可获得曲率半径；
+`sample_spacing_m` 控制曲线离散采样密度，主要影响验证/显示分辨率和成本，而不是独立的
+“目标转弯半径”旋钮。`minimum_radius_m` 是安全下限，不是半径选择器。性能主要消耗在连续
+走廊、风险重采样和完整资格门禁，不是 Cox–de Boor 基函数求值；提速仍只允许同一调用内
+复用 raw 风险采样和前置廉价门禁，不跨 identity 缓存、不减少安全检查。
 
 ## Research Validation 定位（2026-08-21 23:18）
 
