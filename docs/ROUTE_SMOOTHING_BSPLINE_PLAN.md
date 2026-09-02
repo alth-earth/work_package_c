@@ -10,7 +10,7 @@ Scope: 受约束局部三次 B 样条航线平滑的 R0/R1 问题定义、展示
 Canonical For: 工作包 C 航点处航向突变和平滑航线研究的详细定义；从属于核心算法 SSOT
 Canonical Current State: NO
 Branch: research-validation-system
-Last Verified: 2026-08-31 12:50 +08:00
+Last Verified: 2026-09-02 02:40 +08:00
 Related Canonical Docs:
   - CORE_ALGORITHM_IMPROVEMENT_PLAN.md
   - ARCHITECTURE_AND_DECISIONS.md
@@ -134,13 +134,13 @@ Planner 的 `RouteStep` 保存节点、经纬度、ETA、入射航向和速度�
 
 相关代码：
 
-- [`RegularGrid.neighbors` 和边线性采样](../src/arctic_route_planning/grid/regular.py:75)；
-- [`RouteStep`](../src/arctic_route_planning/planners/time_dependent_astar.py:104)；
-- [`Waypoint` 和 `RoutePlan`](../src/arctic_route_planning/contracts/models.py:184)；
-- [`RoutePlan` 转换](../src/arctic_route_planning/service.py:366)；
-- [`LineString` 序列化](../src/arctic_route_planning/publishing/serialization.py:170)；
+- [`RegularGrid.neighbors` 和边线性采样](../src/arctic_route_planning/grid/regular.py#L75)；
+- [`RouteStep`](../src/arctic_route_planning/planners/time_dependent_astar.py#L104)；
+- [`Waypoint` 和 `RoutePlan`](../src/arctic_route_planning/contracts/models.py#L184)；
+- [`RoutePlan` 转换](../src/arctic_route_planning/service.py#L366)；
+- [`LineString` 序列化](../src/arctic_route_planning/publishing/serialization.py#L170)；
 - D 侧明确说明路线加密只用于屏幕绘制，不改变权威 waypoint 几何：
-  [`USER_GUIDE.zh-CN.md`](../../work_package_d/docs/USER_GUIDE.zh-CN.md:150)。
+  [`USER_GUIDE.zh-CN.md`](../../work_package_d/docs/USER_GUIDE.zh-CN.md#L150)。
 
 ### 3.2 航向突变的形式化定义（2026-08-31 02:20 +08:00）
 
@@ -1120,3 +1120,25 @@ sample、权威 ETA 和弧长位置，不把不属于 B 样条的原始转角强
 
 上述证据不改写 R1 的相对 raw baseline 失败，也不将公式散货船或 GEBCO 声明 raster model
 解释成实船或导航安全证明。
+
+### 17.4 多 revision 动态回放补充（2026-09-02）
+
+17.3 的 `0.813 s/set` 是单一既有 plan set 的冷生成基线；后续 8-revision/v13 数值属于
+误选 holdout 后的中间制品，不能代表当前默认原始冻结链。当前链为 9 个动态 revision，正式
+策略固定为 `max_trim_fraction=0.49`、`sample_spacing_m=250.0`：R1–R4 发布 `CURVE`，
+R5–R7 因 `integrated_risk_increased` 回退，R8–R9 因 `no_eligible_corner` 回退。
+producer 先验证 raw 全局资格，并在完整曲线候选失败时按确定顺序尝试局部转角子集；每个被
+接受子集仍须通过连续走廊、风险、hard mask、coverage、ETA/速度、曲率和操纵性门禁。
+
+R1 full-voyage 的浏览器/producer 同源诊断为 982 个正式样本、最小曲率半径约
+`7,464.414 m`、最大偏离约 `722.968 m`；权威折线测地长度约 `921.38 km`，曲线约
+`919.21 km`，缩短约 `2.17 km`。`max_trim_fraction` 增大可扩大局部转角窗口并提高可获得
+半径；`sample_spacing_m` 只控制离散采样密度，不能替代曲率/走廊/风险门禁；
+`minimum_radius_m` 仍是下限而非目标半径。R5–R7 对
+`0.25/0.35/0.45/0.47/0.49` 的复核均得到同一风险回退，因此不能靠继续放大 trim 伪造通过。
+
+当前实现把 raw 路线的风险采样限制为每个 producer 调用一次，并把廉价几何/运动门禁放在
+连续走廊枚举之前。主要成本是重复完整资格证明，而非 Cox–de Boor 基函数；后续提速不得跨
+RiskWindow/identity 复用采样，也不得减少 fail-closed 门禁。当前 9 个 revision 的发布目录
+为 replay 根下 `motion-r1-trim049` 至 `motion-r9-trim049`，不能复用旧 8-revision 性能数字
+作为本链 wall-time 承诺。
