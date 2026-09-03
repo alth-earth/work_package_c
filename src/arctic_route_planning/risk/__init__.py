@@ -1,12 +1,13 @@
 """ETA-aware access to BC risk frames."""
 
+from importlib import import_module
+
 from .errors import (
     IncompatibleRiskFramesError,
     RiskCoverageError,
     RiskOutOfBoundsError,
     RiskSamplingError,
 )
-from .experimental_cache import ExperimentalRiskSampler, SampleCacheMode
 from .sampler import (
     RiskIdentity,
     RiskIntervalSample,
@@ -28,3 +29,16 @@ __all__ = [
     "SampledRisk",
     "SweptTemporalEnvelope",
 ]
+
+
+def __getattr__(name: str):
+    """Keep research cache compatibility without importing it in formal runs.
+
+    The production ingress imports this package for ``RiskSampler``.  Eagerly
+    importing the experimental cache made every formal application and frozen
+    binary carry research-only code even when it was never selected.
+    """
+    if name in {"ExperimentalRiskSampler", "SampleCacheMode"}:
+        module_name = ".".join((__package__, "experimental_cache"))
+        return getattr(import_module(module_name), name)
+    raise AttributeError(name)

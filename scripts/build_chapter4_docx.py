@@ -18,11 +18,10 @@ from pathlib import Path
 
 from docx import Document
 from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_TABLE_ALIGNMENT
-from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_TAB_ALIGNMENT
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt
-from lxml import etree
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIGURES = (
@@ -59,7 +58,9 @@ def _configure_document(doc: Document) -> None:
     normal = doc.styles["Normal"]
     _set_font(normal, "宋体", "Times New Roman", 10.5)
     normal.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-    normal.paragraph_format.line_spacing = Pt(15.6)
+    # Single line spacing (1.0 = single): scale with the font size instead of a
+    # fixed point value that would make the body text too loose.
+    normal.paragraph_format.line_spacing = 1.0
     normal.paragraph_format.space_before = Pt(0)
     normal.paragraph_format.space_after = Pt(0)
 
@@ -82,7 +83,7 @@ def _configure_document(doc: Document) -> None:
     _set_font(caption, "宋体", "Times New Roman", 10, bold=True)
     caption.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.CENTER
     caption.paragraph_format.first_line_indent = Cm(0)
-    caption.paragraph_format.line_spacing = Pt(15)
+    caption.paragraph_format.line_spacing = 1.0
     caption.paragraph_format.space_before = Pt(3)
     caption.paragraph_format.space_after = Pt(6)
     caption.paragraph_format.keep_together = True
@@ -103,7 +104,7 @@ def _add_para(doc: Document, text: str, *, indent: bool = False, align: str = "j
     else:
         p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
     p.paragraph_format.space_after = Pt(0)
-    p.paragraph_format.line_spacing = Pt(15.6)
+    p.paragraph_format.line_spacing = 1.0
     p.add_run(_normalise_labels(text))
 
 
@@ -134,7 +135,7 @@ def _add_table(
     *,
     col_widths_cm: list[float] | None = None,
     font_size_pt: float = 8.5,
-    line_spacing_pt: float = 12,
+    line_spacing: float = 1.0,
 ) -> None:
     table = doc.add_table(rows=1 + len(rows), cols=len(header))
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
@@ -160,7 +161,10 @@ def _add_table(
                 r.bold = True
     for ri, row in enumerate(rows, start=1):
         for ci, val in enumerate(row):
-            table.rows[ri].cells[ci].text = str(val)
+            # Strip leading/trailing whitespace so the cell content does not
+            # visually drift to the right when centered alignment is is applied.
+            cell = table.rows[ri].cells[ci]
+            cell.text = str(val).strip()
     header_pr = table.rows[0]._tr.get_or_add_trPr()
     repeat = OxmlElement("w:tblHeader")
     repeat.set(qn("w:val"), "true")
@@ -176,7 +180,9 @@ def _add_table(
                 p.paragraph_format.first_line_indent = Cm(0)
                 p.paragraph_format.space_before = Pt(0)
                 p.paragraph_format.space_after = Pt(0)
-                p.paragraph_format.line_spacing = Pt(line_spacing_pt)
+                # Single line spacing inside table cells as well, so the small
+                # table font is not squeezed by a fixed point value.
+                p.paragraph_format.line_spacing = line_spacing
                 p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 for run in p.runs:
                     run.font.name = "Times New Roman"
@@ -272,73 +278,77 @@ def _formula_elements(number: str) -> list[OxmlElement]:
     raise ValueError(f"unsupported formula number: {number}")
 
 
-def _formula_fallback_text(number: str) -> str:
-    return {
-        "(4-1)": "τₑ(t) = dₑ / v_eff(risk(t), env(t))",
-        "(4-2)": (
-            "C(path) = w_d·∑dₑ + w_t·∑τₑ(t) + w_r·∑risk(t) + "
-            "w_v·∑Δvₑ(t) + w_u·∑uₑ(t)"
-        ),
-        "(4-3)": "R(x, y, t_arrive)",
-        "(4-4)": "t* = t_depart + τₑ(t*)",
-    }[number]
+
 
 
 def _add_formula(doc: Document, _body: str, number: str) -> None:
-    """Insert a native Word equation (OMML) with a right-aligned number."""
-    table = doc.add_table(rows=1, cols=3)
+    """Insert a native Word equation (OMML) with a right-aligned number.
+
+    The equation is emitted as a display block wrapped in ``m:oMathPara``
+    (Word's native display-equation container) inside a borderless 2-column
+    table: the formula sits in the left cell (centered) and its "(4-X)" label
+    in the right cell (right-aligned).  Both cells share one table row, so the
+    number is guaranteed to sit on the same baseline as the equation.
+    """
+    table = doc.add_table(rows=1, cols=2)
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     table.autofit = False
-    widths = (Cm(0.1), Cm(14.1), Cm(1.2))
-    for cell, width in zip(table.rows[0].cells, widths, strict=True):
-        cell.width = width
-        cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
-        cell_width = cell._tc.get_or_add_tcPr().first_child_found_in("w:tcW")
-        if cell_width is not None:
-            cell_width.set(qn("w:w"), str(int(width.twips)))
-            cell_width.set(qn("w:type"), "dxa")
+    # Borderless, fixed layout matching the reference template.
     borders = OxmlElement("w:tblBorders")
     for edge in ("top", "left", "bottom", "right", "insideH", "insideV"):
         border = OxmlElement(f"w:{edge}")
         border.set(qn("w:val"), "nil")
         borders.append(border)
     table._tbl.tblPr.append(borders)
-    row_properties = table.rows[0]._tr.get_or_add_trPr()
-    cant_split = OxmlElement("w:cantSplit")
-    cant_split.set(qn("w:val"), "true")
-    row_properties.append(cant_split)
+    tbl_width = OxmlElement("w:tblW")
+    tbl_width.set(qn("w:w"), "9120")
+    tbl_width.set(qn("w:type"), "dxa")
+    table._tbl.tblPr.append(tbl_width)
+    grid = table._tbl.tblGrid
+    for width in (7994, 1126):
+        grid_col = OxmlElement("w:gridCol")
+        grid_col.set(qn("w:w"), str(width))
+        grid.append(grid_col)
 
-    equation_paragraph = table.rows[0].cells[1].paragraphs[0]
-    equation_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    equation_paragraph.paragraph_format.space_before = Pt(3)
-    equation_paragraph.paragraph_format.space_after = Pt(3)
-    compatibility_namespace = "http://schemas.openxmlformats.org/markup-compatibility/2006"
-    alternate = etree.Element(f"{{{compatibility_namespace}}}AlternateContent")
-    choice = etree.Element(f"{{{compatibility_namespace}}}Choice")
-    choice.set("Requires", "w16cex")
+    # Formula cell (left).
+    formula_cell = table.rows[0].cells[0]
+    formula_cell.width = Cm(14.15)
+    formula_cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+    formula_cell_pr = formula_cell._tc.get_or_add_tcPr()
+    tc_width = OxmlElement("w:tcW")
+    tc_width.set(qn("w:w"), "7994")
+    tc_width.set(qn("w:type"), "dxa")
+    formula_cell_pr.append(tc_width)
+    v_align = OxmlElement("w:vAlign")
+    v_align.set(qn("w:val"), "center")
+    formula_cell_pr.append(v_align)
+    formula_paragraph = formula_cell.paragraphs[0]
+    formula_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    formula_paragraph.paragraph_format.first_line_indent = Cm(0)
+    formula_paragraph.paragraph_format.space_before = Pt(3)
+    formula_paragraph.paragraph_format.space_after = Pt(3)
+    # Display equation block: m:oMathPara > m:oMath (native Word rendering).
+    omath_para = OxmlElement("m:oMathPara")
     equation = OxmlElement("m:oMath")
     equation.extend(_formula_elements(number))
-    choice.append(equation)
-    fallback = etree.Element(f"{{{compatibility_namespace}}}Fallback")
-    fallback_run = OxmlElement("w:r")
-    fallback_properties = OxmlElement("w:rPr")
-    fallback_fonts = OxmlElement("w:rFonts")
-    fallback_fonts.set(qn("w:ascii"), "Cambria Math")
-    fallback_fonts.set(qn("w:hAnsi"), "Cambria Math")
-    fallback_properties.append(fallback_fonts)
-    fallback_size = OxmlElement("w:sz")
-    fallback_size.set(qn("w:val"), "19")
-    fallback_properties.append(fallback_size)
-    fallback_run.append(fallback_properties)
-    fallback_text = OxmlElement("w:t")
-    fallback_text.text = _formula_fallback_text(number)
-    fallback_run.append(fallback_text)
-    fallback.append(fallback_run)
-    alternate.extend((choice, fallback))
-    equation_paragraph._p.append(alternate)
+    omath_para.append(equation)
+    formula_paragraph._p.append(omath_para)
 
-    number_paragraph = table.rows[0].cells[2].paragraphs[0]
+    # Number cell (right).
+    number_cell = table.rows[0].cells[1]
+    number_cell.width = Cm(1.99)
+    number_cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+    number_cell_pr = number_cell._tc.get_or_add_tcPr()
+    tc_width = OxmlElement("w:tcW")
+    tc_width.set(qn("w:w"), "1126")
+    tc_width.set(qn("w:type"), "dxa")
+    number_cell_pr.append(tc_width)
+    v_align = OxmlElement("w:vAlign")
+    v_align.set(qn("w:val"), "center")
+    number_cell_pr.append(v_align)
+    number_paragraph = number_cell.paragraphs[0]
     number_paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    number_paragraph.paragraph_format.first_line_indent = Cm(0)
     number_paragraph.paragraph_format.space_before = Pt(3)
     number_paragraph.paragraph_format.space_after = Pt(3)
     number_run = number_paragraph.add_run(number)
@@ -729,6 +739,21 @@ def _build_4_6(doc: Document) -> None:
         "数（fastest / low_risk / recommended 三档）。",
         indent=True,
     )
+    _add_para(
+        doc,
+        "需要指出的是，冻结真实输入在天气层面只有上述 2 个独立窗口，且每个窗口"
+        "只有一对起终点与一个出发时刻，若仅做单算例对比，真实证据最多只有 6 个"
+        "窗口×目标单元，且 development 窗口三目标常收敛到同一条航线，实际独立"
+        "航线仅 4 条，统计说服力不足。为此，本章在保持冻结输入不变的前提下，将"
+        "每个窗口拆分为多个规划算例，构造扩样本实验：沿起终点轴，在走廊可航连"
+        "通域内取 5 个起点，并按航段长度分短（4～5 跳）、中（6～7 跳）、长（"
+        "8～9 跳）三档选取终点；沿出发时刻轴，在同一走廊上取 0 h、36 h、72 h、"
+        "108 h 四个出发时刻（窗口共 145 帧，可容纳 24 h 航程）。由此得到 104 "
+        "个规划算例，每算例复跑 4 种算法与 3 个目标，共 312 个算例×目标单元，"
+        "其中 246 个单元可与 Dijkstra 比较、239 个单元可与静态场比较。扩样本的"
+        "配对聚合结果见 4.9.5 节。",
+        indent=True,
+    )
 
     _add_heading(doc, "4.6.3 算法公平性与实验统一设置", level=2)
     _add_para(doc, "为使性能比较具有可归因性，四种算法共享以下实验设置，详见表 4-1。", indent=True)
@@ -737,19 +762,97 @@ def _build_4_6(doc: Document) -> None:
         doc,
         ["项目", "本文 A*", "Dijkstra", "静态场", "风险无关"],
         [
-            ["起终点", "一致", "一致", "一致", "一致"],
-            ["网格", "一致", "一致", "一致", "一致"],
-            ["船舶性能模型", "一致", "一致", "一致", "一致"],
-            ["边评估器", "一致", "一致", "一致", "一致"],
-            ["时间离散桶", "一致", "一致", "一致", "一致"],
-            ["硬约束(fail-closed)", "是", "是", "是", "是"],
-            ["风险信息", "全程使用", "同图无信息", "仅出发时刻帧", "权重置零"],
-            ["时变信息", "时间展开图", "同图", "冻结为静态", "风险项取消"],
-            ["启发式", "可采纳", "关闭", "可采纳", "可采纳"],
-            ["目标函数", "三目标一致", "一致", "一致", "风险与不确定性权重置零"],
-            ["硬件", "统一", "统一", "统一", "统一"],
-            ["数据集", "同源", "同源", "同源", "同源"],
-            ["终止条件", "最大扩展数250000", "同", "同", "同"],
+            [
+                "起终点",
+                "冻结真实走廊上的固定起终点",
+                "冻结真实走廊上的固定起终点",
+                "冻结真实走廊上的固定起终点",
+                "冻结真实走廊上的固定起终点",
+            ],
+            [
+                "网格",
+                "31×11 真实网格 + 四档合成网格",
+                "31×11 真实网格 + 四档合成网格",
+                "31×11 真实网格 + 四档合成网格",
+                "31×11 真实网格 + 四档合成网格",
+            ],
+            [
+                "船舶性能模型",
+                "冻结 vessel_config（vessel_profile_id 锁定）",
+                "冻结 vessel_config（vessel_profile_id 锁定）",
+                "冻结 vessel_config（vessel_profile_id 锁定）",
+                "冻结 vessel_config（vessel_profile_id 锁定）",
+            ],
+            [
+                "边评估器",
+                "冻结 _evaluate_edge（含 risk/速度/ETA 耦合）",
+                "冻结 _evaluate_edge（含 risk/速度/ETA 耦合）",
+                "冻结 _evaluate_edge（含 risk/速度/ETA 耦合）",
+                "冻结 _evaluate_edge（含 risk/速度/ETA 耦合）",
+            ],
+            [
+                "时间离散桶",
+                "time_bucket_minutes 来自冻结 planner_config",
+                "time_bucket_minutes 来自冻结 planner_config",
+                "time_bucket_minutes 来自冻结 planner_config",
+                "time_bucket_minutes 来自冻结 planner_config",
+            ],
+            [
+                "硬约束 (fail-closed)",
+                "缺测/未来/过期/覆盖不足一律失败",
+                "缺测/未来/过期/覆盖不足一律失败",
+                "缺测/未来/过期/覆盖不足一律失败",
+                "缺测/未来/过期/覆盖不足一律失败",
+            ],
+            [
+                "风险信息",
+                "全程使用每一帧 risk_mean/risk_level/uncertainty",
+                "Dijkstra 同样在完整 145 帧时间展开状态图上使用全部 risk 信息",
+                "仅使用出发时刻那一帧的 risk",
+                "risk/uncertainty 权重置零，其余权重保留",
+            ],
+            [
+                "时变信息",
+                "在 145 帧时间展开状态图上完整展开",
+                "在 145 帧时间展开状态图上完整展开",
+                "把全部预报帧冻结为出发时刻帧（静态规划）",
+                "risk 项不参与代价，其余权重仍按时间展开",
+            ],
+            [
+                "启发式",
+                "admissible 启发式（几何下界 + 最大可达速度）",
+                "关闭启发式（无信息 Dijkstra）",
+                "admissible 启发式（几何下界 + 最大可达速度，与本文 A* 相同）",
+                "admissible 启发式（几何下界 + 最大可达速度，与本文 A* 相同）",
+            ],
+            [
+                "目标函数",
+                "三目标（最快/低风险/推荐）共用同一组权重",
+                "与本文三目标共用同一组权重",
+                "与本文三目标共用同一组权重",
+                "与本文三目标共用同一组权重，但 risk/uncertainty 项权重置零",
+            ],
+            [
+                "硬件",
+                "同一台机器、同一 uv 虚拟环境（matplotlib 走 overlay）",
+                "同一台机器、同一 uv 虚拟环境（matplotlib 走 overlay）",
+                "同一台机器、同一 uv 虚拟环境（matplotlib 走 overlay）",
+                "同一台机器、同一 uv 虚拟环境（matplotlib 走 overlay）",
+            ],
+            [
+                "数据集",
+                "bc.risk-window-commit.v1（content_digest 锁定）",
+                "bc.risk-window-commit.v1（content_digest 锁定）",
+                "bc.risk-window-commit.v1（content_digest 锁定）",
+                "bc.risk-window-commit.v1（content_digest 锁定）",
+            ],
+            [
+                "终止条件",
+                "max_expansions=250000 或 24h 到达",
+                "max_expansions=250000 或 24h 到达",
+                "max_expansions=250000 或 24h 到达",
+                "max_expansions=250000 或 24h 到达",
+            ],
         ],
     )
     _add_para(
@@ -819,12 +922,22 @@ def _build_4_7(doc: Document) -> None:
     )
     _add_para(
         doc,
-        "由表 4-3 可知，本文方法的最大航段风险较静态场规划降低 15.3%～29.8%"
-        "，平均航段风险降低 10.7%～16.5%。值得注意的是，在 holdout 窗口的 "
-        "fastest 目标下，本文方法与静态场规划的航程完全相同（397.4 km），但"
-        "最大风险低 29.8%、平均风险低 15.7%、航行时间还少 0.21 h。这说明优"
-        "势并非来自绕远路避险，而是来自在同一条走廊上选出更安全的通行时机——"
-        "这正是时变预报与时空耦合风险建模（4.3 节）的价值所在。",
+        "由表 4-3 可知，在规范算例（冻结起终点、出发时刻 0 h）上，本文方法的"
+        "最大航段风险较静态场规划降低 15.3%～29.8%，平均航段风险降低 10.7%～"
+        "16.5%。值得注意的是，在 holdout 窗口的 fastest 目标下，本文方法与静"
+        "态场规划的航程完全相同（397.4 km），但最大风险低 29.8%、平均风险低 "
+        "15.7%、航行时间还少 0.21 h。这说明优势并非来自绕远路避险，而是来自在"
+        "同一条走廊上选出更安全的通行时机——这正是时变预报与时空耦合风险建模"
+        "（4.3 节）的价值所在。",
+        indent=True,
+    )
+    _add_para(
+        doc,
+        "需要说明的是，表 4-3 给出的是规范算例上的观测值。将样本扩展至 104 个"
+        "规划算例后（4.9.5 节），平均风险的降低仍然稳健显著，而最大风险的降低"
+        "表现出明显的走廊相关性：在部分走廊（4、6、8 跳）上显著，在多数走廊上"
+        "与静态场持平。因此，最大风险的降幅应当表述为“在特定走廊上取得的观测"
+        "值”，而不能外推为普遍规律；这一点在 4.9.5 节给出定量证据。",
         indent=True,
     )
 
@@ -850,20 +963,34 @@ def _build_4_7(doc: Document) -> None:
     _add_heading(doc, "4.7.4 效率-质量二维权衡", level=2)
     _add_para(
         doc,
-        "为进一步验证“效率提升不以牺牲解质量为代价”，绘制运行时间与总代价、最大风险的二维散点图，分别如图 4-3 与图 4-4 所示。",  # noqa: E501
+        "为进一步验证“效率提升不以牺牲解质量为代价”，绘制运行时间与总代价、最大风险的二维散点图，分别如图 4-3 与图 4-4 所示。两图均基于 104 个规划算例的扩样本数据绘制，每一散点对应一个可行（算例, 目标）单元。",  # noqa: E501
         indent=True,
     )
-    _add_figure(doc, FIGURES / "fig-runtime-cost.png", "图 4-3 运行时间—总代价关系（真实 24h）")
-    _add_figure(doc, FIGURES / "fig-runtime-risk.png", "图 4-4 运行时间—最大风险关系（真实 24h）")
+    _add_figure(
+        doc, FIGURES / "fig-runtime-cost.png", "图 4-3 运行时间—总代价关系（104 个规划算例）"
+    )
+    _add_figure(
+        doc, FIGURES / "fig-runtime-risk.png", "图 4-4 运行时间—最大风险关系（104 个规划算例）"
+    )
     _add_para(
         doc,
         "由图 4-3 可知，本文 A*（蓝色）与 Dijkstra（橙色）在总代价轴上几乎重"
-        "合，但在运行时间轴上横向拉开约一个数量级，证明启发式加速未牺牲解代"
-        "价。由图 4-4 可知，本文 A* 与 Dijkstra 共享同一目标函数并得到相同总代"
-        "价，其风险点相互重合；图中风险差异主要用于比较 Static-field 与 Risk-"
-        "blind 的风险变化，而不是声称 A* 相对 Dijkstra 降低风险。需说明的是，development 窗"
-        "口上 Risk-blind 与 recommended 路线完全相同（n=1 有效样本，详见 4.9.1 "
-        "节），该结果仅用于现象说明，不构成统计意义上的性能结论。",
+        "合，但在运行时间轴上横向拉开 1～2 个数量级，证明启发式加速未牺牲解代"
+        "价；该结论在 246 个可比较单元上一致成立，而非仅来自个别算例。由图 4-4 "
+        "可知，本文 A* 与 Dijkstra 共享同一目标函数并得到相同总代价，其风险点"
+        "相互重合；图中风险差异主要用于比较 Static-field 与 Risk-blind 的风险"
+        "变化，而不是声称 A* 相对 Dijkstra 降低风险。",
+        indent=True,
+    )
+    _add_para(
+        doc,
+        "关于 Risk-blind 基线，在单算例实验中 development 窗口上它与 "
+        "recommended 路线完全重合，导致有效样本仅为 n=1；扩样本将其纳入全部 "
+        "104 个算例后，可比较单元扩大至 246 个，结果显示其分布高度偏平：多数"
+        "算例与本文路线持平，仅少数算例承担更高风险（平均风险多付 >0 的 41 个"
+        "、最大风险多付 >0 的 27 个，最大多付约 29.8%）。因此该基线仅用作“为"
+        "什么必须显式纳入时变风险场”的动机证据，不单独作为本文方法的优势主张"
+        "，详见 4.9.1 与 4.9.5 节。",
         indent=True,
     )
 
@@ -874,45 +1001,50 @@ def _build_4_7(doc: Document) -> None:
 def _build_4_8(doc: Document) -> None:
     _add_heading(doc, "4.8 风险分布与逐段风险时序分析", level=1)
 
-    _add_heading(doc, "4.8.1 真实 24h 逐段风险时间序列", level=2)
+    _add_heading(doc, "4.8.1 逐段风险时间序列", level=2)
     _add_para(
         doc,
-        "为直观展示本文方法对风险峰值的抑制效果，绘制真实 24 小时航段的逐段风险时间序列，如图 4-5 所示。",  # noqa: E501
+        "为直观展示本文方法对风险峰值的抑制效果，绘制逐段风险时间序列，如图 4-5 "
+        "所示。为使结论不依赖单一航线，图中每个窗口给出 3 条代表性走廊（分别取自短、中、长三档航段），共 2×3 个子图，即每窗口 n=3 条航线。",  # noqa: E501
         indent=True,
     )
     _add_figure(
         doc,
         FIGURES / "fig-risk-timeseries.png",
-        "图 4-5 真实 24h 航段逐段风险序列（推荐目标）",
+        "图 4-5 逐段风险序列（每窗口 3 条代表走廊，n=3/窗口）",
     )
     _add_para(
         doc,
-        "由图 4-5 可知，在 holdout 窗口（左子图），本文 A*（蓝色）的逐段风险"
-        "始终位于静态场（绿色）与风险无关（红色）曲线下方，且峰值被显著压制"
-        "。这表明本文方法不仅在均值上更优，且在极端航段上也能抑制风险峰值。"
-        "在 development 窗口（右子图），四条曲线几乎重合，说明该窗口的时变预"
-        "报带来的可压低空间较小——这是真实数据特征，非算法缺陷。该结果仅用于"
-        "现象说明（n=1），不构成统计意义上的性能结论。",
+        "由图 4-5 可知，在 holdout 窗口的多数走廊上，本文 A*（蓝色）的逐段风险"
+        "位于静态场（绿色）与风险无关（红色）曲线下方，且峰值被压制，表明本文"
+        "方法不仅在均值上更优，且在极端航段上也能抑制风险峰值。在 development "
+        "窗口，四条曲线在多数走廊上接近重合，说明该窗口的时变预报带来的可压低"
+        "空间较小——这是真实数据特征，非算法缺陷。需要强调的是，逐段序列用于展"
+        "示风险沿航线的变化形态，其统计意义上的结论由 4.9.5 节的扩样本配对检验"
+        "给出。",
         indent=True,
     )
 
     _add_heading(doc, "4.8.2 风险分布箱线分析", level=2)
     _add_para(
         doc,
-        "为进一步量化风险分布特征，绘制真实 24 小时航段的风险分布箱线图，如图 4-6 所示。",
+        "为进一步量化风险分布特征，绘制风险分布箱线图，如图 4-6 所示。图中每个"
+        "算法的箱体由 104 个规划算例的全部航段风险聚合而成（每箱约 600 个航段"
+        "样本），因此箱体反映的是跨走廊、跨时段的整体分布，而非单条航线的退化"
+        "结果。",
         indent=True,
     )
     _add_figure(
         doc,
         FIGURES / "fig-risk-distribution.png",
-        "图 4-6 真实 24h 航段风险分布箱线图（推荐目标）",
+        "图 4-6 逐段风险分布箱线图（聚合 104 个规划算例）",
     )
     _add_para(
         doc,
-        "由图 4-6 可知，在 holdout 窗口，本文 A* 与 Dijkstra 的箱子较窄且位"
-        "于低风险区间，而静态场与风险无关的箱子更宽且上移，表明后两者不仅在"
-        "均值上更差，且风险分布更分散、极端风险更高。这说明本文方法在多数航"
-        "段下都更好，且极端风险得到抑制，而不仅是均值意义上的改善。",
+        "由图 4-6 可知，本文 A* 与 Dijkstra 的箱体较窄且位于低风险区间，而静"
+        "态场与风险无关的箱体更宽且上移，表明后两者不仅在均值上更差，且风险分"
+        "布更分散、极端风险更高。这说明本文方法在多数航段下都更好，且极端风险"
+        "得到抑制，而不仅是均值意义上的改善。",
         indent=True,
     )
 
@@ -940,15 +1072,15 @@ def _build_4_9(doc: Document) -> None:
                 "2012.3 ms(dev) / 2147.5 ms(hold)",
                 "567 / 653",
                 "匹配对照基准",
-                "n=2窗口",
+                "n=104",
             ],
             [
                 "去风险项",
                 "风险与不确定性权重置零",
                 "与Full接近",
-                "同图",
-                "dev: 0%; hold: 风险+10.4%/+15.4%",
-                "n=1有效",
+                "与完整模型同图（同一评估器，仅 risk/uncertainty 权重置零）",
+                "dev: 0%; hold: 风险+10.4%/+15.4%；扩样本 246 单元多数持平、少数多付",
+                "n=246",
             ],
             [
                 "去启发式",
@@ -956,15 +1088,15 @@ def _build_4_9(doc: Document) -> None:
                 "14818.9 ms(dev) / 16839.5 ms(hold)",
                 "4185 / 4864",
                 "代价严格一致",
-                "n=2窗口",
+                "n=246",
             ],
             [
                 "去时变信息",
                 "静态场",
                 "≈Full",
                 "≈Full",
-                "hold: 航程同397.4 km; 风险+15.3%/+29.8%",
-                "n=2窗口",
+                "hold: 航程同397.4 km; 风险+15.3%/+29.8%；扩样本平均风险中位-6.47%",
+                "n=239",
             ],
         ],
     )
@@ -977,9 +1109,19 @@ def _build_4_9(doc: Document) -> None:
         "6～7 倍、耗时增加 7～8 倍，但代价严格相同，证明启发式加速不牺牲最优性"
         "。(3) No temporal（静态场）在 holdout 上航程与 Full 完全相同但风险高 "
         "15.3%/29.8%，证明“使用时变预报”的价值在于在同一条走廊上选出更安全的"
-        "通行时机。需说明的是，development 窗口上 Risk-blind 与 recommended 路"
-        "线完全相同，故有效样本 n=1（holdout），该结果仅用于现象说明，不构成"
-        "统计意义上的性能结论。",
+        "通行时机。",
+        indent=True,
+    )
+    _add_para(
+        doc,
+        "关于样本量的说明：在单算例设置下，development 窗口上 Risk-blind 与 "
+        "recommended 路线完全相同，故“去风险项”一档的有效样本仅为 n=1（holdout"
+        "），当时只能作为现象说明。将 Risk-blind 纳入 104 个扩样本算例后，可"
+        "比较单元增至 246 个：其中平均风险多付 >0 的为 41 个、最大风险多付 >0 "
+        "的为 27 个，其余单元与本文路线持平（中位数均为 0），最大多付约 29.8%"
+        "。这一“高度偏平”的分布说明：在多数走廊上风险权重不占主导地位，但在部"
+        "分走廊上忽略风险确实会付出显著代价。因此该档仍只作为“必须显式纳入时变"
+        "风险场”的动机证据，不单独作为本文方法的优势主张。",
         indent=True,
     )
     _add_para(
@@ -1046,7 +1188,7 @@ def _build_4_9(doc: Document) -> None:
         ],
         col_widths_cm=[2.4, 4.0, 5.4, 2.5],
         font_size_pt=7.5,
-        line_spacing_pt=10.5,
+        line_spacing=1.0,
     )
     _add_para(
         doc,
@@ -1128,9 +1270,11 @@ def _build_4_9(doc: Document) -> None:
     _add_heading(doc, "4.9.4 诚实性边界与本章结论适用范围", level=2)
     _add_para(
         doc,
-        "为避免论文结论被误读，本章明确以下边界：(1) 真实样本仅 2 个独立窗口"
-        "，development 窗口上三目标收敛到同一条路线，故质量结论的实际有效样本"
-        "为 n=1（holdout）；(2) 效率优势源自 admissible 启发式的正确工程实现，"
+        "为避免论文结论被误读，本章明确以下边界：(1) 天气层面的真实独立窗口"
+        "仅 2 个（holdout / development），这是冻结数据的客观限制；本章通过 "
+        "4.9.5 节的 104 个规划算例扩样本缓解样本量问题，但扩样本度量的是走廊"
+        "内不同起终点与时段的稳健性，不等于独立天气样本数增加；(2) 效率优势源"
+        "自 admissible 启发式的正确工程实现，"
         "而非新的搜索算法；(3) “最优性不变”限于同一离散时间展开图，连续海洋模"
         "型上的全局最优性未证明；(4) 静态场基线是构造基线，非某一公开算法的"
         "复现，优势应表述为“使用时变预报”这一设计选择的收益；(5) 扩展数减少不"
@@ -1139,6 +1283,123 @@ def _build_4_9(doc: Document) -> None:
         "本章未画风险场空间热力底图（数据未暴露投影矩阵）、路径地理空间叠加"
         "（网格为抽象索引无投影）、参数敏感性（无系统化扫参数据），相关缺失"
         "已在《第四章视觉证据计划》§4 声明。",
+        indent=True,
+    )
+
+    _add_heading(doc, "4.9.5 扩样本鲁棒性验证（104 个规划算例的配对聚合）", level=2)
+    _add_para(
+        doc,
+        "4.7 节的结论建立在规范算例之上，样本量有限。为检验其稳健性，按 4.6.2 "
+        "节所述构造 104 个规划算例，对本文方法与各基线作配对比较。配对的含义是"
+        "：每一个算例上，四种算法面对完全相同的起终点、出发时刻、风险场序列与"
+        "约束，仅搜索策略或目标函数不同，因此逐算例的差异可直接相减。由于差"
+        "异分布不服从正态假设，本章采用不依赖分布的精确符号检验（双侧，排除持"
+        "平单元）评价显著性。聚合结果如表 4-7 与图 4-8、图 4-9 所示。",
+        indent=True,
+    )
+    _add_table_caption(doc, "表 4-7 扩样本配对指标聚合（104 个规划算例）")
+    _add_table(
+        doc,
+        ["对比指标", "n", "P25", "中位数", "P75", "本文更优", "持平", "本文更差", "符号检验 p"],
+        [
+            [
+                "扩展状态数减少（vs Dijkstra）",
+                "246",
+                "70.53",
+                "84.24",
+                "88.77",
+                "246",
+                "0",
+                "0",
+                "<0.0001",
+            ],
+            [
+                "墙钟加速比（vs Dijkstra）",
+                "246",
+                "3.41",
+                "6.02",
+                "8.71",
+                "246",
+                "0",
+                "0",
+                "<0.0001",
+            ],
+            [
+                "平均航段风险变化（vs 静态场）",
+                "239",
+                "-13.48",
+                "-6.47",
+                "1.43",
+                "176",
+                "0",
+                "63",
+                "<0.0001",
+            ],
+            [
+                "最大航段风险变化（vs 静态场）",
+                "239",
+                "-18.92",
+                "-0.92",
+                "6.05",
+                "127",
+                "42",
+                "70",
+                "0.0001",
+            ],
+        ],
+        col_widths_cm=[5.2, 0.9, 1.3, 1.4, 1.3, 1.5, 1.0, 1.5, 1.4],
+        font_size_pt=8,
+    )
+    _add_figure(
+        doc,
+        FIGURES / "fig-sweep-delta-distribution.png",
+        "图 4-8 逐算例配对差异分布（扩展减少 / 最大风险 / 平均风险）",
+    )
+    _add_figure(
+        doc,
+        FIGURES / "fig-sweep-outcome-counts.png",
+        "图 4-9 逐算例胜负计数与精确符号检验 p 值",
+    )
+    _add_para(
+        doc,
+        "由表 4-7 与图 4-8、图 4-9 可得三点结论。第一，效率优势极其稳健：在 "
+        "246 个可比较单元上，本文方法的节点扩展数全部少于无信息 Dijkstra（更优 "
+        "246、持平 0、更差 0），扩展减少的中位数为 84.24%（四分位区间 70.53%～"
+        "88.77%），墙钟加速比的中位数为 6.02×，且全部单元的总代价严格相同。这"
+        "说明 4.7.1 节的效率结论并非特定算例的偶然结果，而是跨走廊、跨时段一致"
+        "成立。第二，平均风险优势稳健显著：在 239 个可比较单元上，本文方法更优 "
+        "176 个、更差 63 个，平均风险变化的中位数为 -6.47%，符号检验 p<0.0001"
+        "，且 holdout（-9.68%）与 development（-5.90%）两窗口方向一致。第三，"
+        "最大风险优势具有走廊相关性：整体上本文方法更优 127 个、持平 42 个、"
+        "更差 70 个，中位数仅为 -0.92%；分窗口看，development 的中位数为 "
+        "-12.95%（p<0.0001）而 holdout 的中位数为 0.00（更优 46、持平 32、更差 "
+        "45，p=1.0000）。因此，4.7.2 节给出的最大风险降幅只能作为规范算例上的"
+        "观测值，不能外推为普遍规律；本文在结论中仅将“平均风险显著降低”作为一"
+        "般性主张。",
+        indent=True,
+    )
+    _add_figure(
+        doc,
+        FIGURES / "fig-sweep-risk-vs-hops.png",
+        "图 4-10 最大风险变化随航段长度的分布（按窗口着色）",
+    )
+    _add_para(
+        doc,
+        "图 4-10 进一步给出最大风险变化与航段长度（网格跳数）的关系：风险优势"
+        "主要集中在 4、6、8 跳的走廊上，而在 5、7 跳的走廊上与静态场基本持平。"
+        "结合网格结构可知，这些走廊上可替代路径较少，时变信息的调度空间有限，"
+        "因此最大风险的改善幅度依赖于具体走廊的拓扑与冰情分布，而非算法在所有"
+        "情形下的必然收益。此外，在 104 个算例中，静态场基线有 2 个算例在 24 h "
+        "时限内无法求得可行航线（本文方法可行），说明静态规划在部分长航段上的"
+        "可达性弱于时变规划。",
+        indent=True,
+    )
+    _add_para(
+        doc,
+        "需要说明的是，扩样本并未增加独立天气样本的数量：104 个算例共享同样 "
+        "2 个冻结窗口的风险预报序列，其起终点与出发时刻位于同一走廊内，因此"
+        "这些算例度量的是算法在走廊内不同起终点与时段上的稳健性，而不是对 "
+        "104 个独立天气系统的验证。该边界已在 4.9.4 节列出。",
         indent=True,
     )
 
@@ -1162,8 +1423,29 @@ def _build_4_10(doc: Document) -> None:
         "规模单调增大（5.67×→17.58×）。本章还发现真实北极海洋数据违反 FIFO "
         "性质（两窗口 43 500 / 40 776 次 interval 级违反），使教科书时依赖最"
         "短路的支配剪枝在真实数据上不安全，据此采取“先证明、后启用”的保守工程"
-        "纪律。这些结果为下一章（第五章）的多模式航路可视化与决策展示提供了"
-        "可执行的多模式航路候选、事件触发重规划建议与关键风险摘要接口。",
+        "纪律。",
+        indent=True,
+    )
+    _add_para(
+        doc,
+        "针对单算例样本量不足的问题，本章进一步构造了 104 个规划算例（2 个冻结"
+        "窗口 × 走廊内 5 个起点 × 短/中/长三档航段 × 0/36/72/108 h 四个出发时"
+        "刻）进行扩样本配对验证（4.9.5 节）。结果表明：效率优势极其稳健，246 "
+        "个可比较单元上节点扩展数全部少于无信息 Dijkstra（中位数减少 84.24%、"
+        "加速中位数 6.02×、总代价 100% 严格相同）；平均航段风险显著降低（更优 "
+        "176、更差 63，中位数 -6.47%，符号检验 p<0.0001，两窗口方向一致）；而"
+        "最大航段风险的降低具有走廊相关性（整体中位数 -0.92%，development 显著"
+        "而 holdout 持平），因此本章仅将平均风险的改善作为一般性主张，最大风险"
+        "的降幅仅作为规范算例上的观测值报告。此外，静态场基线在 2 个算例上无法"
+        "在 24 h 时限内求得可行航线，说明时变规划在部分长航段上的可达性优于静"
+        "态规划。需要重申的是，扩样本并未增加独立天气样本数，104 个算例共享同"
+        "样 2 个冻结窗口，度量的是走廊内不同起终点与时段上的稳健性。",
+        indent=True,
+    )
+    _add_para(
+        doc,
+        "这些结果为下一章（第五章）的多模式航路可视化与决策展示提供了可执行"
+        "的多模式航路候选、事件触发重规划建议与关键风险摘要接口。",
         indent=True,
     )
 
