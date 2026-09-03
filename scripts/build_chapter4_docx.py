@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Build Chapter 4 Word document from existing evidence.
+"""Build the Chinese Chapter 4 Word document from governed evidence.
 
-Generates ``docs/CHAPTER4.docx`` from the figures, tables and data already
-produced by the algorithm-comparison pipeline.  No fabricated numbers; every
-figure and table is referenced from the underlying artefacts under
-``.runtime/experiments/c-algorithm-comparison-*``.
+Generates ``docs/第四章.docx`` from the algorithm-comparison artefacts and the
+pinned retrospective route-map export. No fabricated numbers: every figure
+and table is referenced from its underlying evidence under ``.runtime``.
 
 Run with::
 
@@ -18,7 +17,7 @@ from pathlib import Path
 
 from docx import Document
 from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_TABLE_ALIGNMENT
-from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_TAB_ALIGNMENT
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt
@@ -27,6 +26,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 FIGURES = (
     REPO_ROOT.parent / ".runtime" / "experiments" / "c-algorithm-comparison-summary" / "figures"
 )
+ROUTE_MAP_DIR = REPO_ROOT.parent / ".runtime" / "experiments" / "c-chapter4-route-map"
 REFERENCE_DOCX = Path("/mnt/c/Users/asd233/Downloads/第一章(1).docx")
 OUTPUT = REPO_ROOT / "docs" / "第四章.docx"
 
@@ -699,6 +699,38 @@ def _build_4_5(doc: Document) -> None:
         "摘要。该组织方式既支持长期航路选择，也支持滚动窗口内的局部调整。",
         indent=True,
     )
+    _add_para(
+        doc,
+        "为直观检验上述结果在地理空间中的执行语义，选取 Tromsø 外海至 "
+        "Isfjorden 外缘研究航行场景，将 2026 年 2 月 15 日 12:00 UTC 的风险场、"
+        "已航行轨迹以及重规划前后的剩余航线叠加展示，如图 4-2 所示。图中风险"
+        "分值仅对有效海域着色，陆地与数据不可用区域分别独立标识，避免将不可"
+        "通行或未知状态误解释为普通高风险。",
+        indent=True,
+    )
+    _add_figure(
+        doc,
+        ROUTE_MAP_DIR / "fig-route-replanning-map.png",
+        "图 4-2 时变风险场下的航行轨迹与动态重规划航线（Tromsø 外海—Isfjorden 外缘）",
+    )
+    _add_para(
+        doc,
+        "由图 4-2 可知，12:00 UTC 作出 R3 重规划决定时，船舶仍位于 R2 的当前"
+        "执行航段，未立即跳转到新航线；直至 14:17:23 UTC 到达下一执行节点"
+        "（18.4°E，72.5333°N）后，R3 才正式生效。局部放大图显示，被替代的 "
+        "R2 继续向北至 72.9°N 后再向西转向，而 R3 在生效点后提前向西绕行，"
+        "随后重新汇入共同走廊。该过程保持已执行轨迹不变，说明事件触发重规划"
+        "能够在更新剩余航线的同时维持航迹连续性，避免因计划切换产生位置瞬移。",
+        indent=True,
+    )
+    _add_para(
+        doc,
+        "需要说明的是，图 4-2 使用具有经纬度和风险帧的回顾性动态回放证据，"
+        "用于说明航线修订、延迟接纳与无瞬移语义；它不是实时因果重规划试验，"
+        "也不构成实船验证或适航级能力证明。该单场景图仅增强空间可解释性，不"
+        "增加 4.7—4.9 节统计比较中的独立样本数量。",
+        indent=True,
+    )
 
     _add_heading(doc, "4.5.3 航路规划结果的下游接口", level=2)
     _add_para(
@@ -944,15 +976,15 @@ def _build_4_7(doc: Document) -> None:
     _add_heading(doc, "4.7.3 可扩展性分析（合成规模曲线）", level=2)
     _add_para(
         doc,
-        "为验证算法随问题规模的可扩展性，在四档合成算例上进行对比，运行时间随网格规模的变化如图 4-2 所示。",  # noqa: E501
+        "为验证算法随问题规模的可扩展性，在四档合成算例上进行对比，运行时间随网格规模的变化如图 4-3 所示。",  # noqa: E501
         indent=True,
     )
     _add_figure(
-        doc, FIGURES / "fig-runtime-scale-log.png", "图 4-2 运行时间随网格规模变化（双对数）"
+        doc, FIGURES / "fig-runtime-scale-log.png", "图 4-3 运行时间随网格规模变化（双对数）"
     )
     _add_para(
         doc,
-        "由图 4-2 可知，本文 A*（实线）与无信息 Dijkstra（虚线）的运行时间均"
+        "由图 4-3 可知，本文 A*（实线）与无信息 Dijkstra（虚线）的运行时间均"
         "随网格格点数对数线性增长，但本文 A* 始终位于 Dijkstra 下方。在 fastest "
         "目标下，加速比从 5.67×（5×7×7）单调增大至 17.58×（17×29×37），表明"
         "问题规模越大，启发式加速的绝对收益越显著。该结果说明本文方法在更大"
@@ -963,20 +995,20 @@ def _build_4_7(doc: Document) -> None:
     _add_heading(doc, "4.7.4 效率-质量二维权衡", level=2)
     _add_para(
         doc,
-        "为进一步验证“效率提升不以牺牲解质量为代价”，绘制运行时间与总代价、最大风险的二维散点图，分别如图 4-3 与图 4-4 所示。两图均基于 104 个规划算例的扩样本数据绘制，每一散点对应一个可行（算例, 目标）单元。",  # noqa: E501
+        "为进一步验证“效率提升不以牺牲解质量为代价”，绘制运行时间与总代价、最大风险的二维散点图，分别如图 4-4 与图 4-5 所示。两图均基于 104 个规划算例的扩样本数据绘制，每一散点对应一个可行（算例, 目标）单元。",  # noqa: E501
         indent=True,
     )
     _add_figure(
-        doc, FIGURES / "fig-runtime-cost.png", "图 4-3 运行时间—总代价关系（104 个规划算例）"
+        doc, FIGURES / "fig-runtime-cost.png", "图 4-4 运行时间—总代价关系（104 个规划算例）"
     )
     _add_figure(
-        doc, FIGURES / "fig-runtime-risk.png", "图 4-4 运行时间—最大风险关系（104 个规划算例）"
+        doc, FIGURES / "fig-runtime-risk.png", "图 4-5 运行时间—最大风险关系（104 个规划算例）"
     )
     _add_para(
         doc,
-        "由图 4-3 可知，本文 A*（蓝色）与 Dijkstra（橙色）在总代价轴上几乎重"
+        "由图 4-4 可知，本文 A*（蓝色）与 Dijkstra（橙色）在总代价轴上几乎重"
         "合，但在运行时间轴上横向拉开 1～2 个数量级，证明启发式加速未牺牲解代"
-        "价；该结论在 246 个可比较单元上一致成立，而非仅来自个别算例。由图 4-4 "
+        "价；该结论在 246 个可比较单元上一致成立，而非仅来自个别算例。由图 4-5 "
         "可知，本文 A* 与 Dijkstra 共享同一目标函数并得到相同总代价，其风险点"
         "相互重合；图中风险差异主要用于比较 Static-field 与 Risk-blind 的风险"
         "变化，而不是声称 A* 相对 Dijkstra 降低风险。",
@@ -1004,18 +1036,18 @@ def _build_4_8(doc: Document) -> None:
     _add_heading(doc, "4.8.1 逐段风险时间序列", level=2)
     _add_para(
         doc,
-        "为直观展示本文方法对风险峰值的抑制效果，绘制逐段风险时间序列，如图 4-5 "
+        "为直观展示本文方法对风险峰值的抑制效果，绘制逐段风险时间序列，如图 4-6 "
         "所示。为使结论不依赖单一航线，图中每个窗口给出 3 条代表性走廊（分别取自短、中、长三档航段），共 2×3 个子图，即每窗口 n=3 条航线。",  # noqa: E501
         indent=True,
     )
     _add_figure(
         doc,
         FIGURES / "fig-risk-timeseries.png",
-        "图 4-5 逐段风险序列（每窗口 3 条代表走廊，n=3/窗口）",
+        "图 4-6 逐段风险序列（每窗口 3 条代表走廊，n=3/窗口）",
     )
     _add_para(
         doc,
-        "由图 4-5 可知，在 holdout 窗口的多数走廊上，本文 A*（蓝色）的逐段风险"
+        "由图 4-6 可知，在 holdout 窗口的多数走廊上，本文 A*（蓝色）的逐段风险"
         "位于静态场（绿色）与风险无关（红色）曲线下方，且峰值被压制，表明本文"
         "方法不仅在均值上更优，且在极端航段上也能抑制风险峰值。在 development "
         "窗口，四条曲线在多数走廊上接近重合，说明该窗口的时变预报带来的可压低"
@@ -1028,7 +1060,7 @@ def _build_4_8(doc: Document) -> None:
     _add_heading(doc, "4.8.2 风险分布箱线分析", level=2)
     _add_para(
         doc,
-        "为进一步量化风险分布特征，绘制风险分布箱线图，如图 4-6 所示。图中每个"
+        "为进一步量化风险分布特征，绘制风险分布箱线图，如图 4-7 所示。图中每个"
         "算法的箱体由 104 个规划算例的全部航段风险聚合而成（每箱约 600 个航段"
         "样本），因此箱体反映的是跨走廊、跨时段的整体分布，而非单条航线的退化"
         "结果。",
@@ -1037,11 +1069,11 @@ def _build_4_8(doc: Document) -> None:
     _add_figure(
         doc,
         FIGURES / "fig-risk-distribution.png",
-        "图 4-6 逐段风险分布箱线图（聚合 104 个规划算例）",
+        "图 4-7 逐段风险分布箱线图（聚合 104 个规划算例）",
     )
     _add_para(
         doc,
-        "由图 4-6 可知，本文 A* 与 Dijkstra 的箱体较窄且位于低风险区间，而静"
+        "由图 4-7 可知，本文 A* 与 Dijkstra 的箱体较窄且位于低风险区间，而静"
         "态场与风险无关的箱体更宽且上移，表明后两者不仅在均值上更差，且风险分"
         "布更分散、极端风险更高。这说明本文方法在多数航段下都更好，且极端风险"
         "得到抑制，而不仅是均值意义上的改善。",
@@ -1139,10 +1171,10 @@ def _build_4_9(doc: Document) -> None:
         "本章对 6 个改进候选（FIFO 支配剪枝、轨迹复用、SMO-A* 共享记忆化、"
         "ARA* anytime 备选、bounded LRU 风险采样缓存、non-FIFO exact-arrival 与"
         "完整 Pareto frontier）进行了完整评估。结果表明，没有一个候选通过最"
-        "终门禁、没有一个被启用，如图 4-7 所示。",
+        "终门禁、没有一个被启用，如图 4-8 所示。",
         indent=True,
     )
-    _add_figure(doc, FIGURES / "fig-funnel.png", "图 4-7 改进候选门禁漏斗：当前实现未被超越")
+    _add_figure(doc, FIGURES / "fig-funnel.png", "图 4-8 改进候选门禁漏斗：当前实现未被超越")
     _add_table_caption(doc, "表 4-5 改进候选的正向观测、失败门禁与当前结论")
     _add_table(
         doc,
@@ -1192,7 +1224,7 @@ def _build_4_9(doc: Document) -> None:
     )
     _add_para(
         doc,
-        "图4-7与表4-5共同给出的不是简单的“失败清单”，而是一组同源、可证"
+        "图4-8与表4-5共同给出的不是简单的“失败清单”，而是一组同源、可证"
         "伪的对抗性消融实验。6个候选分别攻击当前方法的标签数量、重复搜索、风险"
         "采样、首解速度和非FIFO语义处理等瓶颈；其中多个候选曾在synthetic或局部工程"
         "指标上获得40%～80%量级的改善，但仍因真实输入前提、单元回归、跨规模"
@@ -1280,9 +1312,10 @@ def _build_4_9(doc: Document) -> None:
         "复现，优势应表述为“使用时变预报”这一设计选择的收益；(5) 扩展数减少不"
         "等于端到端吞吐提升，本章未测完整 12 路线四层规划；(6) 反向论证仅指"
         "“未被超越 + 正确性保守”，不是“性能最优”或“生产级稳定优势”的声明；(7) "
-        "本章未画风险场空间热力底图（数据未暴露投影矩阵）、路径地理空间叠加"
-        "（网格为抽象索引无投影）、参数敏感性（无系统化扫参数据），相关缺失"
-        "已在《第四章视觉证据计划》§4 声明。",
+        "图4-2已使用发布的 EPSG:4326 空间回放证据叠加风险场与重规划航线，但"
+        "该图仅为单场景回顾性展示，不增加独立天气样本，也不构成实时因果或实船"
+        "验证；参数敏感性仍因缺少系统化扫参数据而未开展，相关边界已在《第四章"
+        "视觉证据计划》§4 声明。",
         indent=True,
     )
 
@@ -1294,7 +1327,7 @@ def _build_4_9(doc: Document) -> None:
         "：每一个算例上，四种算法面对完全相同的起终点、出发时刻、风险场序列与"
         "约束，仅搜索策略或目标函数不同，因此逐算例的差异可直接相减。由于差"
         "异分布不服从正态假设，本章采用不依赖分布的精确符号检验（双侧，排除持"
-        "平单元）评价显著性。聚合结果如表 4-7 与图 4-8、图 4-9 所示。",
+        "平单元）评价显著性。聚合结果如表 4-7 与图 4-9、图 4-10 所示。",
         indent=True,
     )
     _add_table_caption(doc, "表 4-7 扩样本配对指标聚合（104 个规划算例）")
@@ -1353,16 +1386,16 @@ def _build_4_9(doc: Document) -> None:
     _add_figure(
         doc,
         FIGURES / "fig-sweep-delta-distribution.png",
-        "图 4-8 逐算例配对差异分布（扩展减少 / 最大风险 / 平均风险）",
+        "图 4-9 逐算例配对差异分布（扩展减少 / 最大风险 / 平均风险）",
     )
     _add_figure(
         doc,
         FIGURES / "fig-sweep-outcome-counts.png",
-        "图 4-9 逐算例胜负计数与精确符号检验 p 值",
+        "图 4-10 逐算例胜负计数与精确符号检验 p 值",
     )
     _add_para(
         doc,
-        "由表 4-7 与图 4-8、图 4-9 可得三点结论。第一，效率优势极其稳健：在 "
+        "由表 4-7 与图 4-9、图 4-10 可得三点结论。第一，效率优势极其稳健：在 "
         "246 个可比较单元上，本文方法的节点扩展数全部少于无信息 Dijkstra（更优 "
         "246、持平 0、更差 0），扩展减少的中位数为 84.24%（四分位区间 70.53%～"
         "88.77%），墙钟加速比的中位数为 6.02×，且全部单元的总代价严格相同。这"
@@ -1381,11 +1414,11 @@ def _build_4_9(doc: Document) -> None:
     _add_figure(
         doc,
         FIGURES / "fig-sweep-risk-vs-hops.png",
-        "图 4-10 最大风险变化随航段长度的分布（按窗口着色）",
+        "图 4-11 最大风险变化随航段长度的分布（按窗口着色）",
     )
     _add_para(
         doc,
-        "图 4-10 进一步给出最大风险变化与航段长度（网格跳数）的关系：风险优势"
+        "图 4-11 进一步给出最大风险变化与航段长度（网格跳数）的关系：风险优势"
         "主要集中在 4、6、8 跳的走廊上，而在 5、7 跳的走廊上与静态场基本持平。"
         "结合网格结构可知，这些走廊上可替代路径较少，时变信息的调度空间有限，"
         "因此最大风险的改善幅度依赖于具体走廊的拓扑与冰情分布，而非算法在所有"

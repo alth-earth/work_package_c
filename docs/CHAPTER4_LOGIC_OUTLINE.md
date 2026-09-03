@@ -53,8 +53,8 @@
 
 4.5 事件触发动态重规划与弱通信边缘决策
     4.5.1 事件触发机制与触发阈值
-    4.5.2 关键风险摘要与边缘信息压缩
-    4.5.3 弱通信条件下的导航决策接口
+    4.5.2 多层航路结果与关键风险摘要（含动态重规划航线图）
+    4.5.3 航路规划结果的下游接口
 
 4.6 仿真实验设计
     4.6.1 实验目的与对比对象
@@ -74,7 +74,9 @@
 4.9 消融、鲁棒性与反向论证
     4.9.1 模块消融研究（full / no_risk / no_heuristic / no_temporal）
     4.9.2 改进候选门禁反向论证
-    4.9.3 诚实性边界与本章结论适用范围
+    4.9.3 真实数据违反 FIFO 的科学发现
+    4.9.4 诚实性边界与本章结论适用范围
+    4.9.5 扩样本鲁棒性验证（104 个规划算例的配对聚合）
 
 4.10 本章小结
 ```
@@ -127,10 +129,11 @@
 |---|---|---|---|---|---|---|---|---|
 | 算法框架完整闭环 | 整体性 | — | 描述性 | 图4-1 框架 | — | — | — | 仅框架示意，不证明性能 |
 | 比较公平 | 公平性 | 4 算法 | 全部 | — | 表4-1 公平性 | — | `benchmark_algorithm_comparison.py` | 仅"实验设置一致"，非性能结论 |
-| 搜索效率更高 | 节点扩展数、运行时间、加速比 | 无信息 Dijkstra | synthetic 4 档 + 真实 104 算例 | 图4-2 runtime-scale(log-log)、图4-3 runtime-cost、图4-4 runtime-risk、图4-7 sweep 分布/胜负 | 表4-2 效率对比 | `summary-data.csv`、`summary-sweep.csv` | `--real-segment rolling_0_24h`、扩样本 sweep | 246/246 单元扩展减少（中位数 -84.24%）、代价一致 |
-| 航线质量更好 | 平均风险、最大风险 | 静态场规划 | 真实 104 算例 | 图4-5 风险时序、图4-6 风险分布、图4-7 质量柱状、图4-9 风险-航程 | 表4-3 质量对比 | `summary-data.csv` `summary-sweep.csv` raw JSON | 同上 | 平均风险稳健显著（176/63，p<0.0001）；**最大风险走廊相关**（holdout 中位数 0） |
-| 可扩展性 | 绝对扩展差值、加速比 | 无信息 Dijkstra | synthetic 4 档 | 图4-2 | — | 同上 | `--synthetic-profile {small,medium,large,stress}` | 百分比已饱和，用绝对差值 |
-| 风险感知必要性 | 风险/时间/航程权衡 | 风险无关基线 | 真实 104 算例 | （图4-5、4-6 内含）、图4-7/4-8 | 表4-4 消融 | raw JSON `summary-sweep.csv` | `--algorithm risk_blind` | 单算例 n=1（development=0%）；扩样本后约 239 单元，只作动机 |
+| 动态重规划保持航迹连续 | 决策/生效时刻、R2/R3几何、已航迹 | 被替代R2 | 冻结回顾性空间回放 | 图4-2航线图 | — | `route-overlay.csv`、风险栅格CSV | 固定R3与12:00风险帧 | 单场景回顾性展示，非实时因果或实船证明 |
+| 搜索效率更高 | 节点扩展数、运行时间、加速比 | 无信息Dijkstra | synthetic 4档 + 真实104算例 | 图4-3、图4-4、图4-5、图4-9/4-10 | 表4-2效率对比 | `summary-data.csv`、`summary-sweep.csv` | 真实24h与扩样本sweep | 246/246单元扩展减少（中位数84.24%）、代价一致 |
+| 航线质量更好 | 平均风险、最大风险 | 静态场规划 | 真实104算例 | 图4-6、图4-7、图4-11 | 表4-3质量对比 | `summary-data.csv`、`summary-sweep.csv`、raw JSON | 同上 | 平均风险稳健显著；最大风险走廊相关 |
+| 可扩展性 | 绝对扩展差值、加速比 | 无信息Dijkstra | synthetic 4档 | 图4-3 | — | 同上 | `--synthetic-profile {small,medium,large,stress}` | 百分比已饱和，用绝对差值 |
+| 风险感知必要性 | 风险/时间/航程权衡 | 风险无关基线 | 真实104算例 | 图4-6/4-7、图4-9/4-10 | 表4-4消融 | raw JSON、`summary-sweep.csv` | `--algorithm risk_blind` | 仅作显式风险必要性的动机证据 |
 | 改进候选未超越 | 候选评估结果 | 改进候选 | SSOT §3 | 图4-8 漏斗 | 表4-5 候选评估矩阵 | SSOT 引用 | — | "未被超越"≠"性能最优" |
 | 真实数据违反 FIFO | interval 级负跳变计数 | FIFO 假设 | 真实 145 帧 | — | 表4-6 FIFO 反例 | SSOT 引用 | M24 分支 §P0.2-M1.12 | 改变了算法设计，非性能证据 |
 
@@ -138,22 +141,23 @@
 
 ## 5. 已有证据清单
 
-### 5.1 已生成的图（9 类 × 中英双语 × PNG+SVG）
+### 5.1 第四章使用的图（11张）
 
-位于 `/root/my_project/.runtime/experiments/c-algorithm-comparison-summary/figures/`：
+算法图位于 `.runtime/experiments/c-algorithm-comparison-summary/figures/`；航线图及其可编辑证据位于 `.runtime/experiments/c-chapter4-route-map/`。
 
 | 文件 | 论文图号 | 用途 |
 |---|---|---|
 | `fig-framework.png` | 图4-1 | 总体技术框架 |
-| `fig-runtime-scale-log.png` | 图4-2 | 规模—运行时间（双对数） |
-| `fig-runtime-cost.png` | 图4-3 | 运行时间—总代价散点（扩样本版，n≥239/算法） |
-| `fig-runtime-risk.png` | 图4-4 | 运行时间—最大风险散点（扩样本版，n≥239/算法） |
-| `fig-risk-timeseries.png` | 图4-5 | 逐段风险时序（扩样本版：每窗口 3 条代表走廊，n=3/窗口） |
-| `fig-risk-distribution.png` | 图4-6 | 风险分布箱线（扩样本版：聚合 104 算例全部航段） |
-| `fig-scaling-expansion.png` | 图4-7 | 规模—扩展数（线性，已有） |
-| `fig-risk-comparison.png` | 图4-8 | 风险对比柱状（已有） |
-| `fig-speedup.png` | 图4-9 | 加速比（已有） |
-| `fig-funnel.png` | 图4-10 | 改进候选门禁漏斗（反向论证） |
+| `fig-route-replanning-map.png`/`.svg` | 图4-2 | 风险场、起终点、已航迹与R2/R3动态重规划 |
+| `fig-runtime-scale-log.png` | 图4-3 | 规模—运行时间（双对数） |
+| `fig-runtime-cost.png` | 图4-4 | 运行时间—总代价散点（扩样本版） |
+| `fig-runtime-risk.png` | 图4-5 | 运行时间—最大风险散点（扩样本版） |
+| `fig-risk-timeseries.png` | 图4-6 | 逐段风险时序（每窗口3条代表走廊） |
+| `fig-risk-distribution.png` | 图4-7 | 风险分布箱线（聚合104算例全部航段） |
+| `fig-funnel.png` | 图4-8 | 改进候选门禁漏斗（反向论证） |
+| `fig-sweep-delta-distribution.png` | 图4-9 | 逐算例配对差异分布 |
+| `fig-sweep-outcome-counts.png` | 图4-10 | 胜负计数与符号检验 |
+| `fig-sweep-risk-vs-hops.png` | 图4-11 | 最大风险变化与航段长度 |
 
 ### 5.2 已生成的表（5 张）
 
@@ -173,17 +177,25 @@
 - 真实 6h 2 窗口：`c-algorithm-comparison-{holdout,development}-6h/comparison.json`（诚实性对照）
 - 汇总：`c-algorithm-comparison-summary/{summary-data.csv, summary-tables.md}`
 
+### 5.4 动态重规划航线图构件
+
+- 固定输入：`work_package_d/output/formal-motion-original-dynamic-viewer-package-v1/{bundle.json,gebco_basemap.png}`。
+- 输入摘要：bundle `7d513b40...8fd4f`，底图 `924e8eea...6ada`；绘图前严格校验。
+- 输出：`c-chapter4-route-map/{fig-route-replanning-map.png,fig-route-replanning-map.svg,route-overlay.csv,risk-frame-20260215T120000Z.csv,metadata.json}`。
+- 生成过程只读取发布字段，不运行规划器，不重算风险，也不混用2026-09-03重建但无重规划事件的新包。
+
 ---
 
-## 6. 缺失实验/图表清单
+## 6. 空间图证据边界与缺失实验清单
 
-以下 4 项**严格未实现**，仅声明缺失原因。**不虚构数据、不画虚假误差棒。**
+图4-2已补充空间回放证据；其余缺失实验只声明原因。**不虚构数据、不画虚假误差棒。**
 
 ### 6.1 风险场空间热力底图与路径地理空间叠加图
 
-- 真实风险场仅在 commit 内以 digest 索引，独立 zst 文件不含网格坐标到经纬度的投影矩阵。网格为 31×11 抽象索引，路径节点仅 `(row, col)`。
-- 强行画需反归一化 zst 帧、投影矩阵、坐标映射，三者均未暴露，违反"禁止编造不存在的数据"。
-- 替代：图4-5 时序图用 `step_edge_risk_score` 逐段呈现风险沿航线的变化；图4-6 分布图直接呈现风险统计特征。
+- 冻结空间回放包已经提供EPSG:4326底图、31×11风险网格坐标、R2/R3航路、连续航迹和重规划事件，图4-2据此直接生成，不进行坐标反推或风险重算。
+- 风险层固定为2026-02-15 12:00 UTC决策帧；14:17:23在下一执行节点接纳R3。图中同时标示起终点、已航迹、被替代R2和生效R3。
+- 证据仅支持研究航行仿真的回顾性空间展示、延迟接纳和无瞬移语义；不支持实时因果重规划、实船效果或适航级声明，也不增加独立天气样本。
+- 可编辑PNG/SVG、航路CSV、风险CSV和元数据位于 `.runtime/experiments/c-chapter4-route-map/`，源摘要或事件链漂移时绘图脚本失败闭锁。
 
 ### 6.2 `no_replanning` / `no_correction` 独立消融档
 
@@ -200,7 +212,7 @@
 ### 6.4 development 24h 上 `risk_blind` 与 `recommended` 路线重合
 
 - development 窗口 risk 权重不起决定性作用，**真实数据特征**，非缺失。
-- 规范算例图4-4/4-6 **明确标注 `dev / risk_blind ≡ recommended`**，避免读者误判 n=1 偏差。
+- 规范算例图4-5/4-7明确标注 `dev / risk_blind ≡ recommended`，避免读者误判样本偏差。
 - 扩样本（2026-09-01，104 算例，主报告 §12）后，risk_blind 已加入全部算例并给出约 239 个可比较单元的动机证据分布；**不再只有 n=1**。单算例图仍保留 n=1 标注。
 
 ---
