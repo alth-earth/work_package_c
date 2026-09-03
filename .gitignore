@@ -16,3 +16,5 @@ build/
 data/
 output/
 cache/
+docs/*.docx
+docs/tmp/
