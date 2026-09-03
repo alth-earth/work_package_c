@@ -148,3 +148,31 @@ Orchestrator 不把该集合注入 Viewer bundle，D 则回退原始 waypoint/ti
 `FORMULA_DERIVED_ENGINEERING_REFERENCE`、`real_vessel_calibrated=false`。连续走廊证明也只
 声明 `CONTINUOUS_IN_DECLARED_RASTER_MODEL`；`navigation_grade=false`、bathymetry/UKC 未启用。
 因此本合同中的“生产”仅表示当前工程仿真正式消费路径，不表示实船校准、导航认证或适航证明。
+
+### Route motion qualification evidence v1（2026-09-02）
+
+`c.route-motion-qualification-evidence.v1` 是 C-owned、可选的 motion 证据 artifact，
+服务于现有两个 motion wire shape。它不改变 `cd.route-motion-set.v1` 或
+`cd.route-motion-candidate-set.v1`；RoutePlanV3、waypoint/ETA/metrics、plan identity 和
+正式 motion record 继续保持权威。CLI 将证据写在 motion JSON 同目录，并纳入同目录的
+`checksums.json`。
+
+producer 以确定性顺序先尝试起终点大圆边，再尝试有界的非相邻 waypoint-index 捷径；
+每条捷径都经过完整时域 envelope，候选端点只能是原始 RoutePlan waypoint。最终候选使用
+route-level joint cubic B-spline；单角 trim 严格小于 `0.5` 个相邻航段，任一共享航段的
+总 trim 不超过 `0.90` 个航段。被捷径跳过的 waypoint 仍是严格 ETA/弧长 anchor，但不写入
+曲线几何。
+
+资格门禁顺序固定为
+`sea_land_hard_mask → temporal_risk_coverage → corridor_allowed_area → manoeuvring →
+eta_speed → risk_non_degradation → adaptive_trust_deviation`。`hard_mask`、`LAND`、
+`DATA_UNAVAILABLE`、unknown、缺帧/部分 RiskWindow、越界/外推、走廊不确定、anchor 非单调
+及任一曲线/ETA 门禁失败均 fail-closed 到 `RAW_PASSTHROUGH`。adaptive trust 使用
+candidate→raw、raw→candidate 双向偏离和 anchor 投影，并随已证明的 raster 净空收紧；无法
+证明净空即回退。`RiskSampler.sample_interval` 与 swept-cell temporal envelope 是正式
+时域 API，普通逐点采样不构成完整时域证明。
+
+Orchestrator 校验证据的 identity、producer/RiskWindow digest、record cardinality、
+plan/objective binding 和 `details_digest`；没有 sidecar 的旧 v1 motion 目录继续可读。
+证据与曲线仍仅代表工程仿真：`real_vessel_calibrated=false`、`navigation_grade=false`，
+且不启用 bathymetry/UKC。

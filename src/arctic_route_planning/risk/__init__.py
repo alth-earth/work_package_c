@@ -7,16 +7,24 @@ from .errors import (
     RiskSamplingError,
 )
 from .experimental_cache import ExperimentalRiskSampler, SampleCacheMode
-from .sampler import RiskIdentity, RiskSampler, SampledRisk
+from .sampler import (
+    RiskIdentity,
+    RiskIntervalSample,
+    RiskSampler,
+    SampledRisk,
+    SweptTemporalEnvelope,
+)
 
 __all__ = [
     "ExperimentalRiskSampler",
     "IncompatibleRiskFramesError",
     "RiskCoverageError",
     "RiskIdentity",
+    "RiskIntervalSample",
     "RiskOutOfBoundsError",
     "RiskSampler",
     "RiskSamplingError",
     "SampleCacheMode",
     "SampledRisk",
+    "SweptTemporalEnvelope",
 ]

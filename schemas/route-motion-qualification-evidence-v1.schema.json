@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://arctic-route.local/schemas/route-motion-qualification-evidence-v1.schema.json",
+  "title": "C Route Motion Qualification Evidence v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "evidence_id", "producer_digest", "risk_window_digest", "records"
+  ],
+  "anyOf": [
+    {"required": ["motion_set_id"]},
+    {"required": ["motion_candidate_set_id"]}
+  ],
+  "properties": {
+    "schema_version": {"const": "c.route-motion-qualification-evidence.v1"},
+    "evidence_id": {
+      "type": "string",
+      "pattern": "^route-motion-qualification-evidence-sha256-[0-9a-f]{64}$"
+    },
+    "producer_digest": {"$ref": "#/$defs/digest"},
+    "risk_window_digest": {"$ref": "#/$defs/digest"},
+    "motion_set_id": {
+      "type": "string",
+      "pattern": "^route-motion-set-sha256-[0-9a-f]{64}$"
+    },
+    "motion_candidate_set_id": {
+      "type": "string",
+      "pattern": "^route-motion-candidate-set-sha256-[0-9a-f]{64}$"
+    },
+    "records": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/record"}
+    }
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact_kind", "artifact_id", "objective_mode", "planning_layer", "plan_id",
+        "mode", "fallback_reason", "raw_route_digest", "details_digest", "details",
+        "diagnostics"
+      ],
+      "properties": {
+        "artifact_kind": {"enum": ["motion_set", "motion_candidate_set"]},
+        "artifact_id": {
+          "type": "string",
+          "pattern": "^route-motion-(set|candidate-set)-sha256-[0-9a-f]{64}$"
+        },
+        "objective_mode": {
+          "enum": ["fastest", "low_risk", "recommended", null]
+        },
+        "planning_layer": {
+          "enum": [
+            "full_voyage", "main_corridor_24_72h", "rolling_0_24h", "executable_0_6h"
+          ]
+        },
+        "plan_id": {"type": "string", "pattern": "^route-v3-sha256-[0-9a-f]{64}$"},
+        "mode": {"enum": ["CURVE", "RAW_PASSTHROUGH"]},
+        "fallback_reason": {"type": ["string", "null"]},
+        "raw_route_digest": {"$ref": "#/$defs/digest"},
+        "details_digest": {"$ref": "#/$defs/digest"},
+        "details": {"type": "object"},
+        "diagnostics": {"type": "object"}
+      }
+    }
+  }
+}

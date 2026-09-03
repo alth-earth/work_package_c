@@ -28,7 +28,10 @@ from arctic_route_planning.layered import (
 from arctic_route_planning.motion import (
     EngineeringRouteMotionProfile,
     build_route_motion_candidate_set,
+    build_route_motion_candidate_set_with_evidence,
     build_route_motion_set,
+    build_route_motion_set_with_evidence,
+    merge_route_motion_qualification_evidence,
 )
 from arctic_route_planning.planners import PlanningResult, RouteStep, SearchMetrics
 from arctic_route_planning.publishing import (
@@ -258,6 +261,23 @@ def test_route_motion_set_is_a_four_recommended_sibling_contract() -> None:
         "missing_risk_window"
     }
     assert motion_set.motion_profile_digest == EngineeringRouteMotionProfile().digest
+    evidence_motion_set, evidence = build_route_motion_set_with_evidence(
+        outcome.plan_set,
+        risk_window_id="risk-window-fixture",
+        risk_window_digest="2" * 64,
+        vessel_profile_digest="3" * 64,
+        producer_digest="4" * 64,
+        generated_at=request.start_time,
+    )
+    assert evidence_motion_set == motion_set
+    assert evidence["evidence_id"].startswith(
+        "route-motion-qualification-evidence-sha256-"
+    )
+    assert len(evidence["records"]) == len(motion_set.records)
+    assert all(
+        entry["details_digest"] == record.qualification.details_digest
+        for entry, record in zip(evidence["records"], motion_set.records, strict=True)
+    )
     deterministic_default = build_route_motion_set(
         outcome.plan_set,
         risk_window_id="risk-window-fixture",
@@ -268,6 +288,7 @@ def test_route_motion_set_is_a_four_recommended_sibling_contract() -> None:
     assert deterministic_default.generated_at == outcome.plan_set.generated_at
     assert deterministic_default.motion_set_id == motion_set.motion_set_id
     _validate_schema("route-motion-set-v1.schema.json", document)
+    _validate_schema("route-motion-qualification-evidence-v1.schema.json", evidence)
 
     tampered = json.loads(json.dumps(document))
     tampered["records"][0]["motion_samples"][0]["lon"] += 0.01
@@ -301,6 +322,34 @@ def test_route_motion_candidate_set_keeps_three_full_voyage_objectives() -> None
     assert _validate_schema(
         "route-motion-candidate-set-v1.schema.json", document
     ) is None
+
+
+def test_route_motion_qualification_evidence_binds_both_formal_artifacts() -> None:
+    _configuration, _planner, _store, service, request = _case()
+    outcome = service.execute(request)
+    common = {
+        "risk_window_id": "risk-window-fixture",
+        "risk_window_digest": "2" * 64,
+        "vessel_profile_digest": "3" * 64,
+        "producer_digest": "4" * 64,
+        "generated_at": request.start_time,
+    }
+    motion_set, motion_evidence = build_route_motion_set_with_evidence(
+        outcome.plan_set, **common
+    )
+    candidate_set, candidate_evidence = build_route_motion_candidate_set_with_evidence(
+        outcome.plan_set, **common
+    )
+    merged = merge_route_motion_qualification_evidence(
+        motion_evidence, candidate_evidence
+    )
+    _validate_schema("route-motion-qualification-evidence-v1.schema.json", merged)
+    assert merged["motion_set_id"] == motion_set.motion_set_id
+    assert merged["motion_candidate_set_id"] == candidate_set.motion_candidate_set_id
+    assert len(merged["records"]) == len(motion_set.records) + len(candidate_set.records)
+    assert {entry["artifact_kind"] for entry in merged["records"]} == {
+        "motion_set", "motion_candidate_set"
+    }
 
 
 def test_route_motion_set_qualifies_curves_and_keeps_short_layer_raw() -> None:
@@ -373,7 +422,7 @@ def test_route_motion_set_qualifies_curves_and_keeps_short_layer_raw() -> None:
             "navigation_grade": False,
         }
 
-    motion_set = build_route_motion_set(
+    motion_set, evidence = build_route_motion_set_with_evidence(
         plan_set,
         risk_window_id="risk-window-fixture",
         risk_window_digest="2" * 64,
@@ -389,6 +438,27 @@ def test_route_motion_set_qualifies_curves_and_keeps_short_layer_raw() -> None:
         record.mode.value == "CURVE" for record in motion_set.records[:-1]
     ), [(record.mode.value, record.fallback_reason) for record in motion_set.records]
     assert motion_set.records[-1].mode.value == "RAW_PASSTHROUGH"
+    evidence_by_plan = {entry["plan_id"]: entry for entry in evidence["records"]}
+    curve_evidence = [
+        evidence_by_plan[record.plan_id]["details"]
+        for record in motion_set.records
+        if record.mode.value == "CURVE"
+    ]
+    assert curve_evidence
+    assert all(
+        details["gate_order"]
+        == [
+            "sea_land_hard_mask",
+            "temporal_risk_coverage",
+            "corridor_allowed_area",
+            "manoeuvring",
+            "eta_speed",
+            "risk_non_degradation",
+            "adaptive_trust_deviation",
+        ]
+        for details in curve_evidence
+    )
+    assert all("edge_evidence" in details for details in curve_evidence)
     for record, bundle in zip(motion_set.records, plan_set.layers, strict=True):
         assert record.plan_id == bundle.recommended.plan_id
         assert record.waypoint_anchors[0].eta == bundle.recommended.waypoints[0].eta
@@ -406,18 +476,16 @@ def test_route_motion_set_qualifies_curves_and_keeps_short_layer_raw() -> None:
                 current.longitude,
                 current.latitude,
             )
-        # An internal curve anchor must stay on the B-spline.  Replacing it
-        # with the raw corner would produce curve -> vertex -> curve and a
-        # visible reverse jump at the turn.
-        if record.mode.value == "CURVE":
-            for anchor, waypoint in zip(
-                record.waypoint_anchors[1:-1], bundle.recommended.waypoints[1:-1], strict=True
-            ):
-                sample = record.motion_samples[anchor.motion_sample_index]
-                assert (sample.longitude, sample.latitude) != (
-                    waypoint.longitude,
-                    waypoint.latitude,
+            # A smoothed record may legitimately pass through a waypoint that
+            # is collinear with an accepted any-angle span.  The formal
+            # invariant is the strict ETA/arc-length anchor, not an artificial
+            # displacement from every raw coordinate.
+            assert all(
+                left.motion_sample_index < right.motion_sample_index
+                for left, right in zip(
+                    record.waypoint_anchors, record.waypoint_anchors[1:], strict=False
                 )
+            )
     assert route_motion_set_from_dict(route_motion_set_to_dict(motion_set)) == motion_set
 
 
@@ -663,6 +731,7 @@ def _validate_schema(name: str, document: dict[str, object]) -> None:
             "four-layer-route-plan-set-v3.geojson.schema.json",
             "route-motion-set-v1.schema.json",
             "route-motion-candidate-set-v1.schema.json",
+            "route-motion-qualification-evidence-v1.schema.json",
         )
     resources = []
     schemas = {}

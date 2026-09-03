@@ -6,7 +6,7 @@ Content Status:
 Document Role: SUPPORTING
 Scope: work package C change history
 Branch: research-validation-system
-Last Verified: 2026-08-27
+Last Verified: 2026-09-02
 ---
 
 # 工作包 C 变更记录
@@ -14,6 +14,25 @@ Last Verified: 2026-08-27
 本文件记录工作包 C 的可见功能、跨包合同、兼容性和验证状态变化。项目用途、运行方法
 与当前架构请先阅读 [README.md](README.md)；长期设计取舍见
 [决策记录](docs/DECISIONS.md)。
+
+## Unreleased — Constrained any-angle and joint route motion（2026-09-02）
+
+- 2026-09-03 冻结 `tromso_isfjorden_february_2026_research_v1` 的 145 帧完整
+  RiskWindow 严格复核完成：起终点大圆线仍复现 52 个 hard 点，raw dense envelope 为
+  0 hard；七条 r17 记录因真实 ETA/速度或操纵门禁全部 fail-closed，未发布正式目标目录，
+  失败证据写入不可消费的 `motion-r17-joint-anyangle-v1-failure-evidence-828d8b4194e4a300/`。
+
+- 新增确定性的 any-angle great-circle 候选层：先试起终点直连，再在原始 waypoint index
+  DAG 上做有界分段捷径；直连或候选失败均保留 raw fail-closed fallback。
+- 新增 route-level joint cubic B-spline 组装、共享航段 `0.90` trim 上限和严格单角
+  `<0.5` 上限；曲线发布前执行 C2/G2、转向符号、自交、半径、风险、连续走廊、ETA
+  和自适应双向偏离门禁。
+- 将 `RiskSampler._sample_interval` 提供为正式 `sample_interval`，并新增 swept-cell
+  temporal envelope；point sampling 不再作为完整时域证明。
+- 新增 `c.route-motion-qualification-evidence.v1`、CLI 同目录发布与 checksums 绑定，
+  Orchestrator 可选校验；无 sidecar 的旧 route-motion v1 目录继续可读，D 不本地平滑。
+- 当前正式 RiskWindow 的 fresh audit 仍对起终点大圆线复现 52 个 hard 点；当前输出对
+  四层 recommended 与三条 objective candidate 均合法回退 raw，未覆盖 frozen/r1-r9。
 
 ## Unreleased — Engineering route motion contract（2026-08-31）
 

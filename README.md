@@ -7,7 +7,7 @@ Content Status:
 Document Role: CANONICAL
 Scope: work package C entrypoint and public boundary
 Branch: research-validation-system
-Last Verified: 2026-09-02
+Last Verified: 2026-09-03
 ---
 
 > [!NOTE]
@@ -24,7 +24,35 @@ Last Verified: 2026-09-02
 
 # 北极航线工作包 C
 
-## 正式局部 B 样条与批量性能（2026-09-02）
+## 正式 Route Motion：受约束 any-angle + 联合多拐角平滑（2026-09-03）
+
+新的正式 producer 管线保留 `RoutePlanV3`、waypoint、ETA、metrics 和 plan identity
+为权威，只在其旁边生成 motion sibling artifact。它用大圆线依次尝试起终点直连和有界
+的非相邻 waypoint-index 捷径；每条捷径都经过 RiskWindow 的 swept-cell temporal
+envelope、hard/unknown、连续 raster corridor、ETA/速度和资源门禁。直连失败不会终止
+搜索，所有候选失败时仍发布经过独立 raw baseline 证明的 `RAW_PASSTHROUGH`。
+
+选中的端点只能来自原始 waypoint。被捷径跳过的 waypoint 保留为严格递增的 ETA/弧长
+anchor，不写回曲线几何；最大重叠转弯窗口记录共享航段 trim 约束（每角 `<0.5`、共享
+航段总 trim `≤0.90`）。联合 cubic B-spline 通过解析 C2/G2、无反向曲率、无自交和
+运动学检查后才可发布 `CURVE`；偏离门禁使用 raw↔candidate 双向距离和附近安全净空
+自适应收紧，无法证明净空即回退。
+
+本轮新增 C-owned `c.route-motion-qualification-evidence.v1`。CLI 将它与 motion JSON
+写入同一不可变目录并纳入 `checksums.json`；Orchestrator 会校验证据，D 只消费正式
+`motion_samples`，不运行本地平滑。新的输出不覆盖 frozen/r1-r9 制品。
+
+对当前正式 Winter RiskWindow 的只读复核仍得到：raw RoutePlan 官方距离
+`921.379560 km`，起终点大圆线 `874.190938 km`；大圆线 876 个采样中有 52 个 hard
+点，首个约为 `13.688125°E, 76.936121°N`，而 raw dense baseline 为 0 hard。因而当前
+fresh output 在严格 `--require-all-curves` 发布保护下对推荐四层和三条 objective
+candidate 全部回退 raw，正式目标目录没有生成；可复核失败证据为
+`.runtime/replays/winter-original-frozen-dynamic-v1/motion-r17-joint-anyangle-v1-failure-evidence-828d8b4194e4a300/`。
+主要剩余原因是冻结 waypoint ETA 下的局部 `eta_speed` 不可实现或
+`minimum_radius_exceeded`，不是把 low-risk 海域误判成可全局直连。工程边界仍为仿真
+motion，未启用 bathymetry/UKC，且不声明实船校准或 navigation grade。
+
+## 历史局部 B 样条与批量性能（2026-08-31）
 
 受约束局部三次 B 样条已经通过正式兄弟合同 `cd.route-motion-set.v1` 接入，并非仅有
 Viewer 本地绘制。它只替换满足转角、走廊、hard mask、连续风险、ETA/速度、曲率和操纵性

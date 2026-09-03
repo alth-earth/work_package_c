@@ -10,7 +10,8 @@ from __future__ import annotations
 import bisect
 import hashlib
 import json
-from collections.abc import Iterable, Sequence
+import math
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from itertools import pairwise
@@ -201,6 +202,56 @@ class RiskIntervalSample:
         return self.covered_frame_times
 
 
+@dataclass(frozen=True, slots=True)
+class SweptTemporalEnvelope:
+    """Fail-closed evidence for a moving geographic polyline.
+
+    ``RiskIntervalSample`` is a fixed-coordinate temporal envelope.  This
+    carrier combines those envelopes with exact samples on a spatially
+    densified path.  It is intentionally C-internal: it proves only the
+    published RiskWindow/raster model and does not claim chart or UKC safety.
+    """
+
+    sampled_risks: tuple[SampledRisk, ...]
+    interval_samples: tuple[RiskIntervalSample, ...]
+    sample_spacing_m: float
+    coverage_complete: bool
+    hard_mask_possible: bool
+    max_risk_upper: float | None
+    integrated_risk_hours: float | None
+    minimum_environment_speed_factor: float | None
+    source_risk_ids: tuple[str, ...]
+    covered_frame_boundaries: tuple[datetime, ...]
+    failure_reason: str | None = None
+    schema_version: str = "c.route-motion-swept-temporal-envelope.v1"
+    swept_cell_keys: tuple[tuple[int, int], ...] = ()
+
+    @property
+    def usable(self) -> bool:
+        return self.coverage_complete and self.failure_reason is None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "sample_count": len(self.sampled_risks),
+            "interval_count": len(self.interval_samples),
+            "sample_spacing_m": self.sample_spacing_m,
+            "coverage_complete": self.coverage_complete,
+            "hard_mask_possible": self.hard_mask_possible,
+            "max_risk_upper": self.max_risk_upper,
+            "integrated_risk_hours": self.integrated_risk_hours,
+            "minimum_environment_speed_factor": self.minimum_environment_speed_factor,
+            "source_risk_ids": list(self.source_risk_ids),
+            "covered_frame_boundaries": [
+                value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+                for value in self.covered_frame_boundaries
+            ],
+            "swept_cell_count": len(self.swept_cell_keys),
+            "swept_cell_keys": [list(value) for value in self.swept_cell_keys],
+            "failure_reason": self.failure_reason,
+        }
+
+
 def _utc(value: datetime, *, field: str) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise RiskSamplingError(f"{field} must be timezone-aware UTC")
@@ -236,6 +287,8 @@ class RiskSampler:
     frames.
     """
 
+    _CACHE_ENTRY_LIMIT = 65_536
+
     def __init__(
         self,
         frames: Sequence[RiskFrame],
@@ -264,6 +317,20 @@ class RiskSampler:
         self._arrays: tuple[dict[str, np.ndarray | None], ...] = tuple(
             self._frame_arrays(frame) for frame in self._frames
         )
+        # Frame values depend only on the spatial coordinate and immutable
+        # frame.  Swept-edge qualification revisits the same raw segments
+        # across layers/objectives, so memoization avoids repeating bilinear
+        # contributor lookup without changing any sampling or fail-closed
+        # rule.  The interval and point caches stay separate because interval
+        # sampling is intentionally stricter about missing risk.
+        self._sample_frame_cache: dict[tuple[int, float, float], _FrameSample] = {}
+        self._sample_frame_interval_cache: dict[tuple[int, float, float], _FrameSample] = {}
+        self._contributors_cache: dict[
+            tuple[float, float], tuple[tuple[int, int, float], ...]
+        ] = {}
+        self._interval_cache: dict[
+            tuple[datetime, datetime, float, float], RiskIntervalSample
+        ] = {}
 
     @property
     def frames(self) -> tuple[RiskFrame, ...]:
@@ -350,6 +417,315 @@ class RiskSampler:
             source_risk_ids=(self._frames[lower].risk_id, self._frames[upper].risk_id),
         )
 
+    def sample_interval(
+        self,
+        start: datetime,
+        end: datetime,
+        longitude: float,
+        latitude: float,
+    ) -> RiskIntervalSample:
+        """Return the named, read-only temporal envelope API.
+
+        The implementation remains the same conservative primitive used by
+        the historical ETA sidecar.  Exposing it under a public name makes it
+        possible for formal motion qualification to state exactly which
+        evaluator produced its evidence without granting callers a guessed or
+        extrapolated value.
+        """
+
+        try:
+            interval_start = _utc(start, field="interval.start")
+            interval_end = _utc(end, field="interval.end")
+            longitude_value = float(longitude)
+            latitude_value = float(latitude)
+        except (RiskSamplingError, TypeError, ValueError):
+            # The public API is a read-only evidence primitive.  Invalid
+            # input must become an explicitly unusable interval, including
+            # malformed coordinates; it must never escape as a partially
+            # handled TypeError/ValueError that a caller could mistake for a
+            # missing optional check.
+            return self._failed_interval(
+                start=start,
+                end=end,
+                longitude=_safe_float(longitude),
+                latitude=_safe_float(latitude),
+                reason="invalid_interval_input",
+            )
+        cache_key = (interval_start, interval_end, longitude_value, latitude_value)
+        cached = self._interval_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        result = self._sample_interval(*cache_key)
+        self._bounded_cache_put(self._interval_cache, cache_key, result)
+        return result
+
+    def sample_swept_temporal_envelope(
+        self,
+        samples: Sequence[Any],
+        *,
+        sample_spacing_m: float = 1_000.0,
+        fail_fast: bool = False,
+    ) -> SweptTemporalEnvelope:
+        """Envelope a moving path using spatial cells and every ETA interval.
+
+        The input accepts objects exposing ``longitude``, ``latitude`` and
+        ``eta`` (including formal ``MotionSample``) or mappings with ``lon``/
+        ``lat``/``eta`` keys.  Each segment is densified at the requested
+        maximum spacing on the great circle.  Exact samples catch spatial
+        hard cells; one interval envelope is then evaluated for every swept
+        spatial contributor over the ETA range in which that contributor is
+        touched, including every RiskFrame boundary.  Any malformed point,
+        missing frame, out-of-bounds
+        coordinate, or failed interval causes a fail-closed result.
+        ``fail_fast`` is an evaluation optimization for screening candidate
+        edges.  It may return as soon as a sampled point or interval is hard,
+        unknown, or incomplete; it never converts that state into a usable
+        envelope.  The default remains a complete envelope for qualification
+        evidence and risk comparison.
+        """
+
+        if (
+            isinstance(sample_spacing_m, bool)
+            or not isinstance(sample_spacing_m, (int, float))
+            or not np.isfinite(sample_spacing_m)
+            or sample_spacing_m <= 0.0
+        ):
+            return self._failed_swept_envelope(
+                float(sample_spacing_m) if isinstance(sample_spacing_m, (int, float)) else 0.0,
+                "invalid_sample_spacing",
+            )
+        if not isinstance(fail_fast, bool):
+            return self._failed_swept_envelope(
+                float(sample_spacing_m), "invalid_fail_fast_flag"
+            )
+        try:
+            path = tuple(_moving_point(value) for value in samples)
+        except (AttributeError, TypeError, ValueError, RiskSamplingError) as error:
+            return self._failed_swept_envelope(float(sample_spacing_m), f"invalid_path:{error}")
+        if len(path) < 2:
+            return self._failed_swept_envelope(float(sample_spacing_m), "insufficient_path_points")
+        if any(current[2] <= previous[2] for previous, current in pairwise(path)):
+            return self._failed_swept_envelope(float(sample_spacing_m), "non_monotonic_path_eta")
+
+        densified: list[tuple[float, float, datetime]] = []
+        try:
+            for index, (left, right) in enumerate(pairwise(path)):
+                start_lon, start_lat, start_time = left
+                end_lon, end_lat, end_time = right
+                distance = _great_circle_distance_m(
+                    (start_lon, start_lat), (end_lon, end_lat)
+                )
+                if distance <= 1.0e-9:
+                    raise ValueError("moving path contains a zero-length segment")
+                count = max(1, int(np.ceil(distance / float(sample_spacing_m))))
+                duration = end_time - start_time
+                fractions = {offset / count for offset in range(count + 1)}
+                # Uniform samples are not sufficient to establish a swept
+                # cell proof: a long sample interval can jump over a narrow
+                # hard/unknown cell.  Add every rectilinear RiskFrame grid
+                # crossing to the great-circle validation lattice.
+                fractions.update(
+                    self._great_circle_grid_crossings(
+                        (start_lon, start_lat),
+                        (end_lon, end_lat),
+                    )
+                )
+                for fraction in sorted(fractions):
+                    if index > 0 and fraction <= 1.0e-12:
+                        continue
+                    longitude, latitude = _great_circle_interpolate(
+                        (start_lon, start_lat), (end_lon, end_lat), fraction
+                    )
+                    densified.append(
+                        (longitude, latitude, start_time + duration * fraction)
+                    )
+        except Exception as error:
+            return self._failed_swept_envelope(
+                float(sample_spacing_m), f"swept_geometry_failure:{type(error).__name__}"
+            )
+
+        sampled: list[SampledRisk] = []
+        swept_cells: set[tuple[int, int]] = set()
+        cell_time_ranges: dict[tuple[int, int], list[datetime]] = {}
+        intervals: list[RiskIntervalSample] = []
+        try:
+            for longitude, latitude, sampled_at in densified:
+                cell_keys = tuple(
+                    (row, column)
+                    for row, column, weight in self._contributors(longitude, latitude)
+                    if weight > 0.0
+                )
+                if not cell_keys:
+                    raise RiskOutOfBoundsError(
+                        f"({longitude}, {latitude}) is outside the RiskFrame grid"
+                    )
+                for cell_key in cell_keys:
+                    swept_cells.add(cell_key)
+                    time_range = cell_time_ranges.setdefault(
+                        cell_key, [sampled_at, sampled_at]
+                    )
+                    time_range[0] = min(time_range[0], sampled_at)
+                    time_range[1] = max(time_range[1], sampled_at)
+                value = self.sample(sampled_at, longitude, latitude)
+                sampled.append(value)
+                if fail_fast and value.hard_mask:
+                    return self._failed_swept_envelope(
+                        float(sample_spacing_m), "hard_mask_or_unknown_point"
+                    )
+            # A route can contain thousands of 250 m motion samples but only
+            # a small number of RiskFrame spatial cells.  Prove the temporal
+            # envelope once per actually swept cell, over the ETA range in
+            # which the path touches that cell.  Bilinear interpolation is a
+            # convex combination of the four cell contributors, so checking
+            # each contributor at every covered RiskFrame boundary is a
+            # conservative continuous-cell proof.  The point samples above
+            # remain the source for the route's exact sampled-risk integral.
+            for row, column in sorted(swept_cells):
+                start_time, end_time = cell_time_ranges[(row, column)]
+                interval = self.sample_interval(
+                    start_time,
+                    end_time,
+                    float(self._longitudes[column]),
+                    float(self._latitudes[row]),
+                )
+                intervals.append(interval)
+                if fail_fast and (not interval.usable or interval.hard_mask_possible):
+                    return self._failed_swept_envelope(
+                        float(sample_spacing_m),
+                        interval.failure_reason or "hard_mask_or_unknown_cell",
+                    )
+        except Exception as error:  # formal qualification must never fail open
+            return self._failed_swept_envelope(
+                float(sample_spacing_m), f"swept_sampling_failure:{type(error).__name__}"
+            )
+
+        complete = bool(sampled) and all(value.coverage_complete for value in intervals)
+        hard_possible = any(value.hard_mask for value in sampled) or any(
+            value.hard_mask_possible for value in intervals
+        )
+        upper_values = [
+            float(value.risk_score) for value in sampled
+        ] + [
+            float(value.risk_upper)
+            for value in intervals
+            if value.risk_upper is not None
+        ]
+        speeds = [
+            float(value.environment_speed_factor) for value in sampled
+        ] + [
+            float(value.environment_speed_factor_lower)
+            for value in intervals
+            if value.environment_speed_factor_lower is not None
+        ]
+        integrated = _integrated_sampled_risk(sampled) if len(sampled) >= 2 else None
+        source_ids_in_order: list[str] = []
+        for value in sampled:
+            source_ids_in_order.extend(value.source_risk_ids)
+        for value in intervals:
+            source_ids_in_order.extend(value.source_risk_ids)
+        source_ids = tuple(dict.fromkeys(source_ids_in_order))
+        boundaries = tuple(sorted({
+            boundary
+            for value in intervals
+            for boundary in value.covered_frame_boundaries
+        }))
+        failure = None
+        if not complete:
+            failure = next(
+                (value.failure_reason for value in intervals if value.failure_reason),
+                "swept_temporal_coverage_incomplete",
+            )
+        return SweptTemporalEnvelope(
+            sampled_risks=tuple(sampled),
+            interval_samples=tuple(intervals),
+            sample_spacing_m=float(sample_spacing_m),
+            coverage_complete=complete,
+            hard_mask_possible=hard_possible,
+            max_risk_upper=max(upper_values) if upper_values else None,
+            integrated_risk_hours=integrated,
+            minimum_environment_speed_factor=min(speeds) if speeds else None,
+            source_risk_ids=source_ids,
+            covered_frame_boundaries=boundaries,
+            failure_reason=failure,
+            swept_cell_keys=tuple(sorted(swept_cells)),
+        )
+
+    # A concise alias used by the motion producer and available to callers
+    # that describe this operation as a swept-cell envelope.
+    swept_temporal_envelope = sample_swept_temporal_envelope
+
+    def _great_circle_grid_crossings(
+        self,
+        first: tuple[float, float],
+        second: tuple[float, float],
+    ) -> tuple[float, ...]:
+        """Return great-circle fractions at every crossed RiskFrame grid line."""
+
+        fractions: set[float] = set()
+        for axis_index, axis in enumerate((self._longitudes, self._latitudes)):
+            start_value = first[axis_index]
+            end_value = second[axis_index]
+            lower = min(start_value, end_value)
+            upper = max(start_value, end_value)
+            if upper - lower <= 1.0e-12:
+                continue
+            # Only grid lines inside this segment can be crossed.  The old
+            # implementation iterated over every latitude and longitude in
+            # the raster for every edge, which made exhaustive any-angle
+            # screening unnecessarily expensive without adding evidence.
+            # ``ordered`` also keeps the lookup correct for descending input
+            # axes; the bisection below still uses the geographic coordinate
+            # values and therefore does not depend on axis order.
+            ordered = axis if axis[0] < axis[-1] else axis[::-1]
+            first_index = int(np.searchsorted(ordered, lower, side="right"))
+            last_index = int(np.searchsorted(ordered, upper, side="left"))
+            for target in ordered[first_index:last_index]:
+                increasing = end_value > start_value
+                left = 0.0
+                right = 1.0
+                for _ in range(48):
+                    middle = (left + right) * 0.5
+                    point = _great_circle_interpolate(first, second, middle)
+                    value = point[axis_index]
+                    if (value < target) == increasing:
+                        left = middle
+                    else:
+                        right = middle
+                fractions.add((left + right) * 0.5)
+        return tuple(sorted(fractions))
+
+    def _grid_cells_at(self, longitude: float, latitude: float) -> tuple[tuple[int, int], ...]:
+        """Return all grid-neighbour cells touched by a validation point."""
+
+        def axis_indices(axis: np.ndarray, target: float) -> tuple[int, ...]:
+            ascending = bool(axis[0] < axis[-1])
+            ordered = axis if ascending else axis[::-1]
+            tolerance = 1.0e-10
+            if target < ordered[0] - tolerance or target > ordered[-1] + tolerance:
+                return ()
+            upper = int(np.searchsorted(ordered, target, side="left"))
+            exact_index = None
+            for candidate in (upper - 1, upper):
+                if 0 <= candidate < len(ordered) and abs(
+                    float(ordered[candidate]) - target
+                ) <= tolerance:
+                    exact_index = candidate
+                    break
+            if exact_index is not None:
+                center = exact_index
+                candidates = {center - 1, center, center + 1}
+            else:
+                upper = int(np.searchsorted(ordered, target, side="right"))
+                candidates = {upper - 1, upper}
+            valid = {index for index in candidates if 0 <= index < len(axis)}
+            if not ascending:
+                valid = {len(axis) - 1 - index for index in valid}
+            return tuple(sorted(valid))
+
+        rows = axis_indices(self._latitudes, latitude)
+        columns = axis_indices(self._longitudes, longitude)
+        return tuple((row, column) for row in rows for column in columns)
+
     def _sample_interval(
         self,
         start: datetime,
@@ -415,8 +791,12 @@ class RiskSampler:
                         raise RiskCoverageError(
                             f"interval crosses RiskFrame gap {gap}, exceeding {self._max_frame_gap}"
                         )
+            contributors = self._contributors(longitude, latitude)
             values = tuple(
-                self._sample_frame_interval(index, longitude, latitude) for index in frame_indices
+                self._sample_frame_interval(
+                    index, longitude, latitude, contributors=contributors
+                )
+                for index in frame_indices
             )
         except (RiskCoverageError, RiskOutOfBoundsError, RiskSamplingError) as error:
             return self._failed_interval(
@@ -441,27 +821,14 @@ class RiskSampler:
         # endpoints so a threshold crossing can be isolated without carrying
         # an unnecessarily wide frame-endpoint envelope.
         risk_values = tuple(value.risk_score for value in values)
-        try:
-            endpoint_risks = (
-                self._interpolated_risk(interval_start, longitude, latitude),
-                self._interpolated_risk(interval_end, longitude, latitude),
-            )
-        except (RiskCoverageError, RiskOutOfBoundsError, RiskSamplingError) as error:
-            return self._failed_interval(
-                start=interval_start,
-                end=interval_end,
-                longitude=float(longitude),
-                latitude=float(latitude),
-                reason=f"{type(error).__name__}:{error}",
-            )
-        except Exception as error:
-            return self._failed_interval(
-                start=interval_start,
-                end=interval_end,
-                longitude=float(longitude),
-                latitude=float(latitude),
-                reason=f"evaluator_failure:{type(error).__name__}",
-            )
+        endpoint_risks = (
+            self._interpolated_risk_from_frame_values(
+                interval_start, values, frame_indices
+            ),
+            self._interpolated_risk_from_frame_values(
+                interval_end, values, frame_indices
+            ),
+        )
         risk_values += endpoint_risks
         # ``sample`` takes the minimum confidence and speed factor of the two
         # frames in each bracket.  Keep the historical raw extrema above for
@@ -547,6 +914,32 @@ class RiskSampler:
         ).total_seconds() / gap.total_seconds()
         return _lerp(lower_value.risk_score, upper_value.risk_score, fraction)
 
+    def _interpolated_risk_from_frame_values(
+        self,
+        sampled_at: datetime,
+        values: Sequence[_FrameSample],
+        frame_indices: Sequence[int],
+    ) -> float:
+        """Interpolate from already sampled frame values without resampling.
+
+        ``_sample_interval`` has already evaluated every frame that brackets
+        its requested interval.  Reusing those values preserves the same
+        linear-time result while avoiding two complete spatial evaluations per
+        interval endpoint.
+        """
+
+        lower, upper = self._bracket(sampled_at)
+        first_index = frame_indices[0]
+        lower_value = values[lower - first_index]
+        if lower == upper:
+            return lower_value.risk_score
+        upper_value = values[upper - first_index]
+        gap = self._frames[upper].valid_time - self._frames[lower].valid_time
+        fraction = (
+            sampled_at - self._frames[lower].valid_time
+        ).total_seconds() / gap.total_seconds()
+        return _lerp(lower_value.risk_score, upper_value.risk_score, fraction)
+
     def _interval_slope_bounds(
         self,
         values: Sequence[_FrameSample],
@@ -591,6 +984,9 @@ class RiskSampler:
     def interval_evaluator_digest(self) -> str:
         """Stable identity for this sidecar's interpolation/evaluator rules."""
 
+        cached = getattr(self, "_interval_evaluator_digest", None)
+        if isinstance(cached, str):
+            return cached
         payload = {
             "schema_version": "c.risk-interval-sample.v1",
             "sampler": "RiskSampler.linear-time-bilinear-space.v1",
@@ -606,18 +1002,31 @@ class RiskSampler:
             sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")
-        return hashlib.sha256(encoded).hexdigest()
+        digest = hashlib.sha256(encoded).hexdigest()
+        # The digest is an identity of the immutable sampler, not of an
+        # individual interval.  Cache it once: a swept envelope may contain
+        # thousands of interval samples, and recomputing the JSON digest for
+        # every one dominated exhaustive any-angle screening.
+        self._interval_evaluator_digest = digest
+        return digest
 
     def _sample_frame_interval(
         self,
         frame_index: int,
         longitude: float,
         latitude: float,
+        *,
+        contributors: tuple[tuple[int, int, float], ...] | None = None,
     ) -> _FrameSample:
         """Sample one frame while refusing the normal hard-mask placeholder."""
 
         arrays = self._arrays[frame_index]
-        contributors = self._contributors(longitude, latitude)
+        cache_key = (frame_index, float(longitude), float(latitude))
+        cached = self._sample_frame_interval_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        if contributors is None:
+            contributors = self._contributors(longitude, latitude)
         confidence_values = _array_values(
             arrays["confidence"], contributors, variable="confidence", finite=True
         )
@@ -642,26 +1051,44 @@ class RiskSampler:
         if any(value <= 0.0 or value > 1.0 for value in factors):
             raise RiskSamplingError("environment speed factors must be finite in (0, 1]")
         hard_mask = any(bool(value) for value, _ in hard_values)
-        return _FrameSample(
+        result = _FrameSample(
             risk_score=float(sum(value * weight for value, weight in risk_values)),
             confidence=float(min(value for value, _ in confidence_values)),
             hard_mask=hard_mask,
             environment_speed_factor=float(min(factors)),
         )
+        self._bounded_cache_put(self._sample_frame_interval_cache, cache_key, result)
+        return result
 
     def _contributors(
         self,
         longitude: float,
         latitude: float,
     ) -> tuple[tuple[int, int, float], ...]:
-        lat_weights = _axis_weights(self._latitudes, float(latitude), axis="latitude")
-        lon_weights = _axis_weights(self._longitudes, float(longitude), axis="longitude")
-        return tuple(
+        key = (float(longitude), float(latitude))
+        cached = self._contributors_cache.get(key)
+        if cached is not None:
+            return cached
+        lat_weights = _axis_weights(self._latitudes, key[1], axis="latitude")
+        lon_weights = _axis_weights(self._longitudes, key[0], axis="longitude")
+        result = tuple(
             (lat_index, lon_index, lat_weight * lon_weight)
             for lat_index, lat_weight in lat_weights
             for lon_index, lon_weight in lon_weights
             if lat_weight * lon_weight > 0.0
         )
+        self._bounded_cache_put(self._contributors_cache, key, result)
+        return result
+
+    @classmethod
+    def _bounded_cache_put(
+        cls, cache: dict[Any, Any], key: Any, value: Any
+    ) -> None:
+        """Keep repeated route checks bounded without changing cache semantics."""
+
+        if key not in cache and len(cache) >= cls._CACHE_ENTRY_LIMIT:
+            cache.pop(next(iter(cache)))
+        cache[key] = value
 
     def _failed_interval(
         self,
@@ -691,6 +1118,22 @@ class RiskSampler:
             covered_frame_times=(),
             coverage_complete=False,
             evaluator_digest=self.interval_evaluator_digest,
+            failure_reason=reason,
+        )
+
+    @staticmethod
+    def _failed_swept_envelope(sample_spacing_m: float, reason: str) -> SweptTemporalEnvelope:
+        return SweptTemporalEnvelope(
+            sampled_risks=(),
+            interval_samples=(),
+            sample_spacing_m=sample_spacing_m,
+            coverage_complete=False,
+            hard_mask_possible=True,
+            max_risk_upper=None,
+            integrated_risk_hours=None,
+            minimum_environment_speed_factor=None,
+            source_risk_ids=(),
+            covered_frame_boundaries=(),
             failure_reason=reason,
         )
 
@@ -785,6 +1228,10 @@ class RiskSampler:
 
     def _sample_frame(self, frame_index: int, longitude: float, latitude: float) -> _FrameSample:
         arrays = self._arrays[frame_index]
+        cache_key = (frame_index, float(longitude), float(latitude))
+        cached = self._sample_frame_cache.get(cache_key)
+        if cached is not None:
+            return cached
         lat_weights = _axis_weights(self._latitudes, float(latitude), axis="latitude")
         lon_weights = _axis_weights(self._longitudes, float(longitude), axis="longitude")
         contributors = tuple(
@@ -817,12 +1264,14 @@ class RiskSampler:
         else:
             risk_score = sum(value * weight for value, weight in risk_values)
         speed_factor = _speed_factor(arrays, contributors)
-        return _FrameSample(
+        result = _FrameSample(
             risk_score=float(risk_score),
             confidence=float(confidence),
             hard_mask=hard_mask,
             environment_speed_factor=speed_factor,
         )
+        self._bounded_cache_put(self._sample_frame_cache, cache_key, result)
+        return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -853,9 +1302,16 @@ def _axis_weights(
     tolerance = 1e-10
     if target < ordered[0] - tolerance or target > ordered[-1] + tolerance:
         raise RiskOutOfBoundsError(f"{axis}={target} is outside [{ordered[0]}, {ordered[-1]}]")
-    exact = np.flatnonzero(np.isclose(ordered, target, rtol=0.0, atol=tolerance))
-    if exact.size:
-        ordered_index = int(exact[0])
+    upper = int(np.searchsorted(ordered, target, side="left"))
+    exact_index = None
+    for candidate in (upper - 1, upper):
+        if 0 <= candidate < len(ordered) and abs(
+            float(ordered[candidate]) - target
+        ) <= tolerance:
+            exact_index = candidate
+            break
+    if exact_index is not None:
+        ordered_index = exact_index
         index = ordered_index if ascending else len(coordinates) - 1 - ordered_index
         return ((index, 1.0),)
     upper = int(np.searchsorted(ordered, target, side="right"))
@@ -934,6 +1390,16 @@ def _safe_utc(value: Any) -> datetime:
     return datetime(1970, 1, 1, tzinfo=UTC)
 
 
+def _safe_float(value: Any) -> float:
+    """Return a finite placeholder for malformed interval evidence."""
+
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return parsed if math.isfinite(parsed) else 0.0
+
+
 def _jsonable_for_digest(value: Any) -> Any:
     if isinstance(value, datetime):
         return _safe_utc(value).isoformat(timespec="microseconds")
@@ -954,4 +1420,94 @@ def _jsonable_for_digest(value: Any) -> Any:
     return str(value)
 
 
-__all__ = ["RiskIdentity", "RiskIntervalSample", "RiskSampler", "SampledRisk"]
+def _moving_point(value: Any) -> tuple[float, float, datetime]:
+    if isinstance(value, Mapping):
+        longitude = value.get("lon", value.get("longitude"))
+        latitude = value.get("lat", value.get("latitude"))
+        sampled_at = value.get("eta", value.get("sampled_at"))
+    else:
+        longitude = getattr(value, "longitude", None)
+        latitude = getattr(value, "latitude", None)
+        sampled_at = getattr(value, "eta", getattr(value, "sampled_at", None))
+    if isinstance(longitude, bool) or isinstance(latitude, bool):
+        raise ValueError("moving path coordinates must be numeric")
+    longitude = float(longitude)
+    latitude = float(latitude)
+    if (
+        not np.isfinite(longitude)
+        or not np.isfinite(latitude)
+        or not -180.0 <= longitude <= 180.0
+        or not -90.0 <= latitude <= 90.0
+    ):
+        raise ValueError("moving path coordinate is outside the geographic domain")
+    try:
+        eta = _utc(sampled_at, field="moving path eta")
+    except (AttributeError, TypeError, RiskSamplingError) as error:
+        raise ValueError("moving path eta must be timezone-aware UTC") from error
+    return longitude, latitude, eta
+
+
+def _great_circle_distance_m(first: tuple[float, float], second: tuple[float, float]) -> float:
+    lon1, lat1 = map(np.radians, first)
+    lon2, lat2 = map(np.radians, second)
+    delta_lat = lat2 - lat1
+    delta_lon = (lon2 - lon1 + np.pi) % (2.0 * np.pi) - np.pi
+    haversine = (
+        np.sin(delta_lat / 2.0) ** 2
+        + np.cos(lat1) * np.cos(lat2) * np.sin(delta_lon / 2.0) ** 2
+    )
+    return float(2.0 * 6_371_008.8 * np.arcsin(min(1.0, math.sqrt(max(0.0, float(haversine))))))
+
+
+def _great_circle_interpolate(
+    first: tuple[float, float], second: tuple[float, float], fraction: float
+) -> tuple[float, float]:
+    if fraction == 0.0:
+        return first
+    if fraction == 1.0:
+        return second
+    lon1, lat1 = map(math.radians, first)
+    lon2, lat2 = map(math.radians, second)
+    left = (
+        math.cos(lat1) * math.cos(lon1),
+        math.cos(lat1) * math.sin(lon1),
+        math.sin(lat1),
+    )
+    right = (
+        math.cos(lat2) * math.cos(lon2),
+        math.cos(lat2) * math.sin(lon2),
+        math.sin(lat2),
+    )
+    angle = math.acos(max(-1.0, min(1.0, sum(a * b for a, b in zip(left, right, strict=True)))))
+    if angle <= 1.0e-12:
+        return first
+    sine = math.sin(angle)
+    weight_left = math.sin((1.0 - fraction) * angle) / sine
+    weight_right = math.sin(fraction * angle) / sine
+    vector = tuple(
+        weight_left * left[index] + weight_right * right[index] for index in range(3)
+    )
+    norm = math.sqrt(sum(value * value for value in vector))
+    if norm <= 1.0e-15 or not math.isfinite(norm):
+        raise ValueError("great-circle interpolation became degenerate")
+    vector = tuple(value / norm for value in vector)
+    return math.degrees(math.atan2(vector[1], vector[0])), math.degrees(
+        math.atan2(vector[2], math.hypot(vector[0], vector[1]))
+    )
+
+
+def _integrated_sampled_risk(values: Sequence[SampledRisk]) -> float:
+    return float(sum(
+        (left.risk_score + right.risk_score) * 0.5
+        * (right.sampled_at - left.sampled_at).total_seconds() / 3600.0
+        for left, right in pairwise(values)
+    ))
+
+
+__all__ = [
+    "RiskIdentity",
+    "RiskIntervalSample",
+    "RiskSampler",
+    "SampledRisk",
+    "SweptTemporalEnvelope",
+]

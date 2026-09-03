@@ -8,7 +8,7 @@ Document Role: CANONICAL
 Scope: work package C current status, package-level TODO, and deferred items
 Canonical For: work package C package status and non-algorithm TODO
 Branch: research-validation-system
-Last Verified: 2026-08-25
+Last Verified: 2026-09-03
 ---
 
 > [!NOTE]
@@ -29,6 +29,7 @@ Last Verified: 2026-08-25
 | 工程复验 | 2026-08-25：`UV_OFFLINE=1 make check` 为 `274 passed`，Ruff/lock/sync/CLI 通过 |
 | 核心算法研究 | P2.1 clean M0/M1 `EXPERIMENTAL_PASS`；Winter M2 因单个 cold 单元中位回归 `5.94% > 5%` 判 `FAIL`，候选默认关闭 |
 | 工程主线 | v2/v3、重规划、围栏和原子发布已实现 |
+| 正式 Route Motion | 2026-09-03：any-angle + joint B-spline + qualification evidence 已实现；r17 严格七条全 CURVE 发布因真实 ETA/速度与操纵门禁 fail-closed，目标目录未发布；证据见 `motion-r17-joint-anyangle-v1-failure-evidence-828d8b4194e4a300/` |
 | 挑战杯状态 | **Demo RC1 已建立（2026-08-16）**：mur/dikson v3 四层 + 6h 重规划 PASS，D 消费 PASS，r7 复现 PASS |
 | 科学状态 | `demo_unvalidated`；保留接口，不阻塞演示 |
 
@@ -47,6 +48,7 @@ Last Verified: 2026-08-25
 | RoutePlan v2 三目标基线 | `service.py`、`schemas/route-plan-v2.schema.json` |
 | RoutePlan v3 四层十二路线整组 | `layered.py`、`contracts/layered.py`、v3 Schema |
 | C→D 正式工程曲线运动兄弟合同 | `contracts/route_motion.py`、`motion/`、`route-motion-set-v1.schema.json`；公式散货船、声明 raster model 连续证明、失败回退 raw |
+| C-owned motion qualification evidence | `route-motion-qualification-evidence-v1.schema.json`、`motion/producer.py`、Orchestrator strict reader；绑定 any-angle edge、joint window、门禁和 raw/candidate 风险 |
 | 重规划、竞态围栏和原子 latest | `replanning/`、`publishing/` |
 | JSON/GeoJSON 往返和 Schema 验证 | `contracts/codec.py`、`publishing/`、`tests/contract/test_schemas.py` |
 | 旧 B/v1 显式隔离 | `adapters/legacy_b.py`；只允许 `legacy_unverified` |

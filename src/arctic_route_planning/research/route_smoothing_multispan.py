@@ -546,6 +546,7 @@ def _make_controls(
     trim_m: float,
     *,
     turn_direction_safe: bool = False,
+    interpolate_vertex: bool = False,
 ) -> tuple[Coordinate, ...]:
     incoming = _unit(_sub(vertex, entry), "incoming segment")
     outgoing = _unit(_sub(exit, vertex), "outgoing segment")
@@ -558,6 +559,27 @@ def _make_controls(
     # vertex, which avoids the midpoint's turn -> counter-turn -> turn
     # inflection and its visually inward dent.
     corner_cut = vertex if turn_direction_safe else _multiply(_add(curve_entry, curve_exit), 0.5)
+    if interpolate_vertex:
+        # At the central knot u=0.5 the fixed cubic B-spline has weights
+        # (1/6, 2/3, 1/6) for P2, P3 and P4.  Solve for P3 so the formal
+        # curve actually passes through the authoritative selected vertex.
+        # P3 is unconstrained by the endpoint tangent/zero-curvature
+        # equations, so this preserves endpoint G2 while keeping the ETA
+        # anchor on the published geometry instead of projecting it into a
+        # different speed-factor cell.
+        corner_cut = _multiply(
+            _sub(
+                vertex,
+                _multiply(
+                    _add(
+                        _add(curve_entry, _multiply(incoming, spacing)),
+                        _add(curve_exit, _multiply(outgoing, -2.0 * spacing)),
+                    ),
+                    1.0 / 6.0,
+                ),
+            ),
+            1.5,
+        )
     return (
         curve_entry,
         _add(curve_entry, _multiply(incoming, spacing)),
@@ -579,6 +601,7 @@ def build_local_corner_curve(
     radius_m: float | None = None,
     sample_count: int = 65,
     turn_direction_safe: bool = False,
+    interpolate_vertex: bool = False,
 ) -> LocalCornerCurve:
     """Construct a deterministic local four-span cubic corner.
 
@@ -629,6 +652,7 @@ def build_local_corner_curve(
         exit_point,
         trim,
         turn_direction_safe=turn_direction_safe,
+        interpolate_vertex=interpolate_vertex,
     )
     spline = MultiSpanCubicBSpline(controls)
     parameters = _sample_parameters(sample_count)
