@@ -445,6 +445,17 @@ def test_route_motion_set_qualifies_curves_and_keeps_short_layer_raw() -> None:
         if record.mode.value == "CURVE"
     ]
     assert curve_evidence
+    # Formal motion follows the published RoutePlan topology.  Any-angle
+    # shortcuts remain an explicit opt-in research mode and must not become
+    # the vessel's runnable motion path.
+    assert all(
+        details["any_angle"]["shortcut_count"] == 0
+        for details in curve_evidence
+    )
+    assert any(
+        details["gates"]["adaptive_trust_deviation"]["candidate_to_raw_max_m"] > 1.0e-6
+        for details in curve_evidence
+    )
     assert all(
         details["gate_order"]
         == [

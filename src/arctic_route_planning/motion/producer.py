@@ -123,6 +123,7 @@ def build_route_motion_set(
     chord_error_m: float = 0.0,
     generated_at: datetime | None = None,
     policy: RouteSmoothingPolicy | None = None,
+    allow_any_angle_shortcuts: bool = False,
     _evidence_sink: list[dict[str, Any]] | None = None,
 ) -> RouteMotionSet:
     """Build four recommended records without changing ``plan_set``.
@@ -133,6 +134,8 @@ def build_route_motion_set(
     """
 
     chosen = profile or EngineeringRouteMotionProfile()
+    if not isinstance(allow_any_angle_shortcuts, bool):
+        raise TypeError("allow_any_angle_shortcuts must be boolean")
     if plan_set.vessel_profile_id != chosen.vessel_profile_id:
         raise ValueError("motion profile does not match plan-set vessel_profile_id")
     _digest(risk_window_digest, "risk_window_digest")
@@ -153,6 +156,7 @@ def build_route_motion_set(
                 chord_error_m=chord_error_m,
             ),
             policy=chosen_policy,
+            allow_any_angle_shortcuts=allow_any_angle_shortcuts,
             evidence_sink=_evidence_sink,
         )
         for bundle in plan_set.layers
@@ -202,6 +206,7 @@ def build_route_motion_candidate_set(
     chord_error_m: float = 0.0,
     generated_at: datetime | None = None,
     policy: RouteSmoothingPolicy | None = None,
+    allow_any_angle_shortcuts: bool = False,
     _evidence_sink: list[dict[str, Any]] | None = None,
 ) -> RouteMotionCandidateSet:
     """Build C motion for the three complete-voyage objective candidates.
@@ -214,6 +219,8 @@ def build_route_motion_candidate_set(
     """
 
     chosen = profile or EngineeringRouteMotionProfile()
+    if not isinstance(allow_any_angle_shortcuts, bool):
+        raise TypeError("allow_any_angle_shortcuts must be boolean")
     if plan_set.vessel_profile_id != chosen.vessel_profile_id:
         raise ValueError("motion profile does not match plan-set vessel_profile_id")
     _digest(risk_window_digest, "risk_window_digest")
@@ -237,6 +244,7 @@ def build_route_motion_candidate_set(
                     chord_error_m=chord_error_m,
                 ),
                 policy=chosen_policy,
+                allow_any_angle_shortcuts=allow_any_angle_shortcuts,
                 evidence_sink=_evidence_sink,
             ),
         )
@@ -416,6 +424,7 @@ def _build_record(
     corridor_validator: CorridorValidator | None,
     corridor_buffer_m: float,
     policy: RouteSmoothingPolicy | None,
+    allow_any_angle_shortcuts: bool,
     evidence_sink: list[dict[str, Any]] | None = None,
 ) -> RouteMotionRecord:
     record, evidence = _build_record_with_evidence(
@@ -425,6 +434,7 @@ def _build_record(
         corridor_validator=corridor_validator,
         corridor_buffer_m=corridor_buffer_m,
         policy=policy,
+        allow_any_angle_shortcuts=allow_any_angle_shortcuts,
     )
     if evidence_sink is not None:
         evidence_sink.append(evidence)
@@ -439,10 +449,13 @@ def _build_record_with_evidence(
     corridor_validator: CorridorValidator | None,
     corridor_buffer_m: float,
     policy: RouteSmoothingPolicy | None,
+    allow_any_angle_shortcuts: bool,
 ) -> tuple[RouteMotionRecord, dict[str, Any]]:
     """Build one record and its producer-owned qualification evidence."""
 
     raw_points = tuple((waypoint.longitude, waypoint.latitude) for waypoint in plan.waypoints)
+    if not isinstance(allow_any_angle_shortcuts, bool):
+        raise TypeError("allow_any_angle_shortcuts must be boolean")
     raw_digest = canonical_sha256(
         [
             {
@@ -485,6 +498,12 @@ def _build_record_with_evidence(
             "edge_probe_spacing_m": edge_probe_spacing_m,
             "any_angle_edge_evaluation_limit": _FORMAL_ANY_ANGLE_EDGE_EVALUATION_LIMIT,
             "great_circle_edges": True,
+            # A formal motion record must follow the published RoutePlan
+            # topology by default.  Any-angle shortcuts remain available only
+            # to explicitly opted-in research callers; otherwise a shortcut
+            # could make C motion_samples diverge from the route consumed by D.
+            "allow_any_angle_shortcuts": allow_any_angle_shortcuts,
+            "authoritative_waypoint_path": not allow_any_angle_shortcuts,
         },
         "input": {
             "risk_window_identity": _risk_identity_dict(risk_sampler),
@@ -634,6 +653,19 @@ def _build_record_with_evidence(
         maximum_edge_evaluations=_FORMAL_ANY_ANGLE_EDGE_EVALUATION_LIMIT,
         maximum_candidates=_FORMAL_ANY_ANGLE_MAXIMUM_CANDIDATES,
     )
+    if not allow_any_angle_shortcuts:
+        raw_indices = tuple(range(len(raw_points)))
+        candidates = tuple(
+            route for route in candidates if route.waypoint_indices == raw_indices
+        )
+        if not candidates:
+            return _fallback_with_evidence(
+                plan,
+                raw_digest,
+                "authoritative_waypoint_path_unavailable",
+                raw_points=raw_points,
+                evidence=evidence_base,
+            )
     attempts: list[dict[str, Any]] = []
     qualified: list[tuple[RouteMotionRecord, dict[str, Any]]] = []
     last_reason = "no_qualified_any_angle_candidate"
@@ -660,6 +692,13 @@ def _build_record_with_evidence(
                     max_trim_fraction=requested_fraction,
                     maximum_overlap_fraction=chosen_policy.maximum_overlap_fraction,
                     maximum_route_points=chosen_policy.maximum_route_points,
+                    # The local-window smoother keeps straight legs on the
+                    # published waypoint topology and only rounds turns.  A
+                    # strict producer must not use the interpolating
+                    # any-angle fit (which can move ETA anchors far from the
+                    # RoutePlan); the spatial deviation gate below remains
+                    # authoritative for the small, intentional corner trim.
+                    preserve_waypoint_anchors=False,
                 )
                 joint_summary = _compact_joint_evidence(joint, requested_fraction)
                 if not joint.applied:
@@ -1203,14 +1242,18 @@ def _adaptive_trust_evidence(
 
     candidate_deviations = tuple(
         (
-            _distance_to_polyline(point, candidate_local),
+            # Compare each candidate point against the *raw* route.  Measuring
+            # a path against itself always returns zero and previously let
+            # any-angle shortcuts (tens of kilometres off the published
+            # RoutePlan) pass the adaptive trust gate.
+            _distance_to_polyline(point, raw_local),
             nearest_span(point),
         )
         for point in candidate_local
     )
     raw_deviations = tuple(
         (
-            _distance_to_polyline(point, raw_local),
+            _distance_to_polyline(point, candidate_local),
             nearest_span(point),
         )
         for point in raw_local
