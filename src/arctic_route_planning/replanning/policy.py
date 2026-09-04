@@ -24,6 +24,10 @@ class ReplanningPolicy:
     min_switch_improvement: float = 0.03
     risk_hysteresis: float = 0.02
     urgent_bypasses_min_interval: bool = True
+    # ``None`` retains the historical behavior: risk may increase by up to
+    # ``risk_hysteresis`` unless an event/manual switch is forced.  An
+    # explicit value is a scenario-level maximum regression tolerance.
+    max_risk_regression_tolerance: float | None = None
 
     @classmethod
     def from_config(cls, config: ReplanningConfig) -> ReplanningPolicy:
@@ -37,6 +41,7 @@ class ReplanningPolicy:
             deviation_threshold_km=config.deviation_trigger_km,
             min_switch_improvement=config.route_switch_gain_threshold,
             risk_hysteresis=config.hysteresis,
+            max_risk_regression_tolerance=config.maximum_risk_regression_tolerance,
         )
 
     def __post_init__(self) -> None:
@@ -52,6 +57,12 @@ class ReplanningPolicy:
             value = getattr(self, name)
             if not isfinite(value) or not 0.0 <= value <= 1.0:
                 raise ValueError(f"{name} must be within [0, 1]")
+        if self.max_risk_regression_tolerance is not None and (
+            isinstance(self.max_risk_regression_tolerance, bool)
+            or not isfinite(self.max_risk_regression_tolerance)
+            or not 0.0 <= self.max_risk_regression_tolerance <= 1.0
+        ):
+            raise ValueError("max_risk_regression_tolerance must be within [0, 1]")
         if self.risk_clear_below > self.risk_trigger_high:
             raise ValueError("risk_clear_below must not exceed risk_trigger_high")
         if not isfinite(self.deviation_threshold_km) or self.deviation_threshold_km < 0.0:
@@ -233,14 +244,32 @@ class RouteSwitchGate:
         improvement = (
             current.metrics.objective_cost - candidate.metrics.objective_cost
         ) / denominator
-        if force or ReplanReason.EVENT in reasons or ReplanReason.MANUAL in reasons:
+        risk_tolerance = self.policy.max_risk_regression_tolerance
+        if risk_tolerance is None:
+            risk_tolerance = self.policy.risk_hysteresis
+            enforce_before_force = False
+        else:
+            enforce_before_force = True
+        forced = force or ReplanReason.EVENT in reasons or ReplanReason.MANUAL in reasons
+        # An explicit scenario tolerance is a hard switch boundary.  It
+        # applies even to event/manual requests so a controlled replay cannot
+        # publish a route with a worse maximum risk.  With the default ``None``
+        # value, retain the historical force behavior.
+        if candidate.metrics.max_risk > current.metrics.max_risk + risk_tolerance and (
+            enforce_before_force or not forced
+        ):
+            reason = (
+                "candidate increases risk beyond tolerance"
+                if enforce_before_force
+                else "candidate increases risk beyond hysteresis"
+            )
+            return SwitchDecision(False, reason, improvement)
+        if forced:
             return SwitchDecision(True, "forced by event/manual change", improvement)
         if ReplanReason.RISK in reasons and (
             candidate.metrics.max_risk <= current.metrics.max_risk - self.policy.risk_hysteresis
         ):
             return SwitchDecision(True, "risk reduced beyond hysteresis", improvement)
-        if candidate.metrics.max_risk > current.metrics.max_risk + self.policy.risk_hysteresis:
-            return SwitchDecision(False, "candidate increases risk beyond hysteresis", improvement)
         if improvement < self.policy.min_switch_improvement:
             return SwitchDecision(False, "benefit below route-switch threshold", improvement)
         return SwitchDecision(True, "benefit threshold met", improvement)

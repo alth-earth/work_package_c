@@ -6,8 +6,9 @@ edge_sample_count = 3
 max_search_hours = 216
 max_risk_frame_gap_minutes = 180
 minimum_confidence = 0.10
-# Operational ETA reserve; zero preserves the historical planner behavior.
-operational_speed_reserve_fraction = 0.0
+# Winter replay operational reserve. This changes only C's planned ETA/speed;
+# B factors and formal motion safety limits remain unchanged.
+operational_speed_reserve_fraction = 0.05
 allow_waiting = false
 
 [fastest]

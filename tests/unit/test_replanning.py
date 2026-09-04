@@ -7,6 +7,7 @@ import pytest
 
 from arctic_route_planning.contracts import ProvenanceKind
 from arctic_route_planning.domain import ObjectiveMode, PlanKind
+from arctic_route_planning.domain.models import ReplanningConfig
 from arctic_route_planning.publishing import RouteMetrics, RoutePlan, Waypoint
 from arctic_route_planning.replanning import (
     PlanningCancelled,
@@ -186,6 +187,54 @@ def test_switch_gate_requires_benefit_and_limits_risk_regression() -> None:
         ),
         reasons=(ReplanReason.EVENT,),
     ).accepted
+
+
+def test_explicit_zero_risk_regression_tolerance_applies_to_forced_switches() -> None:
+    coordinator = PlanningCoordinator(request_id_factory=lambda: "request")
+    handle = coordinator.begin(
+        run_id="run-replanning-tests",
+        scenario_id="demo",
+        generation_id=1,
+        config_digest=CONFIG_DIGEST,
+        model_config_digest=MODEL_CONFIG_DIGEST,
+        planner_config_digest=PLANNER_CONFIG_DIGEST,
+        input_revision=1,
+    )
+    current = plan_for(handle)
+    candidate = replace(
+        current,
+        plan_id="riskier-event",
+        metrics=replace(current.metrics, objective_cost=8.0, max_risk=0.300001),
+    )
+    gate = RouteSwitchGate(
+        ReplanningPolicy(
+            min_switch_improvement=0.01,
+            risk_hysteresis=0.01,
+            max_risk_regression_tolerance=0.0,
+        )
+    )
+
+    decision = gate.evaluate(
+        current,
+        candidate,
+        reasons=(ReplanReason.EVENT,),
+        force=True,
+    )
+
+    assert not decision.accepted
+    assert "risk" in decision.reason
+
+
+def test_replanning_config_optional_risk_tolerance_preserves_default_behavior() -> None:
+    assert ReplanningConfig().maximum_risk_regression_tolerance is None
+    assert (
+        ReplanningConfig(maximum_risk_regression_tolerance=0.0)
+        .maximum_risk_regression_tolerance
+        == 0.0
+    )
+
+    with pytest.raises(Exception, match="maximum_risk_regression_tolerance"):
+        ReplanningConfig(maximum_risk_regression_tolerance=1.01)
 
 
 def test_coordinator_cancels_same_generation_older_request_before_publish() -> None:

@@ -613,7 +613,7 @@ class TemporalLabelAStar(TimeDependentAStar):
             return samples
 
         def speed_for_samples(samples: Iterable[SampledRisk]) -> Any:
-            return self.vessel_model.effective_speed(
+            return self._planning_speed(
                 min(sample.environment_speed_factor for sample in samples)
             )
 
@@ -846,7 +846,7 @@ class TemporalLabelAStar(TimeDependentAStar):
         context = _TemporalExecutionContext(
             diagnostics=_MutableDiagnostics(),
             heuristic_distances={},
-            calm_speed=self.vessel_model.effective_speed(1.0),
+            calm_speed=self._planning_speed(1.0),
             edge_evaluator=self._injected_edge_evaluator,
         )
         context.diagnostics.dominance_policy = self.dominance_policy.mode.value

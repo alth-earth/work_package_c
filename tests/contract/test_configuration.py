@@ -7,8 +7,13 @@ import pytest
 from arctic_route_contracts import CalibrationStatus
 from arctic_route_contracts import ContractError as SharedContractError
 
-from arctic_route_planning.config import load_configuration
+from arctic_route_planning.config import (
+    load_configuration,
+    load_planner_config,
+    load_replanning_config,
+)
 from arctic_route_planning.errors import ContractError
+from arctic_route_planning.replanning import ReplanningPolicy
 
 CONFIG_ROOT = Path(__file__).parents[2] / "configs"
 
@@ -115,3 +120,17 @@ def test_frozen_candidate_beyond_shared_cap_fails_before_planning() -> None:
 def test_config_id_cannot_escape_shared_root() -> None:
     with pytest.raises(SharedContractError, match="unsafe"):
         load_configuration(CONFIG_ROOT, "../secrets")
+
+
+def test_winter_replay_configs_enable_only_scoped_reserve_and_strict_risk_gate() -> None:
+    planner = load_planner_config(CONFIG_ROOT, "winter_motion_reserve_5pct")
+    replanning = load_replanning_config(CONFIG_ROOT, "winter_dynamic_replay")
+
+    assert planner.operational_speed_reserve_fraction == pytest.approx(0.05)
+    assert replanning.minimum_interval_minutes == 360
+    assert replanning.route_switch_gain_threshold == pytest.approx(0.01)
+    assert replanning.hysteresis == pytest.approx(0.01)
+    assert replanning.maximum_risk_regression_tolerance == pytest.approx(0.0)
+    assert ReplanningPolicy.from_config(
+        replanning
+    ).max_risk_regression_tolerance == pytest.approx(0.0)

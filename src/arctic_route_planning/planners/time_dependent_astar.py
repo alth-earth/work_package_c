@@ -21,6 +21,7 @@ from arctic_route_planning.cost import (
     CostBreakdown,
     CostModel,
     EdgeCostInput,
+    SpeedEstimate,
     UnnavigableSpeedError,
     VesselPerformanceModel,
 )
@@ -406,6 +407,33 @@ class TimeDependentAStar:
         self._last_traversal_cache_stats = _TraversalCacheStats()
         self._validate_grid_alignment()
 
+    def _planning_speed(self, environment_speed_factor: float) -> SpeedEstimate:
+        """Return the vessel speed used by C for ETA and route waypoints.
+
+        The environmental factor is first evaluated by the vessel model so
+        the existing minimum-factor and minimum-steerage checks remain
+        authoritative.  The optional planner reserve then reduces only the
+        operational planning speed.  It never changes B's factor, the
+        vessel's declared maximum, or the later motion qualification limits.
+        """
+
+        physical = self.vessel_model.effective_speed(environment_speed_factor)
+        reserve = self.planner_config.operational_speed_reserve_fraction
+        if reserve == 0.0:
+            return physical
+        speed_knots = physical.speed_knots * (1.0 - reserve)
+        if speed_knots < self.vessel_model.minimum_steerage_speed_knots:
+            raise UnnavigableSpeedError(
+                "operational speed reserve puts planned speed below the vessel's "
+                "minimum steerage speed"
+            )
+        return replace(
+            physical,
+            speed_knots=speed_knots,
+            speed_km_per_hour=speed_knots * KNOT_TO_KM_PER_HOUR,
+            relative_to_economic_speed=speed_knots / self.vessel_model.economic_speed_knots,
+        )
+
     @property
     def risk_identity(self) -> RiskIdentity:
         """Return the frozen BC context consumed by this planner instance."""
@@ -535,7 +563,7 @@ class TimeDependentAStar:
         started = perf_counter()
         self._last_counters: _Counters | None = None
         self._heur_dist = {}
-        self._calm_speed = self.vessel_model.effective_speed(1.0)
+        self._calm_speed = self._planning_speed(1.0)
         # Progress cadence is resolved by the application layer via
         # ``PlanningRequest.progress_interval_seconds``; the planner core no
         # longer reads environment variables directly.
@@ -809,7 +837,7 @@ class TimeDependentAStar:
                 sample.risk_score > request.maximum_risk for sample in sampled
             ):
                 raise _RejectedEdge("risk")
-            effective_speed = self.vessel_model.effective_speed(
+            effective_speed = self._planning_speed(
                 min(sample.environment_speed_factor for sample in sampled)
             )
             return EtaEvaluation(
@@ -1055,7 +1083,7 @@ class TimeDependentAStar:
                 sample.risk_score > request.maximum_risk for sample in samples
             ):
                 raise _RejectedEdge("risk")
-            speed = self.vessel_model.effective_speed(
+            speed = self._planning_speed(
                 min(sample.environment_speed_factor for sample in samples)
             )
             travel_hours = distance_km / speed.speed_km_per_hour

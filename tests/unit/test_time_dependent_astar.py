@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from arctic_route_planning.cost import VesselPerformanceModel
-from arctic_route_planning.domain.models import ObjectiveMode
+from arctic_route_planning.domain.models import ObjectiveMode, PlannerConfig
 from arctic_route_planning.grid import RegularGrid
 from arctic_route_planning.planners import (
     EndpointBlockedError,
@@ -19,7 +19,11 @@ from arctic_route_planning.risk import RiskSampler
 from .factories import T0, make_frame
 
 
-def _planner(frames: tuple[object, ...]) -> TimeDependentAStar:
+def _planner(
+    frames: tuple[object, ...],
+    *,
+    planner_config: PlannerConfig | None = None,
+) -> TimeDependentAStar:
     sampler = RiskSampler(frames)
     grid = RegularGrid.from_risk_frame(frames[0])
     vessel = VesselPerformanceModel(
@@ -28,7 +32,7 @@ def _planner(frames: tuple[object, ...]) -> TimeDependentAStar:
         maximum_speed_knots=12.0,
         minimum_speed_factor=0.2,
     )
-    return TimeDependentAStar(grid, sampler, vessel)
+    return TimeDependentAStar(grid, sampler, vessel, planner_config=planner_config)
 
 
 def _risk_window(
@@ -177,6 +181,48 @@ def test_plan_candidates_runs_all_three_objectives() -> None:
 
     assert set(candidates) == set(ObjectiveMode)
     assert all(result.objective is mode for mode, result in candidates.items())
+
+
+def test_operational_speed_reserve_changes_planning_eta_only() -> None:
+    """A planning reserve slows ETA/suggested speed without changing B factors."""
+
+    zero = np.zeros((3, 4), dtype=np.float32)
+    speed_factor = np.full((3, 4), 0.8, dtype=np.float32)
+    frames = _risk_window((zero, zero, zero))
+    frames = tuple(
+        make_frame(
+            frame.valid_time,
+            zero,
+            risk_id=f"reserve-{index}",
+            latitudes=(0.0, 0.05, 0.10),
+            longitudes=(0.0, 0.05, 0.10, 0.15),
+            environment_speed_factor=speed_factor,
+        )
+        for index, frame in enumerate(frames)
+    )
+    base = _planner(frames, planner_config=PlannerConfig())
+    reserved = _planner(
+        frames,
+        planner_config=PlannerConfig(operational_speed_reserve_fraction=0.05),
+    )
+    request = PlanningRequest(
+        start=(1, 0),
+        goal=(1, 1),
+        departure_time=T0,
+        objective=ObjectiveMode.FASTEST,
+    )
+
+    base_result = base.plan(request)
+    reserved_result = reserved.plan(request)
+
+    assert reserved_result.nodes == base_result.nodes
+    assert reserved_result.travel_hours == pytest.approx(base_result.travel_hours / 0.95)
+    assert reserved_result.steps[-1].recommended_speed_knots == pytest.approx(
+        base_result.steps[-1].recommended_speed_knots * 0.95
+    )
+    # The source factor is consumed unchanged; only C's operational speed is
+    # reduced.  The ratio is therefore visible through the ETA/speed result.
+    assert reserved_result.steps[-1].recommended_speed_knots < 10.0 * 0.8
 
 
 def test_edge_geometry_cache_keeps_sample_count_in_identity() -> None:

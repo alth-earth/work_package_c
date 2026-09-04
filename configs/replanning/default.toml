@@ -4,3 +4,4 @@ route_switch_gain_threshold = 0.05
 risk_trigger_threshold = 0.65
 deviation_trigger_km = 10.0
 hysteresis = 0.03
+# Null/default keeps the historical hysteresis-based risk regression behavior.

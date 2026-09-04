@@ -92,6 +92,11 @@ class PlannerConfig:
     recommended: CostWeights = field(
         default_factory=lambda: CostWeights(0.85, 1.30, 0.08, 0.10, 0.45)
     )
+    # Optional operational planning reserve.  This deliberately applies only
+    # to the planner's ETA/recommended-speed estimate; B's environmental
+    # factor, the vessel maximum, and motion qualification limits remain the
+    # declared physical values.
+    operational_speed_reserve_fraction: float = 0.0
 
     def __post_init__(self) -> None:
         if self.schema_version != "planner-config.v1":
@@ -108,6 +113,14 @@ class PlannerConfig:
             raise ContractError("max_risk_frame_gap_minutes 必须为正数")
         if not 0 <= self.minimum_confidence <= 1:
             raise ContractError("minimum_confidence 必须位于 [0, 1]")
+        if (
+            isinstance(self.operational_speed_reserve_fraction, bool)
+            or not math.isfinite(self.operational_speed_reserve_fraction)
+            or not 0.0 <= self.operational_speed_reserve_fraction <= 0.10
+        ):
+            raise ContractError(
+                "operational_speed_reserve_fraction 必须位于 [0, 0.10]"
+            )
         if self.allow_waiting:
             raise ContractError("v1 尚未实现等待动作，allow_waiting 必须为 false")
 
@@ -127,6 +140,11 @@ class ReplanningConfig:
     risk_trigger_threshold: float = 0.65
     deviation_trigger_km: float = 10.0
     hysteresis: float = 0.03
+    # ``None`` preserves the historical RouteSwitchGate behavior, where the
+    # risk hysteresis is also the tolerated regression.  A configured value is
+    # an explicit maximum increase in candidate max risk; zero is strict
+    # non-degradation for controlled replay scenarios.
+    maximum_risk_regression_tolerance: float | None = None
 
     def __post_init__(self) -> None:
         if self.schema_version != "replanning-config.v1":
@@ -137,6 +155,12 @@ class ReplanningConfig:
             value = getattr(self, name)
             if not math.isfinite(value) or not 0 <= value <= 1:
                 raise ContractError(f"{name} 必须位于 [0, 1]")
+        if self.maximum_risk_regression_tolerance is not None and (
+            isinstance(self.maximum_risk_regression_tolerance, bool)
+            or not math.isfinite(self.maximum_risk_regression_tolerance)
+            or not 0.0 <= self.maximum_risk_regression_tolerance <= 1.0
+        ):
+            raise ContractError("maximum_risk_regression_tolerance 必须位于 [0, 1]")
         if not math.isfinite(self.deviation_trigger_km) or self.deviation_trigger_km <= 0:
             raise ContractError("deviation_trigger_km 必须为正有限值")
 

@@ -1,0 +1,10 @@
+schema_version = "replanning-config.v1"
+# Re-evaluate at the same cadence as the Winter replay snapshots.
+minimum_interval_minutes = 360
+# Lower thresholds are scoped to this retrospective demonstration only.
+route_switch_gain_threshold = 0.01
+risk_trigger_threshold = 0.65
+deviation_trigger_km = 10.0
+hysteresis = 0.01
+# Do not adopt a route whose maximum risk is worse than the current route.
+maximum_risk_regression_tolerance = 0.0
